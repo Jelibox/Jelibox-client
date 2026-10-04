@@ -83,7 +83,7 @@ function Install-Jelibox {
         Say 'Starting the installer. Approve the Windows permission prompt when it appears.'
         Say 'It opens in its own window and shows its progress there.'
         Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "`"$bat`"" -WorkingDirectory $dest
-        Say "When it says JELIBOX IS READY, open  Jelibox  from your Desktop or Start menu."
+        Say "When it says JELIBOX IS READY, open the Jelibox shortcut on your Desktop."
     }
     finally {
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

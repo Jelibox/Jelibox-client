@@ -9,6 +9,13 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Added
+- One-line install: `irm .../install.ps1 | iex` (Windows) and `curl .../install.sh | bash` (Linux), no git needed. Re-running updates in place and keeps your data.
+- Windows installer installs the Visual C++ runtime automatically when it is missing.
+
+### Fixed
+- Windows installer works from folders whose path contains spaces.
+
 ## [0.1.0] - 2026-10-04
 
 ### Added

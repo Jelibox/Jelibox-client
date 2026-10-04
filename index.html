@@ -103,6 +103,15 @@
         .install-card li { margin-bottom:14px; }
         .install-card code { padding:2px 6px; border-radius:6px; background:var(--surface2); font:500 12.5px var(--mono); }
         .install-card p { margin:0; color:var(--muted); font-size:13px; }
+        .install-card { min-width:0; }
+        .install-grid.quick pre { white-space:pre-wrap; word-break:break-all; }
+        .install-grid.quick .install-card p { margin:0 0 12px; }
+        .install-grid.quick .install-card p:last-child { margin:12px 0 0; }
+        .install-note { margin:16px 4px 0; color:var(--muted); font-size:13px; }
+        .install-note a { color:var(--accent-text); text-decoration:underline; text-underline-offset:3px; }
+        .manual { margin-top:28px; }
+        .manual summary { cursor:pointer; color:var(--muted); font-size:14px; font-weight:600; padding:8px 0; }
+        .manual[open] summary { margin-bottom:12px; }
         pre { overflow-x:auto; padding:14px 16px; margin:8px 0 0; border-radius:12px; background:var(--surface2); font:500 12.5px/1.7 var(--mono); }
 
         /* final */
@@ -183,7 +192,24 @@
         </section>
 
         <section class="section shell" id="install">
-            <div class="section-head"><span class="eyebrow">Start locally</span><h2>Install once. Keep working.</h2></div>
+            <div class="section-head"><span class="eyebrow">Start locally</span><h2>Install once. Keep working.</h2><p class="section-lead">One command, no git needed. It downloads the newest release and sets everything up. Run it again later to update; your datasets and models are never touched.</p></div>
+            <div class="install-grid quick">
+                <div class="install-card">
+                    <h3>Windows</h3>
+                    <p>Open <b>PowerShell</b> and paste:</p>
+                    <pre>irm https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.ps1 | iex</pre>
+                    <p>Windows asks for administrator permission once, for the Python and dependency step.</p>
+                </div>
+                <div class="install-card">
+                    <h3>Linux</h3>
+                    <p>Open a terminal and paste:</p>
+                    <pre>curl -fsSL https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.sh | bash</pre>
+                    <p>It asks for your <code>sudo</code> password to install Python and Tkinter.</p>
+                </div>
+            </div>
+            <p class="install-note">Prefer to read it first? <a href="https://github.com/Jelibox/Jelibox-client/blob/main/install.ps1" target="_blank" rel="noopener noreferrer">install.ps1</a> and <a href="https://github.com/Jelibox/Jelibox-client/blob/main/install.sh" target="_blank" rel="noopener noreferrer">install.sh</a> are short and open source.</p>
+            <details class="manual">
+                <summary>Install manually with git instead</summary>
             <div class="install-grid">
                 <div class="install-card">
                     <h3>Linux</h3>
@@ -214,6 +240,7 @@
                     <p>The Windows installer checks for an NVIDIA GPU through <code>nvidia-smi</code> and uses Windows device information as a fallback. GPU detection does not guarantee that the installed PyTorch package has CUDA enabled.</p>
                 </div>
             </div>
+            </details>
         </section>
 
         <section class="shell final-cta">

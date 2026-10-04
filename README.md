@@ -46,7 +46,36 @@ The application can run on CPU. NVIDIA GPU support requires a compatible NVIDIA 
 
 ## Installation
 
-### Linux
+### Quick install (recommended)
+
+One command, no `git` needed. It downloads the newest release, unpacks it, and runs the installer for you.
+
+**Windows** - open **PowerShell** and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.ps1 | iex
+```
+
+**Linux** - open a terminal and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.sh | bash
+```
+
+What happens:
+
+- Jelibox is unpacked into `%LOCALAPPDATA%\Jelibox` (Windows) or `~/.local/share/jelibox` (Linux).
+- The normal installer then runs: it installs Python 3.12 if missing, creates a virtual environment, installs the dependencies and adds shortcuts. Windows asks for administrator permission once; Linux asks for your `sudo` password.
+- **Updating:** run the same command again. Your datasets, models and configs are never touched.
+- **A specific version:** set `JELIBOX_VERSION` first, for example `$env:JELIBOX_VERSION="v0.1.0"` (PowerShell) or `JELIBOX_VERSION=v0.1.0 curl ... | bash`. Other options: `JELIBOX_HOME` (install location) and `JELIBOX_NO_INSTALL=1` (download and unpack only).
+- **Want to read it before running it?** That is a good habit. The scripts are short: [`install.ps1`](install.ps1) and [`install.sh`](install.sh).
+- **Uninstall:** delete the install folder above, plus the Jelibox shortcuts (Desktop / application menu).
+
+### Manual install (with git)
+
+The steps below do the same thing by hand.
+
+#### Linux
 
 1. Install git (if you haven't install git)
 ```bash
@@ -67,7 +96,7 @@ chmod +x jelibox_linux_installation.bash
 
 The installer asks for your `sudo` password at the beginning, installs Python with Tkinter and venv support, creates the `jelibox/` virtual environment, installs dependencies, and creates a desktop launcher.
 
-### Windows
+#### Windows
 
 1. Open [`VC_redist/`](VC_redist/) and install the package matching your system architecture.
 2. Right-click [`jelibox_windows_installation.bat`](jelibox_windows_installation.bat) and choose **Run as administrator**.

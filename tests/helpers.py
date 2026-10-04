@@ -30,6 +30,12 @@ CLASSES = ["cat", "dog"]
 _ctx = None
 
 
+def _cleanup(root):
+    """Delete the temp workspace. Windows cannot remove the current directory, so leave it first."""
+    os.chdir(REPO)
+    shutil.rmtree(root, ignore_errors=True)
+
+
 class Ctx:
     def __init__(self, root):
         self.root = root
@@ -60,7 +66,7 @@ def isolated_workspace():
         return _ctx
 
     root = tempfile.mkdtemp(prefix="jelibox_test_")
-    atexit.register(shutil.rmtree, root, ignore_errors=True)
+    atexit.register(_cleanup, root)
     ctx = Ctx(root)
     os.makedirs(ctx.configs, exist_ok=True)
     os.chdir(root)                      # ClassManager still uses cwd-relative paths

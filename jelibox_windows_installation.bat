@@ -2,7 +2,7 @@
 setlocal EnableDelayedExpansion
 
 title Jelibox Installer
-cd /d %~dp0
+cd /d "%~dp0"
 
 :: =========================================================
 :: ADMIN ELEVATION CHECK
@@ -25,6 +25,13 @@ set PYTHON_VERSION=3.12.6
 set PYTHON_FOLDER=Python312
 set PYTHON_INSTALLER=%TEMP%\python_installer.exe
 
+:: The one-line installer (install.ps1) drops this marker so nobody has to answer Y/N.
+set ASSUME_YES=0
+if exist "%~dp0.install-yes" (
+    set ASSUME_YES=1
+    del "%~dp0.install-yes" >nul 2>&1
+)
+
 cls
 echo ==========================================
 echo   Welcome to Jelibox, Local annotation tool
@@ -33,6 +40,7 @@ echo ==========================================
 echo System is preparing your environment...
 echo ==========================================
 
+if "%ASSUME_YES%"=="1" goto CONFIRMED
 choice /c YN /m "Continue installation?"
 if errorlevel 2 (
     echo.
@@ -40,6 +48,7 @@ if errorlevel 2 (
     timeout /t 2 >nul
     exit
 )
+:CONFIRMED
 
 :: =========================================================
 :: 0. INTERNET CHECK
@@ -89,6 +98,21 @@ if not errorlevel 1 (
     ) else (
         echo [!] NVIDIA GPU not detected.
         echo [*] CPU mode will be used.
+    )
+)
+
+:: =========================================================
+:: 1b. VISUAL C++ RUNTIME (required by PyTorch)
+:: =========================================================
+if "%ARCH%"=="x64" (
+    reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Installed 2>nul | find "0x1" >nul
+    if errorlevel 1 (
+        if exist "%~dp0VC_redist\VC_redist.x64.exe" (
+            echo [*] Installing Microsoft Visual C++ runtime...
+            "%~dp0VC_redist\VC_redist.x64.exe" /install /quiet /norestart
+        )
+    ) else (
+        echo [OK] Visual C++ runtime already installed.
     )
 )
 

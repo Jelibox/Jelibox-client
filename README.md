@@ -1,14 +1,14 @@
-# Boxify
+# Jelibox
 
-**Boxify is a local computer vision annotation tool for creating object detection and image segmentation datasets.** It runs on your own computer, supports bounding boxes and polygons, and can use Ultralytics YOLO models for inference and training.
+**Jelibox is a local computer vision annotation tool for creating object detection and image segmentation datasets.** It runs on your own computer, supports bounding boxes and polygons, and can use Ultralytics YOLO models for inference and training.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey)](boxify_linux_installation.bash)
-[![Platform: Windows](https://img.shields.io/badge/platform-Windows-lightgrey)](boxify_windows_installation.bat)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey)](jelibox_linux_installation.bash)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-lightgrey)](jelibox_windows_installation.bat)
 
-Boxify is designed for individuals and teams that need a private, offline-first workflow for labeling image datasets without uploading images to a third-party service.
+Jelibox is designed for individuals and teams that need a private, offline-first workflow for labeling image datasets without uploading images to a third-party service.
 
-![Boxify annotation interface](assets/visualize.png)
+![Jelibox annotation interface](assets/visualize.png)
 
 ## Features
 
@@ -54,34 +54,34 @@ sudo apt install git
 ```
 2. Clone this repository
 ```bash
-git clone https://github.com/BoxifyAnnotationTools/Boxify.git 
+git clone https://github.com/Jelibox/Jelibox-client.git 
 ```
 3. Add access to linux installation script
 ```bash
-chmod +x boxify_linux_installation.bash
+chmod +x jelibox_linux_installation.bash
 ```
-4. Run Boxify installation script
+4. Run Jelibox installation script
 ```bash
-./boxify_linux_installation.bash
+./jelibox_linux_installation.bash
 ```
 
-The installer asks for your `sudo` password at the beginning, installs Python with Tkinter and venv support, creates the `boxify/` virtual environment, installs dependencies, and creates a desktop launcher.
+The installer asks for your `sudo` password at the beginning, installs Python with Tkinter and venv support, creates the `jelibox/` virtual environment, installs dependencies, and creates a desktop launcher.
 
 ### Windows
 
 1. Open [`VC_redist/`](VC_redist/) and install the package matching your system architecture.
-2. Right-click [`boxify_windows_installation.bat`](boxify_windows_installation.bat) and choose **Run as administrator**.
+2. Right-click [`jelibox_windows_installation.bat`](jelibox_windows_installation.bat) and choose **Run as administrator**.
 3. Follow the installer prompts.
-4. Open the generated `Boxify.lnk` shortcut.
+4. Open the generated `Jelibox.lnk` shortcut.
 
 The Windows installer checks for an NVIDIA GPU through `nvidia-smi` and uses Windows device information as a fallback. GPU detection does not guarantee that the installed PyTorch package has CUDA enabled.
 
-## Running Boxify Manually
+## Running Jelibox Manually
 
 ### Linux
 
 ```bash
-source boxify/bin/activate
+source jelibox/bin/activate
 python -u utils/Annotator.py
 ```
 
@@ -97,7 +97,7 @@ Code-style "no folder opened" screen that lists every workspace found in
 `datasetsInput/`. Folders are grouped by name, so `weapon-1` and `weapon-2`
 both appear under one `weapon` workspace; picking an instance launches the
 annotation window for it. Inside the annotation window, the **◀** button next
-to the Boxify logo closes that workspace and returns to the picker so you can
+to the Jelibox logo closes that workspace and returns to the picker so you can
 switch datasets without restarting the app.
 
 ## Keyboard Shortcuts
@@ -120,7 +120,7 @@ In polygon mode, click to add points, double-click or press `Enter` to finish, a
 
 ## Workspace Structure
 
-Boxify keeps data, annotations, and models separated by workspace. Images are
+Jelibox keeps data, annotations, and models separated by workspace. Images are
 never copied - every format reads them straight from `datasetsInput/`:
 
 ```text
@@ -137,7 +137,7 @@ export model/<workspace>/            Exported model files
 `train/`, `val/`, and `data.yaml` are generated there temporarily and removed
 once training finishes.
 
-Every time a workspace is opened, Boxify checks each Pascal VOC XML file in
+Every time a workspace is opened, Jelibox checks each Pascal VOC XML file in
 `vocdataset/<workspace>/` for a matching YOLO label and generates any that are
 missing. This keeps `YOLOdataset/` in sync automatically - including a
 one-time backfill for datasets annotated before this folder existed - without
@@ -157,7 +157,7 @@ configs/cat.txt
 
 ## Annotation Formats
 
-Boxify supports:
+Jelibox supports:
 
 - Bounding boxes for YOLO object detection datasets
 - Polygons for segmentation workflows
@@ -211,15 +211,15 @@ For training failures caused by limited memory, try a smaller image size, a smal
 
 ## Screenshots
 
-![Boxify annotation interface](assets/visualize.png)
+![Jelibox annotation interface](assets/visualize.png)
 
 ## Contributing
 
 Issues, documentation improvements, bug fixes, and feature contributions are welcome.
 
 ```bash
-git clone https://github.com/BoxifyAnnotationTools/Boxify.git
-cd Boxify
+git clone https://github.com/Jelibox/Jelibox-client.git
+cd Jelibox
 git checkout -b feature/your-feature-name
 ```
 
@@ -227,4 +227,4 @@ Before opening a pull request, test the installer or application flow affected b
 
 ## License
 
-Boxify is released under the [MIT License](LICENSE).
+Jelibox is released under the [Apache License 2.0](LICENSE).

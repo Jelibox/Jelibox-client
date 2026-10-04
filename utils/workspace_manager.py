@@ -1,11 +1,11 @@
 """
-Workspace discovery for Boxify.
+Workspace discovery for Jelibox.
 
 A "workspace" is a group of dataset folders inside datasetsInput that share
 a common name prefix - e.g. weapon-1 and weapon-2 both belong to the
 "weapon" workspace. This mirrors the workspace-name derivation used in
 utils/config.py (load_workspace) so a workspace's class config
-(configs/<name>.txt) stays shared across all of its instances.
+(configs/<name>.json) stays shared across all of its instances.
 
 No tkinter or config imports here on purpose: this module is used by the
 workspace picker screen, which must be safe to import before any dataset
@@ -14,6 +14,8 @@ instance folder has been chosen.
 
 import os
 import shutil
+
+from . import workspace_config
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DATASETS_ROOT = os.path.join(BASE_DIR, "datasetsInput")
@@ -131,13 +133,8 @@ def parse_classes_input(text):
 
 
 def existing_classes_for_workspace(workspace_name):
-    """Read configs/<workspace_name>.txt if it exists, else None."""
-    path = os.path.join(CONFIGS_ROOT, f"{workspace_name}.txt")
-    if not os.path.exists(path):
-        return None
-    with open(path, "r", encoding="utf-8") as f:
-        classes = [line.strip() for line in f if line.strip()]
-    return classes
+    """Class list from configs/<workspace_name>.json if it exists, else None."""
+    return workspace_config.get_classes(workspace_name)
 
 
 def next_instance_name(workspace_name):
@@ -269,9 +266,7 @@ def delete_workspace(workspace_name, progress_cb=None):
     if progress_cb:
         progress_cb(done, total, "Removed YOLO labels")
 
-    cfg_path = os.path.join(CONFIGS_ROOT, f"{workspace_name}.txt")
-    if os.path.exists(cfg_path):
-        os.remove(cfg_path)
+    workspace_config.delete(workspace_name)
     done += 1
     if progress_cb:
         progress_cb(done, total, "Removed class config")
@@ -282,7 +277,7 @@ def create_workspace_instance(workspace_name, source_folder, classes=None, progr
     Import an external folder of images as a new datasetsInput/<workspace>-<N>
     instance (images are copied in, one file at a time).
 
-    If the workspace doesn't have a class config yet (configs/<workspace>.txt),
+    If the workspace doesn't have a class config yet (configs/<workspace>.json),
     `classes` is written as its class list - a workspace's classes are shared
     across all of its instances, so an existing config is never overwritten
     here even if `classes` is given.
@@ -320,9 +315,6 @@ def create_workspace_instance(workspace_name, source_folder, classes=None, progr
             progress_cb(i, len(files))
 
     if classes and existing_classes_for_workspace(workspace_name) is None:
-        os.makedirs(CONFIGS_ROOT, exist_ok=True)
-        with open(os.path.join(CONFIGS_ROOT, f"{workspace_name}.txt"), "w", encoding="utf-8") as f:
-            for cls in classes:
-                f.write(cls + "\n")
+        workspace_config.set_classes(workspace_name, classes)
 
     return instance_name, len(files)

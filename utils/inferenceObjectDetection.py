@@ -1,83 +1,161 @@
 """
-Training and inference functions
+Label Assistant inference (the G shortcut).
+
+Two providers, picked per workspace in the Label Assistant window and stored in
+configs/<workspace>.json (see workspace_config.py):
+  - custom_model : the workspace's own trained model (models/<ws>/modelAssistant.pt)
+  - yolo_world   : zero-shot YOLO-World, prompts translated to workspace classes
+
+New predictions are MERGED into the image's current annotations. Anything
+already on the image counts as confidence 1.0, so a prediction that overlaps
+an existing annotation (IoU >= MERGE_IOU) is dropped and the existing one wins.
 """
 import os
-import shutil
-import numpy as np
-import torch
 import gc
-import cv2
 
-from .config import model_path, CLASSLIST, state, input_folder
+import cv2
+import torch
+
+from . import workspace_config as wcfg
+from .config import model_path, CLASSLIST, state, input_folder, workspaceName, BASE_DIR
 
 try:
-    from ultralytics import YOLO
+    from ultralytics import YOLO, YOLOWorld
 except Exception as e:
     YOLO = None
+    YOLOWorld = None
     print("[INFO] ultralytics not installed. Training won't work.", e)
 
-def inference_current(images, current_index, conf=0.3):
-    """Run inference on current image"""
-    if not os.path.exists(model_path):
-        print("[INFO] Model assistant does not exist.")
-        return
+MERGE_IOU = 0.5
+YOLO_WORLD_DIR = os.path.join(BASE_DIR, "models", "_yolo_world")
+
+# (weights name, prompts) -> loaded model, so G doesn't reload CLIP + weights every press
+_world_cache = {}
+
+
+def custom_model_available():
+    return os.path.exists(model_path)
+
+
+def _iou(a, b):
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    if inter == 0:
+        return 0.0
+    area_a = max(0, a[2] - a[0]) * max(0, a[3] - a[1])
+    area_b = max(0, b[2] - b[0]) * max(0, b[3] - b[1])
+    return inter / float(area_a + area_b - inter)
+
+
+def _poly_rect(points):
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _merge(predictions, existing_rects):
+    """Keep predictions (highest confidence first) that don't overlap an
+    existing annotation or an already-kept prediction. Returns kept list."""
+    kept, kept_rects = [], list(existing_rects)
+    for p in sorted(predictions, key=lambda p: p["conf"], reverse=True):
+        if any(_iou(p["rect"], r) >= MERGE_IOU for r in kept_rects):
+            continue
+        kept.append(p)
+        kept_rects.append(p["rect"])
+    return kept
+
+
+def _collect(results, class_name_for):
+    """Turn ultralytics results into [{'rect','conf','cls', 'poly'?}], plus
+    whether the output is segmentation."""
+    preds, is_polygon = [], False
+    for r in results:
+        if getattr(r, "masks", None) is not None:
+            is_polygon = True
+            for i, poly in enumerate(r.masks.xy):
+                pts = poly.tolist()
+                if len(pts) < 3:
+                    continue
+                preds.append({
+                    "rect": _poly_rect(pts),
+                    "conf": float(r.boxes.conf[i].item()),
+                    "cls": class_name_for(int(r.boxes.cls[i].item())),
+                    "poly": pts,
+                })
+        elif getattr(r, "boxes", None) is not None:
+            for box in r.boxes:
+                x1, y1, x2, y2 = (int(round(v)) for v in box.xyxy[0].tolist())
+                preds.append({
+                    "rect": (x1, y1, x2, y2),
+                    "conf": float(box.conf[0].item()),
+                    "cls": class_name_for(int(box.cls[0].item())),
+                })
+    return preds, is_polygon
+
+
+def _load_world_model(weights_name, prompts):
+    key = (weights_name, tuple(prompts))
+    if key not in _world_cache:
+        _world_cache.clear()  # keep at most one model in memory
+        os.makedirs(YOLO_WORLD_DIR, exist_ok=True)
+        model = YOLOWorld(os.path.join(YOLO_WORLD_DIR, weights_name + ".pt"))
+        model.set_classes(prompts)
+        _world_cache[key] = model
+    return _world_cache[key]
+
+
+def inference_current(images, current_index, conf=None):
+    """Run the configured Label Assistant on the current image and merge the
+    result into state. Returns (ok, message); message is user-facing."""
+    if YOLO is None:
+        return False, "ultralytics is not installed."
+
+    cfg = wcfg.get_assistant(workspaceName)
+    if conf is None:
+        conf = cfg["confidence"]
 
     img_path = os.path.join(input_folder, images[current_index])
     orig_img = cv2.imread(img_path)
+    if orig_img is None:
+        return False, f"Could not read image: {images[current_index]}"
 
-    # Catatan Performa: Idealnya 'model = YOLO(...)' diinisialisasi sekali saja 
-    # di luar fungsi agar tidak terus-menerus memuat ulang weights ke VRAM.
-    model = YOLO(model_path)
+    if cfg["provider"] == wcfg.PROVIDER_CUSTOM:
+        if not custom_model_available():
+            return False, "Your trained model was not found in this workspace."
+        model = YOLO(model_path)
+        class_name_for = lambda idx: CLASSLIST[idx] if idx < len(CLASSLIST) else str(idx)
+    else:
+        yw = cfg["yolo_world"]
+        targets = [t for t in yw["target_classes"] if t["prompt"].strip() and t["map_to"]]
+        if not targets:
+            return False, ("YOLO-World can't work without a target class. "
+                           "Open Label Assistant and add at least one target class.")
+        prompts = [t["prompt"].strip() for t in targets]
+        try:
+            model = _load_world_model(yw["model"], prompts)
+        except Exception as exc:
+            print(f"[Assistant] YOLO-World failed to load: {exc}")
+            return False, f"YOLO-World could not be loaded:\n{exc}"
+        class_name_for = lambda idx: targets[idx]["map_to"]
 
     with torch.no_grad():
-        results = model.predict(orig_img, conf=conf, iou=0.3)
+        results = model.predict(orig_img, conf=conf, iou=0.3, verbose=False)
+    preds, is_polygon = _collect(results, class_name_for)
 
-    pred_data = []
-    is_polygon = False
-
-    for r in results:
-        # --- 1. EKSTRAKSI POLYGON (Jika model mendukung segmentasi) ---
-        if hasattr(r, 'masks') and r.masks is not None:
-            is_polygon = True
-            
-            for i, poly in enumerate(r.masks.xy):
-                cls_idx = int(r.boxes.cls[i].item())
-                cls_name = CLASSLIST[cls_idx] if cls_idx < len(CLASSLIST) else str(cls_idx)
-
-                # PERBAIKAN: 
-                # Simpan sebagai Tuple (points_orig, cls_name)
-                # poly.tolist() mengubah numpy array murni menjadi struktur list Python
-                # TANPA scaling, karena update_display sudah melakukan scaling untuk poligon.
-                pred_data.append((poly.tolist(), cls_name))
-                
-        # --- 2. EKSTRAKSI BBOX (Fallback jika tidak ada segmentasi) ---
-        elif hasattr(r, 'boxes') and r.boxes is not None:
-            for box in r.boxes:
-                x1 = int(box.xyxy[0, 0].item())
-                y1 = int(box.xyxy[0, 1].item())
-                x2 = int(box.xyxy[0, 2].item())
-                y2 = int(box.xyxy[0, 3].item())
-                cls_idx = int(box.cls[0].item())
-                cls_name = CLASSLIST[cls_idx] if cls_idx < len(CLASSLIST) else str(cls_idx)
-
-                # Store bboxes in ORIGINAL image coordinates (no display scaling)
-                pred_data.append([
-                    int(round(x1)),
-                    int(round(y1)),
-                    int(round(x2)),
-                    int(round(y2)),
-                    cls_name
-                ])
-
-    # --- 3. UPDATE STATE ---
     if is_polygon:
-        state.polygons = pred_data
-        print(f"[INFO] Inference saved. {len(pred_data)} POLYGONS updated.")
+        kept = _merge(preds, [_poly_rect(p[0]) for p in state.polygons])
+        state.polygons.extend([p["poly"], p["cls"]] for p in kept)
     else:
-        state.bboxes = pred_data
-        print(f"[INFO] Inference saved. {len(pred_data)} BBOXES updated.")
+        kept = _merge(preds, [tuple(b[:4]) for b in state.bboxes])
+        state.bboxes.extend([*p["rect"], p["cls"]] for p in kept)
 
-    # --- 4. CLEANUP MEMORY ---
+    skipped = len(preds) - len(kept)
+    kind = "polygons" if is_polygon else "bboxes"
+    msg = f"Added {len(kept)} {kind}" + (f" ({skipped} skipped: overlap with existing)" if skipped else "")
+    print(f"[Assistant] {msg}")
+
     del results
     torch.cuda.empty_cache()
     gc.collect()
+    return True, msg

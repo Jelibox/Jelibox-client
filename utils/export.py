@@ -1,5 +1,5 @@
 """
-Export helper for BOXIFY using Ultralytics YOLO model export API.
+Export helper for Jelibox using Ultralytics YOLO model export API.
 Provides `export_model` which runs `YOLO(model_path).export(...)` with common options.
 """
 import os

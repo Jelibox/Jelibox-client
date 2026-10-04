@@ -25,7 +25,7 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
 # Run from the project root regardless of how the script was launched, since
-# the GUI loads assets (e.g. assets/boxify.png) via relative paths.
+# the GUI loads assets (e.g. assets/jelibox.png) via relative paths.
 os.chdir(parent_dir)
 
 
@@ -41,7 +41,7 @@ def _show_loading_splash(root):
     from utils.theme import C_BASE, C_PANEL, C_ACCENT, C_TXT1, C_TXT2
 
     splash = tk.Toplevel(root)
-    splash.title("Boxify")
+    splash.title("Jelibox")
     splash.configure(bg=C_BASE)
     splash.overrideredirect(True)
     splash.resizable(False, False)
@@ -51,7 +51,7 @@ def _show_loading_splash(root):
     y = (splash.winfo_screenheight() // 2) - (height // 2)
     splash.geometry(f"{width}x{height}+{x}+{y}")
 
-    tk.Label(splash, text="BOXIFY", bg=C_BASE, fg=C_TXT1,
+    tk.Label(splash, text="Jelibox", bg=C_BASE, fg=C_TXT1,
              font=('Segoe UI', 14, 'bold')).pack(pady=(22, 4))
     status_var = tk.StringVar(value="Preparing workspace...")
     tk.Label(splash, textvariable=status_var, bg=C_BASE, fg=C_TXT2,
@@ -91,6 +91,14 @@ def run_annotation_gui(dataset_folder):
 
     root = tk.Tk()
     root.withdraw()
+
+    from utils import ScreenGuard
+    ok, reason, sw, sh = ScreenGuard.check_screen(root)
+    if not ok:
+        ScreenGuard.show_unsupported_dialog(root, reason, sw, sh)
+        root.destroy()
+        return
+
     splash, on_progress = _show_loading_splash(root)
 
     config.load_workspace(dataset_folder, progress_cb=on_progress)
@@ -103,6 +111,7 @@ def run_annotation_gui(dataset_folder):
 
     splash.destroy()
     if root.winfo_exists():
+        ScreenGuard.maximize(root)
         root.deiconify()
         root.lift()
         root.focus_force()

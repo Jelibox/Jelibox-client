@@ -21,6 +21,7 @@ from .inferenceObjectDetection import inference_current
 from .image_manager import (repeat_last_annotations, delete_current_image, 
                           save_and_backup_bboxes)
 from .TrainingConfigDialog import TrainingConfigDialog
+from .LabelAssistantDialog import open_label_assistant
 from . import export as export_module
 import threading
 import webbrowser
@@ -33,7 +34,8 @@ import importlib
 
 from .theme import (C_BASE, C_PANEL, C_CARD, C_CARD2, C_BORDER, C_ACCENT,
                     C_PURPLE, C_ORANGE, C_GREEN, C_AMBER, C_RED, C_BLUE,
-                    C_TXT1, C_TXT2, C_TXT3)
+                    C_TXT1, C_TXT2, C_TXT3, C_ACCENT_TINT, C_ON_ACCENT, C_ON_RED,
+                    C_DANGER_BG, C_DANGER_FG, C_STAGE, MODE, toggle_mode)
 
 EPOCH = 5
 BATCH = 4
@@ -42,7 +44,7 @@ BATCH = 4
 class AnnotationGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title(f"BOXIFY — {os.path.basename(os.path.normpath(input_folder))}")
+        self.root.title(f"Jelibox — {os.path.basename(os.path.normpath(input_folder))}")
         self.root.geometry("1600x900")
         self.root.configure(bg=C_BASE)
         self.stream_process = None
@@ -102,8 +104,38 @@ class AnnotationGUI:
     # ----------------------------------------------------------
     #  Helper: create a flat styled button
     # ----------------------------------------------------------
+    @staticmethod
+    def _readable_fg(hex_color):
+        """Dark or white text, whichever reads better on this fill."""
+        h = hex_color.lstrip('#')
+        r, g, b = (int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+        lin = lambda c: c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+        lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+        return '#10131F' if (lum + 0.05) / 0.0553 >= 1.05 / (lum + 0.05) else '#FFFFFF'
+
+    def _kbtn(self, parent, text, command, kind='secondary', font_size=8):
+        """Hierarchy button: 'primary' (accent, the main action), 'secondary'
+        (neutral, everything else) or 'danger' (destructive)."""
+        if kind == 'primary':
+            bg, fg, hover, ring = C_ACCENT, C_ON_ACCENT, C_ACCENT, C_ACCENT
+        elif kind == 'danger':
+            bg, fg, hover, ring = C_DANGER_BG, C_DANGER_FG, C_RED, C_RED
+        else:
+            bg, fg, hover, ring = C_CARD2, C_TXT1, C_BORDER, C_BORDER
+        btn = tk.Button(
+            parent, text=text, command=command, bg=bg, fg=fg,
+            font=('Segoe UI', font_size, 'bold'), relief=tk.FLAT, cursor='hand2',
+            activebackground=hover, activeforeground=(C_ON_RED if kind == 'danger' else fg),
+            highlightbackground=ring, highlightcolor=ring, highlightthickness=1,
+            borderwidth=0)
+        if kind != 'primary':
+            hover_fg = C_ON_RED if kind == 'danger' else fg
+            btn.bind('<Enter>', lambda e: btn['state'] == 'normal' and btn.config(bg=hover, fg=hover_fg))
+            btn.bind('<Leave>', lambda e: btn['state'] == 'normal' and btn.config(bg=bg, fg=fg))
+        return btn
+
     def _btn(self, parent, text, command, bg, fg, font_size=9, bold=False):
-        """Factory for Boxify-styled flat buttons."""
+        """Factory for Jelibox-styled flat buttons."""
         weight = 'bold' if bold else 'normal'
         return tk.Button(
             parent, text=text, command=command,
@@ -173,9 +205,9 @@ class AnnotationGUI:
     def toggle_bbox_text(self):
         state.show_bbox_text = not state.show_bbox_text
         if state.show_bbox_text:
-            self.text_label.config(text="Text: ON", fg=C_GREEN, bg=C_CARD)
+            self.text_btn.config(text="Hide label text")
         else:
-            self.text_label.config(text="Text: OFF", fg=C_TXT3, bg=C_CARD)
+            self.text_btn.config(text="Show label text")
         self.update_display()
 
     def update_force_label(self):
@@ -203,21 +235,20 @@ class AnnotationGUI:
         header.pack_propagate(False)
 
         # — Brand —
-        logo_img = Image.open("assets/boxify.png")
+        logo_img = Image.open("assets/jelibox.png")
         logo_img = logo_img.resize((32, 32))  # sesuaikan ukuran
         self.logo = ImageTk.PhotoImage(logo_img)
         brand = tk.Frame(header, bg=C_PANEL)
         brand.pack(side=tk.LEFT, padx=(10, 0))
 
-        self._btn(brand, "🏠", self.back_to_workspace,
-                  C_PANEL, C_ACCENT, font_size=11).pack(
-            side=tk.LEFT, padx=(0, 2), pady=10, ipady=0, ipadx=0)
+        self._kbtn(brand, "🏠", self.back_to_workspace, 'secondary', font_size=11).pack(
+            side=tk.LEFT, padx=(0, 6), pady=12, ipady=2, ipadx=4)
 
         tk.Label(brand, image=self.logo, bg=C_PANEL).pack(side=tk.LEFT, pady=10)
         name_stack = tk.Frame(brand, bg=C_PANEL)
         name_stack.pack(side=tk.LEFT, padx=(5, 0))
-        tk.Label(name_stack, text="BOXIFY", bg=C_PANEL, fg=C_TXT1,
-                 font=('Segoe UI', 11, 'bold')).pack(anchor='w')
+        tk.Label(name_stack, text="Jelibox", bg=C_PANEL, fg=C_TXT1,
+                 font=('Segoe UI', 12, 'bold')).pack(anchor='w')
         tk.Label(name_stack, text=workspaceName.upper(), bg=C_PANEL, fg=C_TXT3,
                  font=('Segoe UI', 6, 'bold')).pack(anchor='w')
 
@@ -233,70 +264,56 @@ class AnnotationGUI:
         nav = tk.Frame(header, bg=C_PANEL)
         nav.pack(side=tk.LEFT)
 
-        self._btn(nav, "◀  PREV", self.prev_image,
-                  C_CARD2, C_TXT1, font_size=9).pack(
+        self._kbtn(nav, "◀  Prev", self.prev_image, 'secondary', font_size=9).pack(
             side=tk.LEFT, padx=(0, 2), pady=12, ipady=5, ipadx=10)
 
-        self._btn(nav, "NEXT  ▶", self.next_image,
-                  C_CARD2, C_TXT1, font_size=9).pack(
+        self._kbtn(nav, "Next  ▶", self.next_image, 'secondary', font_size=9).pack(
             side=tk.LEFT, padx=(2, 0), pady=12, ipady=5, ipadx=10)
 
         tk.Frame(header, bg=C_BORDER, width=1).pack(side=tk.LEFT,
                                                       fill=tk.Y, pady=10, padx=10)
 
-        # — Action tools —
+        # Configuration group (opens a dialog) - pinned to the top-right.
+        # Packed before the quick actions so it is never the one that gets clipped.
+        config_group = tk.Frame(header, bg=C_PANEL)
+        config_group.pack(side=tk.RIGHT, padx=(0, 10))
+
+        config_defs = [
+            ("🧠  Label Assistant", self.show_label_assistant),
+            ("🎓  Train",           self.start_training),
+            ("⬆  Export Model",     self.show_export_dialog),
+            ("⬆  Export Dataset",   self.show_export_dataset_dialog),
+        ]
+        for label, cmd in config_defs:
+            self._kbtn(config_group, label, cmd, 'secondary').pack(
+                side=tk.LEFT, padx=2, pady=12, ipady=5, ipadx=8)
+
+        # Quick-action group (one click, no dialog) - next to PREV / NEXT
         tools = tk.Frame(header, bg=C_PANEL)
         tools.pack(side=tk.LEFT)
 
-        tool_defs = [
-            ("🔄  Repeat",    self.repeat_annotations,  '#132233', C_ACCENT),
-            ("🤖  Infer",     self.run_inference,        '#0e2218', C_GREEN),
-            ("🎓  Train",     self.start_training,       '#1e1040', C_PURPLE),
-            ("🗑   Delete",    self.delete_image,         '#2d0f0f', C_RED),
-            ("🎥  Stream",    self.launch_stream,         '#0a0e1a', C_BLUE),
-            ("⬆️  Export Model",    self.show_export_dialog,   '#103244', C_ACCENT),
-            ("⬆️  Export Dataset",    self.show_export_dataset_dialog,   '#0f1525', C_ORANGE),
+        quick_defs = [
+            ("🔄  Repeat", self.repeat_annotations,     'secondary'),
+            ("🤖  Infer",  self.run_inference,           'primary'),
+            ("🗑  Delete", self.delete_image,            'danger'),
+            ("🎥  Stream", self.launch_stream,           'secondary'),
+            ("⬡  Mode",    self.toggle_annotation_mode,  'secondary'),
         ]
-        for label, cmd, bg, fg in tool_defs:
-            self._btn(tools, label, cmd, bg, fg, font_size=8).pack(
+        for label, cmd, kind in quick_defs:
+            self._kbtn(tools, label, cmd, kind).pack(
                 side=tk.LEFT, padx=2, pady=12, ipady=5, ipadx=8)
 
-        tk.Frame(header, bg=C_BORDER, width=1).pack(side=tk.LEFT,
-                                                      fill=tk.Y, pady=10, padx=10)
-
-        # — Mode / toggle tools —
-        modes = tk.Frame(header, bg=C_PANEL)
-        modes.pack(side=tk.LEFT)
-
-        self._btn(modes, "⬡  Mode", self.toggle_annotation_mode,
-                  '#1e1040', C_PURPLE, font_size=8, bold=True).pack(
-            side=tk.LEFT, padx=2, pady=12, ipady=5, ipadx=8)
-
-        self.mask_btn = self._btn(modes, "⬛ ZeroFill: OFF", self.toggle_mask_mode,
-                                   C_CARD2, C_TXT2, font_size=8)
+        self.mask_btn = self._kbtn(tools, "⬛ ZeroFill: OFF", self.toggle_mask_mode, 'secondary')
         self.mask_btn.pack(side=tk.LEFT, padx=2, pady=12, ipady=5, ipadx=8)
 
-        # — Right-side status badges —
-        status_panel = tk.Frame(header, bg=C_PANEL)
-        status_panel.pack(side=tk.RIGHT, padx=12)
+        # Filler block: stretches to take whatever space is left between the
+        # quick actions and the configuration group, so the header stays full
+        # no matter how many buttons either group gets.
+        tk.Frame(header, bg=C_CARD).pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
+                                         padx=(10, 10), pady=12)
 
-        badge_cfg = dict(font=('Segoe UI', 8), padx=10, pady=4, relief=tk.FLAT)
-
-        self.mode_label = tk.Label(status_panel, text="📦 BBOX",
-                                    bg=C_GREEN, fg='#000000',
-                                    font=('Segoe UI', 8, 'bold'), padx=10, pady=4)
-        self.mode_label.pack(side=tk.RIGHT, padx=3, pady=14)
-
-        self.force_label = tk.Label(status_panel, text="Force: OFF",
-                                     bg=C_CARD, fg=C_TXT3, **badge_cfg)
-        self.force_label.pack(side=tk.RIGHT, padx=3, pady=14)
-
-        self.text_label = tk.Label(status_panel, text="Text: ON",
-                                    bg=C_CARD, fg=C_GREEN, **badge_cfg)
-        self.text_label.pack(side=tk.RIGHT, padx=3, pady=14)
-
-        # Thin cyan accent line under header
-        tk.Frame(self.root, bg=C_ACCENT, height=2).pack(fill=tk.X)
+        # Hairline under header
+        tk.Frame(self.root, bg=C_BORDER, height=1).pack(fill=tk.X)
 
         # ======================================================
         # MAIN CONTENT AREA
@@ -323,15 +340,11 @@ class AnnotationGUI:
         btn_row = tk.Frame(cls_hdr, bg=C_CARD)
         btn_row.pack(side=tk.RIGHT, padx=6)
 
-        tk.Button(btn_row, text=" + ", command=self.add_class_dialog,
-                  bg=C_GREEN, fg='#000000', font=('Segoe UI', 9, 'bold'),
-                  relief=tk.FLAT, cursor='hand2',
-                  activebackground='#00c060').pack(side=tk.LEFT, padx=2, pady=8)
+        self._kbtn(btn_row, " + ", self.add_class_dialog, 'primary', font_size=9).pack(
+            side=tk.LEFT, padx=2, pady=8)
 
-        tk.Button(btn_row, text=" − ", command=self.delete_class_dialog,
-                  bg=C_RED, fg='#ffffff', font=('Segoe UI', 9, 'bold'),
-                  relief=tk.FLAT, cursor='hand2',
-                  activebackground='#cc0033').pack(side=tk.LEFT, padx=2, pady=8)
+        self._kbtn(btn_row, " − ", self.delete_class_dialog, 'danger', font_size=9).pack(
+            side=tk.LEFT, padx=2, pady=8)
 
         # — Class listbox —
         cls_box_frame = tk.Frame(left_panel, bg=C_PANEL)
@@ -346,7 +359,7 @@ class AnnotationGUI:
             selectmode=tk.SINGLE, font=('Segoe UI', 9),
             yscrollcommand=cls_scroll.set, height=10,
             activestyle='none', relief=tk.FLAT,
-            selectbackground=C_ACCENT, selectforeground='#000000',
+            selectbackground=C_ACCENT, selectforeground=C_ON_ACCENT,
             highlightthickness=0, borderwidth=0
         )
         self.class_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -366,9 +379,15 @@ class AnnotationGUI:
         tk.Label(vis_hdr, text="👁  VISIBILITY", bg=C_CARD, fg=C_TXT2,
                  font=('Segoe UI', 8, 'bold')).pack(side=tk.LEFT, padx=10)
         
-        tk.Button(vis_hdr, text="Toggle Text", command=self.toggle_bbox_text,
-            bg=C_BLUE, fg='#000000', font=('Segoe UI', 8), relief=tk.FLAT,
-            cursor='hand2').pack(side=tk.RIGHT, padx=(6,10), pady=6)
+        self.text_btn = tk.Button(
+            vis_hdr,
+            text="Hide label text" if state.show_bbox_text else "Show label text",
+            command=self.toggle_bbox_text,
+            bg=C_CARD2, fg=C_TXT1, font=('Segoe UI', 8, 'bold'), relief=tk.FLAT,
+            activebackground=C_BORDER, activeforeground=C_TXT1,
+            highlightbackground=C_BORDER, highlightthickness=1, borderwidth=0,
+            cursor='hand2')
+        self.text_btn.pack(side=tk.RIGHT, padx=(6,10), pady=6)
 
         vbtn_row = tk.Frame(vis_hdr, bg=C_CARD)
         vbtn_row.pack(side=tk.RIGHT, padx=6)
@@ -391,11 +410,11 @@ class AnnotationGUI:
         self.refresh_visibility_toggles()
 
         # ===== CANVAS AREA =====
-        canvas_container = tk.Frame(content, bg='#000000')
+        canvas_container = tk.Frame(content, bg=C_STAGE)
         canvas_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.canvas_container = canvas_container  # Store reference for zoom calculations
 
-        self.canvas = tk.Canvas(canvas_container, bg='#060b14', highlightthickness=0)
+        self.canvas = tk.Canvas(canvas_container, bg=C_STAGE, highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
         self.canvas.bind('<Button-1>', self.on_mouse_down)
@@ -471,11 +490,11 @@ class AnnotationGUI:
         img_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.image_listbox = tk.Listbox(
-            img_list_wrap, bg=C_CARD, fg=C_GREEN,
+            img_list_wrap, bg=C_CARD, fg=C_TXT1,
             selectmode=tk.SINGLE, font=('Consolas', 8),
             yscrollcommand=img_scroll.set,
             activestyle='none', relief=tk.FLAT,
-            selectbackground=C_ACCENT, selectforeground='#000000',
+            selectbackground=C_ACCENT, selectforeground=C_ON_ACCENT,
             highlightthickness=0, borderwidth=0
         )
         self.image_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -497,10 +516,19 @@ class AnnotationGUI:
         # Mode pill (left)
         self.statusbar_mode = tk.Label(
             status_bar, text="  📦 BBOX MODE  ",
-            bg=C_GREEN, fg='#000000',
+            bg=C_ACCENT, fg=C_ON_ACCENT,
             font=('Segoe UI', 7, 'bold')
         )
         self.statusbar_mode.pack(side=tk.LEFT, padx=(8, 4), pady=4)
+
+        # Force-new-bbox indicator (next to mode pill)
+        self.force_label = tk.Label(
+            status_bar, text="Force: OFF",
+            bg=C_CARD, fg=C_TXT3,
+            font=('Segoe UI', 7, 'bold'), padx=6
+        )
+        self.force_label.pack(side=tk.LEFT, padx=(0, 4), pady=4)
+        self.update_force_label()
 
         tk.Frame(status_bar, bg=C_BORDER, width=1).pack(side=tk.LEFT,
                                                           fill=tk.Y, pady=4)
@@ -512,6 +540,14 @@ class AnnotationGUI:
             font=('Segoe UI', 8)
         )
         self.statusbar_progress.pack(side=tk.LEFT, padx=10)
+
+        # Theme toggle (right) - applies on next start
+        theme_btn = tk.Button(
+            status_bar, text="◐ Dark" if MODE == "light" else "◐ Light",
+            command=self.toggle_theme, bg=C_PANEL, fg=C_TXT2, relief=tk.FLAT,
+            font=('Segoe UI', 7, 'bold'), cursor='hand2', borderwidth=0,
+            activebackground=C_CARD2, activeforeground=C_TXT1)
+        theme_btn.pack(side=tk.RIGHT, padx=(0, 8), pady=3, ipadx=6)
 
         # Keyboard hints (right)
         tk.Label(
@@ -535,7 +571,7 @@ class AnnotationGUI:
             if i < len(colorsPalette):
                 hex_color = self.rgb_to_hex(colorsPalette[i])
                 # Darken the class color for better readability in the list
-                self.class_listbox.itemconfig(i, bg=hex_color, fg='#ffffff')
+                self.class_listbox.itemconfig(i, bg=hex_color, fg=self._readable_fg(hex_color))
 
         if CLASSLIST:
             self.class_listbox.select_set(0)
@@ -616,7 +652,7 @@ class AnnotationGUI:
         return records
 
     def _read_coco_annotations(self, xml_path, image_width, image_height, categories):
-        """Convert Boxify VOC objects into COCO annotation dictionaries."""
+        """Convert Jelibox VOC objects into COCO annotation dictionaries."""
         annotations = []
         if not os.path.exists(xml_path):
             return annotations
@@ -720,7 +756,7 @@ class AnnotationGUI:
             image_dir = os.path.join(target, 'images', split_name)
             os.makedirs(image_dir, exist_ok=True)
             coco = {
-                'info': {'description': f'Boxify {workspaceName} dataset'},
+                'info': {'description': f'Jelibox {workspaceName} dataset'},
                 'licenses': [],
                 'images': [],
                 'annotations': [],
@@ -1181,7 +1217,7 @@ class AnnotationGUI:
 
         btn_row = tk.Frame(body, bg=C_CARD)
         btn_row.pack(fill=tk.X, pady=(8,0))
-        export_btn = tk.Button(btn_row, text='Export', command=do_export_dataset, bg=C_GREEN, fg='#000000')
+        export_btn = tk.Button(btn_row, text='Export', command=do_export_dataset, bg=C_ACCENT, fg=C_ON_ACCENT)
         export_btn.pack(side=tk.RIGHT, padx=6)
         close_btn = tk.Button(btn_row, text='Close', command=on_dialog_close, bg=C_CARD2, fg=C_TXT1)
         close_btn.pack(side=tk.RIGHT, padx=(0,6))
@@ -1209,7 +1245,7 @@ class AnnotationGUI:
         hdr.pack(fill=tk.X)
         hdr.pack_propagate(False)
         tk.Label(hdr, text="➕  Add New Class", font=('Segoe UI', 12, 'bold'),
-                 bg=C_GREEN, fg='#000000').pack(side=tk.LEFT, padx=16, pady=10)
+                 bg=C_ACCENT, fg=C_ON_ACCENT).pack(side=tk.LEFT, padx=16, pady=10)
 
         body = tk.Frame(dialog, bg=C_BASE, padx=24, pady=16)
         body.pack(fill=tk.BOTH, expand=True)
@@ -1249,7 +1285,7 @@ class AnnotationGUI:
         self._btn(btn_row, "✕  Cancel", dialog.destroy,
                   C_CARD2, C_TXT2, font_size=10).pack(side=tk.LEFT, ipady=7, ipadx=14)
         self._btn(btn_row, "✓  Add Class", on_submit,
-                  C_GREEN, '#000000', font_size=10, bold=True).pack(
+                  C_ACCENT, C_ON_ACCENT, font_size=10, bold=True).pack(
             side=tk.RIGHT, ipady=7, ipadx=16)
 
         entry.bind('<Return>', lambda e: on_submit())
@@ -1289,7 +1325,7 @@ class AnnotationGUI:
         hdr.pack(fill=tk.X)
         hdr.pack_propagate(False)
         tk.Label(hdr, text="⚠️  Delete Class Warning", font=('Segoe UI', 12, 'bold'),
-                 bg=C_RED, fg='#ffffff').pack(side=tk.LEFT, padx=16, pady=10)
+                 bg=C_RED, fg=C_ON_RED).pack(side=tk.LEFT, padx=16, pady=10)
 
         body = tk.Frame(dialog, bg=C_BASE, padx=24, pady=16)
         body.pack(fill=tk.BOTH, expand=True)
@@ -1324,7 +1360,7 @@ class AnnotationGUI:
         self._btn(btn_row, "✕  Cancel", dialog.destroy,
                   C_CARD2, C_TXT2, font_size=10).pack(side=tk.LEFT, ipady=7, ipadx=14)
         self._btn(btn_row, "🗑  Yes, Delete", on_confirm,
-                  C_RED, '#ffffff', font_size=10, bold=True).pack(
+                  C_RED, C_ON_RED, font_size=10, bold=True).pack(
             side=tk.RIGHT, ipady=7, ipadx=16)
 
         CLASSLIST = class_manager.get_classes()
@@ -2363,10 +2399,9 @@ class AnnotationGUI:
         if state.annotation_mode == "bbox":
             state.annotation_mode = "polygon"
             print("[GUI] Switched to POLYGON mode")
-            self.mode_label.config(text="🔷 POLYGON", bg=C_ORANGE, fg='#000000')
             if hasattr(self, 'statusbar_mode'):
                 self.statusbar_mode.config(text="  🔷 POLYGON MODE  ",
-                                            bg=C_ORANGE, fg='#000000')
+                                            bg=C_AMBER, fg=C_ON_ACCENT)
             messagebox.showinfo("Mode Changed",
                                 "Switched to POLYGON mode.\n\n"
                                 "Click to add points (min 3)\n"
@@ -2375,10 +2410,9 @@ class AnnotationGUI:
         else:
             state.annotation_mode = "bbox"
             print("[GUI] Switched to BBOX mode")
-            self.mode_label.config(text="📦 BBOX", bg=C_GREEN, fg='#000000')
             if hasattr(self, 'statusbar_mode'):
                 self.statusbar_mode.config(text="  📦 BBOX MODE  ",
-                                            bg=C_GREEN, fg='#000000')
+                                            bg=C_ACCENT, fg=C_ON_ACCENT)
             messagebox.showinfo("Mode Changed",
                                 "Switched back to BBOX mode.\n"
                                 "Press B to create a bounding box.")
@@ -2416,7 +2450,7 @@ class AnnotationGUI:
         hdr.pack_propagate(False)
         tk.Label(hdr, text="✏️  Rename Object Class",
                  font=('Segoe UI', 12, 'bold'),
-                 bg=C_ACCENT, fg='#000000').pack(side=tk.LEFT, padx=16, pady=10)
+                 bg=C_ACCENT, fg=C_ON_ACCENT).pack(side=tk.LEFT, padx=16, pady=10)
 
         body = tk.Frame(dialog, bg=C_BASE, padx=24, pady=16)
         body.pack(fill=tk.BOTH, expand=True)
@@ -2428,7 +2462,7 @@ class AnnotationGUI:
                  bg=C_BASE, fg=C_TXT2).pack(side=tk.LEFT)
         tk.Label(cur_row, text=f"  {current_class}  ",
                  font=('Segoe UI', 10, 'bold'),
-                 bg=C_AMBER, fg='#000000',
+                 bg=C_AMBER, fg=C_ON_ACCENT,
                  padx=8, pady=3).pack(side=tk.LEFT, padx=8)
 
         tk.Frame(body, bg=C_BORDER, height=1).pack(fill=tk.X, pady=(0, 10))
@@ -2442,12 +2476,12 @@ class AnnotationGUI:
         # Style the combobox
         style = ttk.Style()
         style.theme_use('clam')
-        style.configure('Boxify.TCombobox',
+        style.configure('Jelibox.TCombobox',
                         fieldbackground=C_CARD2,
                         background=C_CARD2,
                         foreground=C_TXT1,
                         selectbackground=C_ACCENT,
-                        selectforeground='#000000',
+                        selectforeground=C_ON_ACCENT,
                         bordercolor=C_BORDER,
                         darkcolor=C_CARD2,
                         lightcolor=C_CARD2,
@@ -2455,7 +2489,7 @@ class AnnotationGUI:
 
         dropdown = ttk.Combobox(body, textvariable=class_var, values=CLASSLIST,
                                 state='readonly', font=('Segoe UI', 11), width=38,
-                                style='Boxify.TCombobox')
+                                style='Jelibox.TCombobox')
         dropdown.pack(fill=tk.X, ipady=4)
 
         def on_ok():
@@ -2487,7 +2521,7 @@ class AnnotationGUI:
         self._btn(btn_row, "✕  Cancel", dialog.destroy,
                   C_CARD2, C_TXT2, font_size=10).pack(side=tk.LEFT, ipady=7, ipadx=14)
         self._btn(btn_row, "✓  Apply", on_ok,
-                  C_GREEN, '#000000', font_size=10, bold=True).pack(
+                  C_ACCENT, C_ON_ACCENT, font_size=10, bold=True).pack(
             side=tk.RIGHT, ipady=7, ipadx=16)
 
         dropdown.focus()
@@ -2498,7 +2532,8 @@ class AnnotationGUI:
     def toggle_mask_mode(self):
         self.mask_mode = not self.mask_mode
         if self.mask_mode:
-            self.mask_btn.config(text="⬛ ZeroFill: ON", bg=C_ORANGE, fg='#ffffff')
+            self.mask_btn.config(text="⬛ ZeroFill: ON", bg=C_ACCENT, fg=C_ON_ACCENT,
+                                 activebackground=C_ACCENT, activeforeground=C_ON_ACCENT)
             self.mask_polygon_points = []
             print("[MASKING] ON — Click to draw polygon, double-click to finish")
             messagebox.showinfo("ZeroFill Mode",
@@ -2508,7 +2543,8 @@ class AnnotationGUI:
                                 "The area inside will be blackened\n"
                                 "Press ZeroFill again to cancel")
         else:
-            self.mask_btn.config(text="⬛ ZeroFill: OFF", bg=C_CARD2, fg=C_TXT2)
+            self.mask_btn.config(text="⬛ ZeroFill: OFF", bg=C_CARD2, fg=C_TXT1,
+                                 activebackground=C_BORDER, activeforeground=C_TXT1)
             self.mask_polygon_points = []
             print("[MASKING] OFF")
         self.update_display()
@@ -2872,11 +2908,22 @@ class AnnotationGUI:
     def run_inference(self):
         self.save_current()
         print("[GUI] Running inference...")
-        inference_current(self.images, state.current_index, conf=0.3)
-        
+        ok, message = inference_current(self.images, state.current_index)
+
         self.update_display()
         self.update_info()
-        print("[GUI] Inference completed!")
+        if not ok:
+            messagebox.showwarning("Label Assistant", message, parent=self.root)
+        print(f"[GUI] Inference finished: {message}")
+
+    def toggle_theme(self):
+        new = toggle_mode()
+        messagebox.showinfo(
+            "Theme", f"{new.capitalize()} theme saved.\n\nIt applies the next time you open Jelibox.",
+            parent=self.root)
+
+    def show_label_assistant(self):
+        open_label_assistant(self.root)
 
     def launch_stream(self):
         """
@@ -2943,7 +2990,12 @@ class AnnotationGUI:
         cmd = [
             sys.executable, "-m", "streamlit", "run",
             stream_script,
-            "--",           
+            "--theme.base", MODE,
+            "--theme.primaryColor", C_ACCENT,
+            "--theme.backgroundColor", C_BASE,
+            "--theme.secondaryBackgroundColor", C_PANEL,
+            "--theme.textColor", C_TXT1,
+            "--",
             str(model_path),
         ]
         print(f"[STREAM] Launching: {' '.join(cmd)}")
@@ -3114,7 +3166,7 @@ class AnnotationGUI:
 
             threading.Thread(target=worker, daemon=True).start()
 
-        export_btn = tk.Button(body, text='Export', command=do_export, bg=C_BLUE, fg='#000000')
+        export_btn = tk.Button(body, text='Export', command=do_export, bg=C_ACCENT, fg=C_ON_ACCENT)
         export_btn.pack(side=tk.RIGHT, pady=(12,0), ipadx=12, ipady=6)
 
         tk.Button(body, text='Close', command=dialog.destroy, bg=C_CARD2, fg=C_TXT1).pack(side=tk.RIGHT, pady=(12,0), padx=(8,0), ipadx=8, ipady=6)

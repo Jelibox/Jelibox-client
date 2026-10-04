@@ -4,155 +4,225 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="google-site-verification" content="2dDeMeLVPGU-jXJDLVFoqY3q3CPxB_4xz4yJbas3ano">
-    <meta name="description" content="Boxify is a local computer vision annotation tool for YOLO object detection and image segmentation datasets.">
-    <meta name="theme-color" content="#0d1117">
-    <title>Boxify | Local Computer Vision Annotation</title>
-    <link rel="icon" href="assets/boxify.png" type="image/png">
+    <meta name="description" content="Jelibox is a local, private image annotation tool for YOLO object detection and segmentation datasets, with a built-in Label Assistant powered by YOLO-World or your own model.">
+    <meta name="theme-color" content="#EAE5DA" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0B0C12" media="(prefers-color-scheme: dark)">
+    <title>Jelibox | Local Image Annotation for YOLO</title>
+    <link rel="icon" href="assets/jelibox.png" type="image/png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&amp;display=swap">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
-        :root { --ink:#0d1117; --ink-soft:#141b23; --panel:#18212b; --line:rgba(231,241,246,.13); --text:#eef4f3; --muted:#91a0a7; --lime:#d7f36b; --cyan:#74e6e1; --coral:#ff866f; --mono:'DM Mono',monospace; --sans:'Manrope',sans-serif; }
+        :root {
+            --bg:#EAE5DA; --surface:#F4F0E6; --surface2:#DED8CB; --line:rgba(70,50,20,.14);
+            --text:#1F1D1A; --muted:#625D55; --faint:#7A746A;
+            --accent:#4A5BF0; --on-accent:#FFFFFF; --tint:#DFDEF3; --accent-text:#3A49D0;
+            --shadow:0 1px 2px rgba(60,40,10,.06),0 12px 32px rgba(60,40,10,.10);
+            --display:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI Variable Display','Segoe UI',system-ui,sans-serif;
+            --sans:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI Variable Text','Segoe UI',system-ui,sans-serif;
+            --mono:ui-monospace,'SF Mono','Cascadia Code',Consolas,monospace;
+        }
+        @media (prefers-color-scheme:dark) {
+            :root {
+                --bg:#0B0C12; --surface:#14161D; --surface2:#2B2E3A; --line:rgba(242,239,233,.10);
+                --text:#F2EFE9; --muted:#A1A1AA; --faint:#7C7C86;
+                --accent:#7C8CFF; --on-accent:#10131F; --tint:#262A4D; --accent-text:#A7B2FF;
+                --shadow:0 1px 2px rgba(0,0,0,.4),0 16px 40px rgba(0,0,0,.45);
+            }
+        }
         * { box-sizing:border-box; }
         html { scroll-behavior:smooth; }
-        body { margin:0; background:var(--ink); color:var(--text); font-family:var(--sans); line-height:1.55; }
-        body::before { content:''; position:fixed; inset:0; z-index:-1; opacity:.32; pointer-events:none; background-image:linear-gradient(rgba(255,255,255,.028) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.028) 1px,transparent 1px); background-size:48px 48px; mask-image:linear-gradient(to bottom,black,transparent 78%); }
+        body { margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); line-height:1.6; -webkit-font-smoothing:antialiased; }
         a { color:inherit; text-decoration:none; }
-        .shell { width:min(1180px,calc(100% - 48px)); margin:0 auto; }
-        .nav { position:sticky; top:0; z-index:10; border-bottom:1px solid var(--line); background:rgba(13,17,23,.88); backdrop-filter:blur(16px); }
-        .nav-inner { height:76px; display:flex; align-items:center; justify-content:space-between; }
-        .brand { display:flex; align-items:center; gap:11px; font-weight:800; letter-spacing:-.04em; }
-        .brand img { width:31px; height:31px; border-radius:8px; }
-        .brand small { display:block; color:var(--muted); font:500 9px var(--mono); letter-spacing:.08em; text-transform:uppercase; }
-        .nav-links { display:flex; align-items:center; gap:28px; color:var(--muted); font-size:13px; }
-        .nav-links a:hover { color:var(--text); }
-        .nav-cta { padding:10px 15px; border:1px solid var(--lime); color:var(--lime); font-size:12px; font-weight:800; }
-        .hero { padding:92px 0 78px; }
-        .hero-grid { display:grid; grid-template-columns:.82fr 1.18fr; gap:72px; align-items:center; }
-        .eyebrow { display:flex; align-items:center; gap:10px; color:var(--lime); font:500 11px var(--mono); letter-spacing:.1em; text-transform:uppercase; }
-        .eyebrow::before { content:''; width:30px; height:1px; background:var(--lime); }
+        a:focus-visible,button:focus-visible { outline:3px solid var(--accent); outline-offset:3px; border-radius:10px; }
         h1,h2,h3,p { margin-top:0; }
-        h1 { max-width:620px; margin:22px 0; font-size:clamp(3.5rem,7vw,6.6rem); line-height:.94; letter-spacing:-.085em; }
-        h1 em { color:var(--lime); font-style:normal; }
-        .hero-copy { max-width:480px; color:var(--muted); font-size:17px; }
-        .actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:31px; }
-        .button { display:inline-flex; align-items:center; gap:14px; padding:14px 18px; border:1px solid var(--line); font-size:13px; font-weight:800; transition:transform .2s ease,background .2s ease,color .2s ease; }
-        .button:hover { transform:translateY(-3px); }
-        .button-primary { background:var(--lime); border-color:var(--lime); color:var(--ink); }
-        .button-secondary:hover { background:var(--panel); }
-        .meta-row { display:flex; gap:22px; margin-top:42px; color:var(--muted); font:400 11px var(--mono); }
-        .meta-row strong { display:block; margin-bottom:3px; color:var(--text); font:700 15px var(--sans); }
-        .screen-wrap { position:relative; }
-        .screen-wrap::before { content:'LIVE WORKSPACE PREVIEW'; position:absolute; right:18px; top:-12px; z-index:2; padding:7px 9px; background:var(--coral); color:var(--ink); font:700 10px var(--mono); letter-spacing:.06em; }
-        .screen { padding:10px; border:1px solid rgba(116,230,225,.28); background:#080b0f; box-shadow:18px 18px 0 rgba(215,243,107,.08); transform:rotate(1.2deg); }
-        .screen img { display:block; width:100%; height:auto; border:1px solid var(--line); }
-        .caption { margin-top:13px; color:var(--muted); font:400 10px var(--mono); }
-        .strip { border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--ink-soft); }
-        .strip-inner { display:grid; grid-template-columns:repeat(4,1fr); }
-        .strip-item { padding:21px 20px; border-right:1px solid var(--line); }
-        .strip-item:last-child { border-right:0; }
-        .strip-item strong { display:block; margin-bottom:4px; color:var(--cyan); font:500 11px var(--mono); text-transform:uppercase; }
-        .strip-item span { color:var(--muted); font-size:13px; }
-        .section { padding:125px 0; }
-        .section-head { display:grid; grid-template-columns:.7fr 1fr; gap:50px; align-items:end; }
-        .section h2 { max-width:680px; margin:16px 0 0; font-size:clamp(2.5rem,5vw,4.6rem); line-height:.98; letter-spacing:-.075em; }
-        .section-lead { max-width:430px; margin:0; color:var(--muted); font-size:15px; }
-        .feature-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:1px; margin-top:56px; border:1px solid var(--line); background:var(--line); }
-        .feature { min-height:210px; padding:27px; background:var(--ink-soft); transition:background .2s ease; }
-        .feature:hover { background:var(--panel); }
-        .feature-index { color:var(--coral); font:500 11px var(--mono); }
-        .feature h3 { margin:45px 0 8px; font-size:18px; letter-spacing:-.03em; }
-        .feature p { margin:0; color:var(--muted); font-size:13px; }
-        .workspace { display:grid; grid-template-columns:1fr 1fr; gap:70px; align-items:center; }
-        .workspace-panel { padding:24px; border:1px solid var(--line); background:var(--panel); }
-        .window-bar { display:flex; justify-content:space-between; padding-bottom:18px; border-bottom:1px solid var(--line); color:var(--muted); font:400 10px var(--mono); }
-        .window-status { color:var(--lime); }
-        .workspace-map { display:grid; grid-template-columns:1fr 1.5fr 1fr; min-height:260px; margin-top:18px; border:1px solid var(--line); }
-        .map-col { padding:16px; border-right:1px solid var(--line); }
-        .map-col:last-child { border:0; }
-        .map-title { margin-bottom:17px; color:var(--cyan); font:500 10px var(--mono); text-transform:uppercase; }
-        .map-line { height:8px; margin:10px 0; background:rgba(255,255,255,.1); }
-        .map-line.short { width:62%; }
-        .map-canvas { position:relative; min-height:196px; background:#0a1118; }
-        .map-box { position:absolute; border:2px solid var(--lime); }
-        .map-box::after { content:'object'; position:absolute; top:-19px; left:-2px; padding:2px 5px; background:var(--lime); color:var(--ink); font:500 9px var(--mono); }
-        .map-box.one { top:32px; left:25px; width:82px; height:98px; }
-        .map-box.two { right:24px; bottom:31px; width:70px; height:66px; border-color:var(--coral); }
-        .workspace-copy ul { padding:0; margin:29px 0 0; list-style:none; }
-        .workspace-copy li { display:flex; gap:14px; padding:14px 0; border-bottom:1px solid var(--line); color:var(--muted); font-size:14px; }
-        .workspace-copy li b { color:var(--lime); font:500 11px var(--mono); }
-        .install { padding:30px; border:1px solid var(--line); background:var(--panel); }
-        .install-grid { display:grid; grid-template-columns:1fr 1fr; gap:1px; margin-top:44px; background:var(--line); }
-        .install-card { padding:28px; background:var(--ink-soft); }
-        .install-card h3 { margin-bottom:20px; }
-        .install-card ol { padding-left:18px; margin:0 0 24px; color:var(--text); font-size:14px; }
+        .shell { width:min(1120px,calc(100% - 48px)); margin:0 auto; }
+
+        /* nav */
+        .nav { position:sticky; top:0; z-index:10; border-bottom:1px solid var(--line); background:color-mix(in srgb,var(--surface) 82%,transparent); backdrop-filter:saturate(1.4) blur(18px); }
+        .nav-inner { height:68px; display:flex; align-items:center; justify-content:space-between; }
+        .brand { display:flex; align-items:center; gap:11px; font:800 18px var(--display); letter-spacing:-.02em; }
+        .brand img { width:34px; height:34px; border-radius:9px; }
+        .nav-links { display:flex; align-items:center; gap:26px; color:var(--muted); font-size:14px; font-weight:500; }
+        .nav-links a:hover { color:var(--text); }
+
+        /* buttons */
+        .button { display:inline-flex; align-items:center; gap:10px; height:46px; padding:0 22px; border-radius:999px; font:700 14px var(--sans); border:1px solid var(--line); transition:transform .18s ease,background .18s ease,box-shadow .18s ease; }
+        .button:hover { transform:translateY(-2px); }
+        .button-primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); box-shadow:0 6px 18px color-mix(in srgb,var(--accent) 35%,transparent); }
+        .button-secondary { background:var(--surface2); color:var(--text); }
+        .nav .button { height:38px; padding:0 18px; font-size:13px; }
+
+        /* hero */
+        .hero { padding:84px 0 72px; text-align:center; }
+        .eyebrow { display:inline-block; padding:6px 14px; border-radius:999px; background:var(--tint); color:var(--accent-text); font:700 12px var(--sans); letter-spacing:.04em; }
+        h1 { max-width:820px; margin:22px auto 20px; font:800 clamp(2.8rem,7vw,5.4rem)/1.02 var(--display); letter-spacing:-.045em; }
+        h1 em { font-style:normal; color:var(--accent-text); }
+        .lead { max-width:620px; margin:0 auto; color:var(--muted); font-size:18px; }
+        .actions { display:flex; justify-content:center; flex-wrap:wrap; gap:12px; margin-top:32px; }
+        .meta-row { display:flex; justify-content:center; flex-wrap:wrap; gap:34px; margin-top:34px; color:var(--faint); font-size:13px; }
+        .meta-row strong { color:var(--text); font-weight:700; margin-right:5px; }
+        .window { margin:56px auto 0; max-width:1020px; border-radius:20px; background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow); overflow:hidden; text-align:left; }
+        .window-bar { display:flex; align-items:center; gap:7px; height:40px; padding:0 16px; border-bottom:1px solid var(--line); }
+        .window-bar i { width:11px; height:11px; border-radius:50%; background:var(--surface2); }
+        .window-bar span { margin:0 auto; padding-right:44px; color:var(--faint); font-size:12px; font-weight:600; }
+        .window img { display:block; width:100%; height:auto; }
+
+        /* capability strip */
+        .strip { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-top:72px; }
+        .strip-item { padding:22px; border-radius:20px; background:var(--surface); border:1px solid var(--line); }
+        .strip-item strong { display:block; margin-bottom:4px; font:800 17px var(--display); letter-spacing:-.02em; }
+        .strip-item span { color:var(--muted); font-size:14px; }
+
+        /* sections */
+        .section { padding:104px 0 0; }
+        .section-head { max-width:700px; margin-bottom:44px; }
+        .section h2 { margin:14px 0 14px; font:800 clamp(2rem,4.4vw,3.3rem)/1.06 var(--display); letter-spacing:-.04em; }
+        .section-lead { color:var(--muted); font-size:17px; margin:0; }
+        .feature-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+        .feature { padding:28px; border-radius:22px; background:var(--surface); border:1px solid var(--line); transition:transform .2s ease,box-shadow .2s ease; }
+        .feature:hover { transform:translateY(-3px); box-shadow:var(--shadow); }
+        .feature-tag { display:inline-block; margin-bottom:34px; color:var(--accent-text); font:700 11px var(--sans); letter-spacing:.08em; text-transform:uppercase; }
+        .feature h3 { margin:0 0 8px; font:800 19px var(--display); letter-spacing:-.025em; }
+        .feature p { margin:0; color:var(--muted); font-size:14px; }
+        .feature.wide { grid-column:span 2; background:var(--tint); border-color:transparent; }
+        .feature.wide p { color:var(--text); opacity:.8; }
+        .feature-grid .feature:last-child { grid-column:span 2; }
+
+        /* workflow */
+        .loop { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; counter-reset:step; }
+        .step { position:relative; padding:24px; border-radius:22px; background:var(--surface); border:1px solid var(--line); }
+        .step::before { counter-increment:step; content:counter(step); display:grid; place-items:center; width:30px; height:30px; margin-bottom:18px; border-radius:50%; background:var(--accent); color:var(--on-accent); font:800 13px var(--display); }
+        .step h3 { margin:0 0 6px; font:800 17px var(--display); letter-spacing:-.02em; }
+        .step p { margin:0; color:var(--muted); font-size:14px; }
+
+        /* install */
+        .install-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+        .install-card { padding:30px; border-radius:22px; background:var(--surface); border:1px solid var(--line); }
+        .install-card h3 { margin:0 0 18px; font:800 20px var(--display); letter-spacing:-.025em; }
+        .install-card ol { padding-left:20px; margin:0 0 22px; font-size:14px; }
         .install-card li { margin-bottom:14px; }
-        .install-card li code { color:var(--cyan); font-family:var(--mono); font-size:12px; padding:2px 4px; background:var(--panel); border-radius:4px; }
-        .install-card pre { margin:8px 0 16px; border-radius:4px; }
-        .install-card p { color:var(--muted); font-size:13px; margin:0; line-height:1.6; }
-        pre { overflow-x:auto; padding:16px; margin:0; color:var(--cyan); background:#0a1015; font:400 12px/1.8 var(--mono); }
-        .final-cta { display:flex; align-items:end; justify-content:space-between; gap:40px; padding:70px 0 120px; }
-        .final-cta h2 { max-width:600px; margin:0; font-size:clamp(2.6rem,5vw,5rem); line-height:.96; letter-spacing:-.08em; }
-        footer { padding:24px 0 38px; border-top:1px solid var(--line); color:var(--muted); font:400 11px var(--mono); }
-        footer .shell { display:flex; justify-content:space-between; gap:20px; }
-        @keyframes rise { from { opacity:0; transform:translateY(18px); } to { opacity:1; transform:translateY(0); } }
-        .hero-copy,.screen-wrap { animation:rise .7s ease both; }
-        .screen-wrap { animation-delay:.12s; }
-        @media (max-width:850px) { .hero-grid,.workspace,.section-head { grid-template-columns:1fr; gap:38px; } .hero { padding-top:60px; } .feature-grid { grid-template-columns:repeat(2,1fr); } .final-cta { align-items:start; flex-direction:column; } }
-        @media (max-width:560px) { .shell { width:min(100% - 32px,1180px); } .nav-links a:not(.nav-cta) { display:none; } h1 { font-size:clamp(3.3rem,17vw,5rem); } .strip-inner,.feature-grid,.install-grid { grid-template-columns:1fr; } .strip-item { border-right:0; border-bottom:1px solid var(--line); } .strip-item:last-child { border-bottom:0; } .feature { min-height:auto; } .screen { transform:none; } .workspace-panel { padding:12px; min-width:0; overflow:hidden; } .workspace-map { grid-template-columns:1fr 1.4fr; } .workspace-map .map-col:last-child { display:none; } .install-card, pre { min-width:0; max-width:100%; } footer .shell { align-items:start; flex-direction:column; } }
+        .install-card code { padding:2px 6px; border-radius:6px; background:var(--surface2); font:500 12.5px var(--mono); }
+        .install-card p { margin:0; color:var(--muted); font-size:13px; }
+        pre { overflow-x:auto; padding:14px 16px; margin:8px 0 0; border-radius:12px; background:var(--surface2); font:500 12.5px/1.7 var(--mono); }
+
+        /* final */
+        .final-cta { margin-top:104px; padding:64px 28px; border-radius:30px; text-align:center; background:var(--accent); color:var(--on-accent); }
+        .final-cta h2 { max-width:640px; margin:0 auto 26px; font:800 clamp(2rem,4.4vw,3.2rem)/1.06 var(--display); letter-spacing:-.04em; }
+        .final-cta .button { background:var(--on-accent); color:var(--accent); border-color:transparent; }
+        footer { padding:44px 0 44px; color:var(--faint); font-size:13px; }
+        footer .shell { display:flex; justify-content:space-between; flex-wrap:wrap; gap:14px; }
+
+        @keyframes rise { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:none; } }
+        .hero .shell > * { animation:rise .6s ease both; }
+        .hero .shell > *:nth-child(2) { animation-delay:.06s; } .hero .shell > *:nth-child(3) { animation-delay:.12s; }
+        .hero .shell > *:nth-child(4) { animation-delay:.18s; } .hero .shell > *:nth-child(5) { animation-delay:.24s; }
+
+        @media (max-width:900px) { .feature-grid,.loop { grid-template-columns:repeat(2,1fr); } .strip { grid-template-columns:repeat(2,1fr); } .feature.wide,.feature-grid .feature:last-child { grid-column:span 2; } }
+        @media (max-width:640px) {
+            .shell { width:min(100% - 32px,1120px); }
+            .nav-links a:not(.button) { display:none; }
+            .feature-grid,.loop,.strip,.install-grid { grid-template-columns:1fr; } .feature.wide,.feature-grid .feature:last-child { grid-column:auto; }
+            .hero { padding-top:52px; } .section { padding-top:76px; } .window { border-radius:14px; }
+        }
         @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto !important; animation:none !important; transition:none !important; } }
     </style>
 </head>
 <body>
     <header class="nav">
         <div class="shell nav-inner">
-            <a class="brand" href="#top" aria-label="Boxify home"><img src="assets/boxify.png" alt="Boxify logo"><span>BOXIFY<small>annotation tools</small></span></a>
-            <nav class="nav-links" aria-label="Main navigation"><a href="#features">Capabilities</a><a href="#workspace">Workspace</a><a href="#install">Install</a><a class="nav-cta" href="https://github.com/BoxifyAnnotationTools/Boxify" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav>
+            <a class="brand" href="#top" aria-label="Jelibox home"><img src="assets/jelibox.png" alt="Jelibox logo"><span>Jelibox</span></a>
+            <nav class="nav-links" aria-label="Main navigation"><a href="#features">Features</a><a href="#workflow">Workflow</a><a href="#install">Install</a><a class="button button-primary" href="https://github.com/Jelibox/Jelibox-client" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav>
         </div>
     </header>
+
     <main id="top">
-        <section class="hero shell"><div class="hero-grid"><div class="hero-copy"><div class="eyebrow">Local computer vision tooling</div><h1>Make your data <em>visible.</em></h1><p class="hero-copy">Boxify is a private, local-first annotation workspace for building object detection and image segmentation datasets with YOLO models.</p><div class="actions"><a class="button button-primary" href="https://github.com/BoxifyAnnotationTools/Boxify" target="_blank" rel="noopener noreferrer">Explore the repo <span>↗</span></a><a class="button button-secondary" href="#workspace">See the workspace <span>↓</span></a></div><div class="meta-row"><div><strong>100%</strong>local workflow</div><div><strong>YOLO</strong>ready</div><div><strong>MIT</strong>licensed</div></div></div><div class="screen-wrap"><div class="screen"><img src="assets/visualize.png" alt="Boxify annotation interface with image canvas, classes panel, and annotation controls"></div><div class="caption">01 / THE ANNOTATION WORKBENCH — real Boxify interface</div></div></div></section>
-        <div class="strip"><div class="shell strip-inner"><div class="strip-item"><strong>Detect</strong><span>Bounding boxes with direct manipulation</span></div><div class="strip-item"><strong>Segment</strong><span>Polygon tools for precise masks</span></div><div class="strip-item"><strong>Infer</strong><span>Run custom Ultralytics models locally</span></div><div class="strip-item"><strong>Export</strong><span>YOLO, COCO, or Pascal VOC</span></div></div></div>
-        <section class="section shell" id="features"><div class="section-head"><div><div class="eyebrow">The toolkit</div><h2>Less friction between image and insight.</h2></div><p class="section-lead">Everything you need to annotate, inspect, train, and export without sending your dataset through a cloud service.</p></div><div class="feature-grid"><article class="feature"><div class="feature-index">01 / PRIVACY</div><h3>Local by design</h3><p>Your images, labels, and models stay on the machine you control.</p></article><article class="feature"><div class="feature-index">02 / SPEED</div><h3>AI-assisted labeling</h3><p>Use inference and repeat annotations to move through large datasets faster.</p></article><article class="feature"><div class="feature-index">03 / PRECISION</div><h3>Box + polygon tools</h3><p>Edit coordinates directly with handles, zoom, visibility controls, and class management.</p></article><article class="feature"><div class="feature-index">04 / PIPELINE</div><h3>Train in context</h3><p>Go from annotations to Ultralytics training without leaving your workspace — and without duplicating your source images.</p></article><article class="feature"><div class="feature-index">05 / OUTPUT</div><h3>Flexible exports</h3><p>Prepare datasets in YOLO, COCO, or Pascal VOC formats for downstream tooling.</p></article><article class="feature"><div class="feature-index">06 / ACCESS</div><h3>Open and practical</h3><p>Run the tool on Linux or Windows with installation scripts included in the repo.</p></article></div></section>
-        <section class="section shell" id="workspace"><div class="workspace"><div class="workspace-panel" aria-label="Illustrated Boxify workspace preview"><div class="window-bar"><span>BOXIFY / WORKSPACE: CAT</span><span class="window-status">● READY</span></div><div class="workspace-map"><div class="map-col"><div class="map-title">Classes</div><div class="map-line"></div><div class="map-line short"></div><div class="map-line"></div><div class="map-line short"></div></div><div class="map-col map-canvas"><div class="map-title">Canvas / annotate</div><div class="map-box one"></div><div class="map-box two"></div></div><div class="map-col"><div class="map-title">Images</div><div class="map-line"></div><div class="map-line short"></div><div class="map-line"></div><div class="map-line short"></div></div></div></div><div class="workspace-copy"><div class="eyebrow">Inside the workspace</div><h2>A focused desk for repeated annotation work.</h2><ul><li><b>01</b><span>Keep class visibility, image navigation, and annotation state in one view.</span></li><li><b>02</b><span>Move, resize, and inspect objects directly on the image canvas.</span></li><li><b>03</b><span>Switch from labeling to inference or training when the dataset is ready.</span></li><li><b>04</b><span>Pick a workspace from a VS Code-style picker, then jump back to switch datasets without restarting the app.</span></li></ul></div></div></section>
-        
-        <section class="section shell" id="install">
-            <div class="install">
-                <div class="eyebrow">Start locally</div>
-                <h2>Install once. Keep working.</h2>
-                <div class="install-grid">
-                    <div class="install-card">
-                        <h3>Linux</h3>
-                        <ol>
-                            <li>Install git (if you haven't installed git)
-                                <pre>sudo apt install git</pre>
-                            </li>
-                            <li>Clone this repository
-                                <pre>git clone https://github.com/BoxifyAnnotationTools/Boxify.git</pre>
-                            </li>
-                            <li>Add access to linux installation script
-                                <pre>chmod +x boxify_linux_installation.bash</pre>
-                            </li>
-                            <li>Run Boxify installation script
-                                <pre>./boxify_linux_installation.bash</pre>
-                            </li>
-                        </ol>
-                        <p>The installer asks for your <code>sudo</code> password at the beginning, installs Python with Tkinter and venv support, creates the <code>boxify/</code> virtual environment, installs dependencies, and creates a desktop launcher.</p>
-                    </div>
-                    <div class="install-card">
-                        <h3>Windows</h3>
-                        <ol>
-                            <li>Open <code>VC_redist/</code> and install the package matching your system architecture.</li>
-                            <li>Right-click <code>boxify_windows_installation.bat</code> and choose <strong>Run as administrator</strong>.</li>
-                            <li>Follow the installer prompts.</li>
-                            <li>Open the generated <code>Boxify.lnk</code> shortcut.</li>
-                        </ol>
-                        <p>The Windows installer checks for an NVIDIA GPU through <code>nvidia-smi</code> and uses Windows device information as a fallback. GPU detection does not guarantee that the installed PyTorch package has CUDA enabled.</p>
-                    </div>
+        <section class="hero">
+            <div class="shell">
+                <span class="eyebrow">Local image annotation for YOLO</span>
+                <h1>Soft to use. <em>Sharp on every object.</em></h1>
+                <p class="lead">Jelibox is a private, local-first workspace for building object detection and segmentation datasets. Annotate, auto-label, train, and export without your images ever leaving your machine.</p>
+                <div class="actions">
+                    <a class="button button-primary" href="#install">Get started</a>
+                    <a class="button button-secondary" href="https://github.com/Jelibox/Jelibox-client" target="_blank" rel="noopener noreferrer">View on GitHub ↗</a>
+                </div>
+                <div class="meta-row"><span><strong>100%</strong>local workflow</span><span><strong>YOLO</strong>ready</span><span><strong>Windows</strong>&amp; Linux</span><span><strong>Apache 2.0</strong>licensed</span></div>
+                <div class="window">
+                    <div class="window-bar"><i></i><i></i><i></i><span>Jelibox — workspace</span></div>
+                    <img src="assets/visualize.png" alt="Jelibox annotation workspace with the class panel, image canvas, and information panel" width="1536" height="864">
                 </div>
             </div>
         </section>
 
-        <section class="final-cta shell"><h2>Build datasets with a little more control.</h2><a class="button button-primary" href="https://github.com/BoxifyAnnotationTools/Boxify" target="_blank" rel="noopener noreferrer">Open Boxify on GitHub <span>↗</span></a></section>
+        <div class="shell strip">
+            <div class="strip-item"><strong>Detect</strong><span>Bounding boxes with direct manipulation</span></div>
+            <div class="strip-item"><strong>Segment</strong><span>Polygon tools for precise masks</span></div>
+            <div class="strip-item"><strong>Auto-label</strong><span>YOLO-World or your own trained model</span></div>
+            <div class="strip-item"><strong>Export</strong><span>YOLO, COCO, or Pascal VOC</span></div>
+        </div>
+
+        <section class="section shell" id="features">
+            <div class="section-head"><span class="eyebrow">Features</span><h2>Less friction between image and insight.</h2><p class="section-lead">Everything you need to annotate, inspect, train, and export without sending your dataset through a cloud service.</p></div>
+            <div class="feature-grid">
+                <article class="feature wide"><span class="feature-tag">Label Assistant</span><h3>Describe it, and Jelibox finds it</h3><p>Pick YOLO-World to detect objects from plain-text prompts, no training needed, and map each prompt to your own classes (for example “white horse” and “black horse” both become <b>horse</b>). Or switch to the model you trained in the workspace. Predictions merge with your existing boxes and skip anything that overlaps.</p></article>
+                <article class="feature"><span class="feature-tag">Privacy</span><h3>Local by design</h3><p>Your images, labels, and models stay on the machine you control.</p></article>
+                <article class="feature"><span class="feature-tag">Precision</span><h3>Box + polygon tools</h3><p>Edit coordinates directly with handles, zoom, visibility controls, and class management.</p></article>
+                <article class="feature"><span class="feature-tag">Pipeline</span><h3>Train in context</h3><p>Go from annotations to Ultralytics training without leaving your workspace, and without duplicating your source images.</p></article>
+                <article class="feature"><span class="feature-tag">Output</span><h3>Flexible exports</h3><p>Prepare datasets in YOLO, COCO, or Pascal VOC formats for downstream tooling.</p></article>
+                <article class="feature"><span class="feature-tag">Comfort</span><h3>Light and dark themes</h3><p>A calm cream interface that is easy on the eyes, with a dark mode when you need it.</p></article>
+                <article class="feature"><span class="feature-tag">Access</span><h3>Open and practical</h3><p>Run the tool on Linux or Windows with installation scripts included in the repo.</p></article>
+            </div>
+        </section>
+
+        <section class="section shell" id="workflow">
+            <div class="section-head"><span class="eyebrow">Workflow</span><h2>A loop that gets faster every round.</h2><p class="section-lead">Label a few images by hand, let a model help with the rest, and keep correcting. Each pass makes the next one quicker.</p></div>
+            <div class="loop">
+                <div class="step"><h3>Annotate</h3><p>Draw boxes or polygons on a handful of images with keyboard-first controls.</p></div>
+                <div class="step"><h3>Assist</h3><p>Press <b>G</b> to let YOLO-World or your trained model label the current image.</p></div>
+                <div class="step"><h3>Train</h3><p>Train an Ultralytics model on your labels right from the workspace.</p></div>
+                <div class="step"><h3>Export</h3><p>Ship the dataset or the model in the format your pipeline expects.</p></div>
+            </div>
+        </section>
+
+        <section class="section shell" id="install">
+            <div class="section-head"><span class="eyebrow">Start locally</span><h2>Install once. Keep working.</h2></div>
+            <div class="install-grid">
+                <div class="install-card">
+                    <h3>Linux</h3>
+                    <ol>
+                        <li>Install git (if you haven't installed git)
+                            <pre>sudo apt install git</pre>
+                        </li>
+                        <li>Clone this repository
+                            <pre>git clone https://github.com/Jelibox/Jelibox-client.git</pre>
+                        </li>
+                        <li>Add access to linux installation script
+                            <pre>chmod +x jelibox_linux_installation.bash</pre>
+                        </li>
+                        <li>Run Jelibox installation script
+                            <pre>./jelibox_linux_installation.bash</pre>
+                        </li>
+                    </ol>
+                    <p>The installer asks for your <code>sudo</code> password at the beginning, installs Python with Tkinter and venv support, creates the <code>jelibox/</code> virtual environment, installs dependencies, and creates a desktop launcher.</p>
+                </div>
+                <div class="install-card">
+                    <h3>Windows</h3>
+                    <ol>
+                        <li>Open <code>VC_redist/</code> and install the package matching your system architecture.</li>
+                        <li>Right-click <code>jelibox_windows_installation.bat</code> and choose <strong>Run as administrator</strong>.</li>
+                        <li>Follow the installer prompts.</li>
+                        <li>Open the generated <code>Jelibox.lnk</code> shortcut.</li>
+                    </ol>
+                    <p>The Windows installer checks for an NVIDIA GPU through <code>nvidia-smi</code> and uses Windows device information as a fallback. GPU detection does not guarantee that the installed PyTorch package has CUDA enabled.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="shell final-cta">
+            <h2>Build datasets with a little more control.</h2>
+            <a class="button" href="https://github.com/Jelibox/Jelibox-client" target="_blank" rel="noopener noreferrer">Open Jelibox on GitHub ↗</a>
+        </section>
     </main>
-    <footer><div class="shell"><span>© 2026 Boxify Annotation Tools</span><span>Built for computer vision &amp; AI</span></div></footer>
+
+    <footer><div class="shell"><span>© 2026 Jelibox</span><span>Built for computer vision &amp; AI</span></div></footer>
 </body>
 </html>

@@ -1,5 +1,5 @@
 """
-Utility modules for the Boxify annotation tool.
+Utility modules for the Jelibox annotation tool.
 
 Submodules are imported explicitly where needed (e.g. `from .config import
 CLASSLIST`) instead of being re-exported here. Most of them depend on

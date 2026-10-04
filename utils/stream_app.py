@@ -1,5 +1,5 @@
 """
-stream_app.py  —  BOXIFY · Model Demo
+stream_app.py  —  Jelibox · Model Demo
 Live inference viewer powered by Streamlit + Ultralytics.
 
 Usage (launched automatically by AnnotationGUI):
@@ -25,51 +25,70 @@ except ImportError:
 #  Page config  (must be first Streamlit call)
 # ──────────────────────────────────────────────
 st.set_page_config(
-    page_title="Model Demo · BOXIFY",
+    page_title="Model Demo · Jelibox",
     page_icon="🎥",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 # ──────────────────────────────────────────────
-#  Inject CSS  — Cyber Terminal theme
+#  Theme + CSS  (palette shared with the desktop app via utils/theme.py)
 # ──────────────────────────────────────────────
-st.markdown("""
+import base64
+
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, _ROOT)
+from utils import theme as T  # noqa: E402
+
+try:
+    with open(os.path.join(_ROOT, "assets", "jelibox.png"), "rb") as _f:
+        _LOGO = "data:image/png;base64," + base64.b64encode(_f.read()).decode()
+except OSError:
+    _LOGO = ""
+
+_CSS = """
 <style>
+:root { --bg:@BASE@; --panel:@PANEL@; --card:@CARD@; --card2:@CARD2@; --line:@BORDER@; --accent:@ACCENT@;
+        --on-accent:@ON_ACCENT@; --txt1:@TXT1@; --txt2:@TXT2@; --txt3:@TXT3@; --green:@GREEN@; }
 /* ── base ── */
-html, body, [data-testid="stAppViewContainer"] { background: #0a0e1a !important; color: #e8f0fe; font-family: 'Segoe UI', sans-serif; }
+html, body, [data-testid="stAppViewContainer"] { background: var(--bg) !important; color: var(--txt1); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; }
 [data-testid="stHeader"] { background: transparent !important; }
 [data-testid="stToolbar"] { display: none; }
-[data-testid="stSidebar"] { background: #0f1525 !important; }
+[data-testid="stSidebar"] { background: var(--panel) !important; }
 /* ── header bar ── */
-.bx-header { background: linear-gradient(90deg, #0f1525 0%, #151d2e 100%); border-bottom: 2px solid #00d4ff; padding: 18px 32px 14px 32px; margin: -1rem -1rem 0 -1rem; display: flex; align-items: center; gap: 16px; }
-.bx-title { font-size: 1.7rem; font-weight: 800; letter-spacing: .08em; background: linear-gradient(90deg, #00d4ff, #2979ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; line-height: 1; }
-.bx-subtitle { font-size: .75rem; color: #8899aa; letter-spacing: .12em; text-transform: uppercase; margin-top: 4px; }
-.bx-icon { font-size: 2.2rem; line-height: 1; }
+.bx-header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 14px 32px; margin: -1rem -1rem 0 -1rem; display: flex; align-items: center; gap: 14px; }
+.bx-logo { width: 38px; height: 38px; border-radius: 10px; }
+.bx-title { font-size: 1.25rem; font-weight: 800; letter-spacing: -.02em; color: var(--txt1); line-height: 1.1; }
+.bx-subtitle { font-size: .72rem; color: var(--txt2); letter-spacing: .08em; text-transform: uppercase; margin-top: 3px; }
 /* ── status badge ── */
-.bx-badge { display: inline-block; padding: 3px 14px; border-radius: 999px; font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-.bx-badge-live   { background: #00e67622; color: #00e676; border: 1px solid #00e676; }
-.bx-badge-idle   { background: #3d516622; color: #8899aa; border: 1px solid #3d5166; }
-.bx-badge-model  { background: #2979ff22; color: #2979ff; border: 1px solid #2979ff; }
+.bx-badge { display: inline-block; padding: 3px 14px; border-radius: 999px; font-size: .72rem; font-weight: 700; letter-spacing: .04em; }
+.bx-badge-live   { background: var(--card); color: var(--green); border: 1px solid var(--green); }
+.bx-badge-idle   { background: var(--card); color: var(--txt2); border: 1px solid var(--line); }
+.bx-badge-model  { background: var(--card2); color: var(--txt1); border: 1px solid var(--line); }
 /* ── stat cards ── */
 .bx-stats { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
-.bx-stat { background: #151d2e; border: 1px solid #1e2d47; border-radius: 8px; padding: 10px 20px; text-align: center; min-width: 100px; }
-.bx-stat-val { font-size: 1.4rem; font-weight: 800; color: #00d4ff; }
-.bx-stat-lbl { font-size: .68rem; color: #8899aa; text-transform: uppercase; letter-spacing: .08em; }
+.bx-stat { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px 20px; text-align: center; min-width: 100px; }
+.bx-stat-val { font-size: 1.4rem; font-weight: 800; color: var(--accent); }
+.bx-stat-lbl { font-size: .68rem; color: var(--txt2); text-transform: uppercase; letter-spacing: .08em; }
 /* ── uploader card ── */
-.bx-upload-card { background: #0f1525; border: 1px solid #1e2d47; border-radius: 10px; padding: 18px 20px 14px 20px; margin-bottom: 16px; }
-.bx-upload-label { font-size: .78rem; font-weight: 700; color: #8899aa; text-transform: uppercase; letter-spacing: .1em; margin-bottom: 6px; }
+.bx-upload-card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 14px 20px; margin-bottom: 16px; }
+.bx-upload-label { font-size: .78rem; font-weight: 700; color: var(--txt2); text-transform: uppercase; letter-spacing: .1em; margin-bottom: 6px; }
 /* ── Streamlit widget overrides ── */
-section[data-testid="stFileUploadDropzone"] { background: #1a2540 !important; border: 1px dashed #1e2d47 !important; border-radius: 8px !important; color: #8899aa !important; }
-.stButton > button { background: #151d2e !important; color: #00d4ff !important; border: 1px solid #2979ff !important; border-radius: 6px !important; font-weight: 700 !important; letter-spacing: .05em !important; }
-.stButton > button:hover { background: #1a2d50 !important; border-color: #00d4ff !important; }
+section[data-testid="stFileUploadDropzone"] { background: var(--card) !important; border: 1px dashed var(--line) !important; border-radius: 12px !important; color: var(--txt2) !important; }
+.stButton > button { background: var(--card2) !important; color: var(--txt1) !important; border: 1px solid var(--line) !important; border-radius: 999px !important; font-weight: 700 !important; }
+.stButton > button:hover:not(:disabled) { background: var(--accent) !important; color: var(--on-accent) !important; border-color: var(--accent) !important; }
 /* ── frame display ── */
-.bx-frame-container { background: #0a0e1a; border: 1px solid #1e2d47; border-radius: 10px; overflow: hidden; }
-.bx-no-video { background: #0f1525; border: 2px dashed #1e2d47; border-radius: 10px; height: 420px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #3d5166; font-size: 1rem; gap: 12px; }
+.bx-frame-container { background: var(--bg); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.bx-no-video { background: var(--panel); border: 2px dashed var(--line); border-radius: 16px; height: 420px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--txt3); font-size: 1rem; gap: 12px; }
 .bx-no-video-icon { font-size: 3.5rem; }
-hr { border-color: #1e2d47 !important; }
+hr { border-color: var(--line) !important; }
 </style>
-""", unsafe_allow_html=True)
+"""
+for _k, _v in dict(BASE=T.C_BASE, PANEL=T.C_PANEL, CARD=T.C_CARD, CARD2=T.C_CARD2, BORDER=T.C_BORDER,
+                   ACCENT=T.C_ACCENT, ON_ACCENT=T.C_ON_ACCENT, TXT1=T.C_TXT1, TXT2=T.C_TXT2,
+                   TXT3=T.C_TXT3, GREEN=T.C_GREEN).items():
+    _CSS = _CSS.replace(f"@{_k}@", _v)
+st.markdown(_CSS, unsafe_allow_html=True)
 
 
 # ──────────────────────────────────────────────
@@ -110,10 +129,10 @@ model_name = os.path.basename(_model_path) if _model_path else "—"
 
 st.markdown(f"""
 <div class="bx-header">
-    <div class="bx-icon">🎥</div>
+    <img class="bx-logo" src="{_LOGO}" alt="Jelibox">
     <div>
-        <div class="bx-title">Model Demo</div>
-        <div class="bx-subtitle">BOXIFY · Live Detection Stream</div>
+        <div class="bx-title">Jelibox · Model Demo</div>
+        <div class="bx-subtitle">Live Detection Stream</div>
     </div>
     <div style="margin-left:auto; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
         <span class="bx-badge bx-badge-model">⚡ {model_name}</span>
@@ -125,7 +144,7 @@ st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
 
 if not _model_path or not os.path.exists(_model_path):
-    st.error(f"⚠️  Model not found: `{_model_path or 'none'}`\n\nMake sure you launch this app from the BOXIFY **🎥 Stream** button.")
+    st.error(f"⚠️  Model not found: `{_model_path or 'none'}`\n\nMake sure you launch this app from the Jelibox **🎥 Stream** button.")
     st.stop()
 
 
@@ -303,9 +322,9 @@ with feed_col:
                     for lbl in labels:
                         counts[lbl] = counts.get(lbl, 0) + 1
                     summary = "  ·  ".join(f"**{v}× {k}**" for k, v in counts.items())
-                    info_placeholder.markdown(f"<div style='font-size:.82rem; color:#8899aa; margin-top:4px'>🔍 {summary}</div>", unsafe_allow_html=True)
+                    info_placeholder.markdown(f"<div style='font-size:.82rem; color:var(--txt2); margin-top:4px'>🔍 {summary}</div>", unsafe_allow_html=True)
                 else:
-                    info_placeholder.markdown("<div style='font-size:.82rem; color:#3d5166; margin-top:4px'>🔍 No detections</div>", unsafe_allow_html=True)
+                    info_placeholder.markdown("<div style='font-size:.82rem; color:var(--txt3); margin-top:4px'>🔍 No detections</div>", unsafe_allow_html=True)
 
                 time.sleep(0.01)
 

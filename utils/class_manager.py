@@ -8,11 +8,13 @@ import xml.etree.ElementTree as ET
 from typing import List, Tuple, Dict
 import colorsys
 
+from . import workspace_config
+
 class ClassManager:
     def __init__(self, workspace_name: str):
         self.workspace_name = workspace_name
         self.config_dir = "configs"
-        self.class_file = os.path.join(self.config_dir, f"{workspace_name}.txt")
+        self.class_file = workspace_config.config_path(workspace_name)
         self.yolo_dataset_root = f"YOLOdataset/{workspace_name}"
         self.labels_folder = os.path.join(self.yolo_dataset_root, "labels")
         self.data_yaml_path = os.path.join(self.yolo_dataset_root, "data.yaml")
@@ -23,6 +25,7 @@ class ClassManager:
         os.makedirs(self.voc_dataset, exist_ok=True)
         
         self.classes: List[str] = []
+        self.removed_targets: List[str] = []  # YOLO-World targets dropped by the last save
         self.colors: List[Tuple[int, int, int]] = []
         
         # Load or initialize classes
@@ -31,9 +34,9 @@ class ClassManager:
     
     def _load_classes(self):
         """Load classes from config or rebuild the config from VOC XML files."""
-        if os.path.exists(self.class_file):
-            with open(self.class_file, 'r', encoding='utf-8') as f:
-                self.classes = [line.strip() for line in f if line.strip()]
+        existing = workspace_config.get_classes(self.workspace_name)
+        if existing is not None:
+            self.classes = existing
             print(f"[ClassManager] Loaded {len(self.classes)} classes from {self.class_file}")
         else:
             self.classes = self._scan_classes_from_xml()
@@ -74,19 +77,27 @@ class ClassManager:
     
     def _save_classes(self):
         """Save classes to file"""
-        with open(self.class_file, 'w', encoding='utf-8') as f:
-            for cls in self.classes:
-                f.write(f"{cls}\n")
+        self.removed_targets = workspace_config.set_classes(self.workspace_name, self.classes)
         print(f"[ClassManager] Saved {len(self.classes)} classes to {self.class_file}")
     
+    # Calm, distinguishable class colors (RGB) - used for the first classes;
+    # beyond these, colors are generated.
+    CLASS_PALETTE = ["#E5566D", "#E0A030", "#3FB8A0", "#4A9FE0",
+                     "#8B7BE8", "#E8804A", "#7BB661", "#D9709F"]
+
     def _generate_colors(self):
-        """Generate strong, non-white, high-contrast colors for each class"""
+        """Class colors: the fixed calm palette first, generated colors after."""
         self.colors = []
         random.seed(42)
 
         n = len(self.classes)
 
-        for i in range(n):
+        for i in range(min(n, len(self.CLASS_PALETTE))):
+            h = self.CLASS_PALETTE[i].lstrip('#')
+            r, g, b = (int(h[k:k + 2], 16) for k in (0, 2, 4))
+            self.colors.append((b, g, r))   # BGR for OpenCV
+
+        for i in range(len(self.CLASS_PALETTE), n):
             # Hue terdistribusi merata (golden angle)
             h = (i * 0.61803398875) % 1.0  
 
@@ -167,7 +178,10 @@ class ClassManager:
         # Update data.yaml
         self._update_data_yaml()
         
-        return True, f"Class '{class_name}' deleted. Updated {yolo_updated} YOLO labels and {xml_updated} XML files updated"
+        message = f"Class '{class_name}' deleted. Updated {yolo_updated} YOLO labels and {xml_updated} XML files updated"
+        if self.removed_targets:
+            message += f". Removed {len(self.removed_targets)} YOLO-World target class(es): {', '.join(self.removed_targets)}"
+        return True, message
     
     def _update_yolo_label_files(self, deleted_index: int, index_mapping: Dict[int, int]) -> int:
         """

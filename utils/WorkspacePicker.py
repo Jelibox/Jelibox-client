@@ -1,5 +1,5 @@
 """
-Workspace Picker - VS Code-style "no folder opened" screen for Boxify.
+Workspace Picker - VS Code-style "no folder opened" screen for Jelibox.
 
 Lists the workspaces found in datasetsInput (folders grouped by name, e.g.
 weapon-1 / weapon-2 -> "weapon"). Picking a workspace expands it to show its
@@ -18,7 +18,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 from .theme import (C_BASE, C_PANEL, C_CARD, C_CARD2, C_BORDER, C_ACCENT,
-                    C_GREEN, C_RED, C_AMBER, C_TXT1, C_TXT2, C_TXT3)
+                    C_GREEN, C_RED, C_AMBER, C_TXT1, C_TXT2, C_TXT3,
+                    C_ON_ACCENT, C_ON_RED, MODE, toggle_mode)
 from .workspace_manager import (list_workspaces, instance_path, count_images, DATASETS_ROOT,
                                 count_images_in_folder, sanitize_workspace_name, parse_classes_input,
                                 existing_classes_for_workspace, create_workspace_instance,
@@ -37,7 +38,7 @@ class WorkspacePickerApp:
         self.expanded = set()
         self.workspaces = {}
 
-        self.root.title("BOXIFY — Workspaces")
+        self.root.title("Jelibox — Workspaces")
         self.root.geometry("1100x680")
         self.root.minsize(820, 520)
         self.root.configure(bg=C_BASE)
@@ -60,7 +61,7 @@ class WorkspacePickerApp:
 
         try:
             from PIL import Image, ImageTk
-            logo_img = Image.open("assets/boxify.png").resize((32, 32))
+            logo_img = Image.open("assets/jelibox.png").resize((32, 32))
             self.logo = ImageTk.PhotoImage(logo_img)
             tk.Label(brand, image=self.logo, bg=C_PANEL).pack(side=tk.LEFT, pady=10)
         except Exception:
@@ -68,8 +69,8 @@ class WorkspacePickerApp:
 
         name_stack = tk.Frame(brand, bg=C_PANEL)
         name_stack.pack(side=tk.LEFT, padx=(5, 0))
-        tk.Label(name_stack, text="BOXIFY", bg=C_PANEL, fg=C_TXT1,
-                 font=('Segoe UI', 11, 'bold')).pack(anchor='w')
+        tk.Label(name_stack, text="Jelibox", bg=C_PANEL, fg=C_TXT1,
+                 font=('Segoe UI', 12, 'bold')).pack(anchor='w')
         tk.Label(name_stack, text="WORKSPACES", bg=C_PANEL, fg=C_TXT3,
                  font=('Segoe UI', 6, 'bold')).pack(anchor='w')
 
@@ -79,12 +80,23 @@ class WorkspacePickerApp:
                   C_CARD2, C_TXT1).pack(side=tk.LEFT, padx=(0, 6), pady=12, ipady=5, ipadx=10)
 
         self._btn(header, "+  Add Workspace", lambda: self._open_add_workspace_dialog(),
-                  '#0e2218', C_GREEN, bold=True).pack(side=tk.LEFT, padx=(0, 6), pady=12, ipady=5, ipadx=10)
+                  C_ACCENT, C_ON_ACCENT, bold=True).pack(side=tk.LEFT, padx=(0, 6), pady=12, ipady=5, ipadx=10)
 
         self._btn(header, "⬇  Import Dataset", self._open_import_dataset_dialog,
-                  '#103244', C_ACCENT, bold=True).pack(side=tk.LEFT, pady=12, ipady=5, ipadx=10)
+                  C_CARD2, C_TXT1, bold=True).pack(side=tk.LEFT, pady=12, ipady=5, ipadx=10)
 
-        tk.Frame(self.root, bg=C_ACCENT, height=2).pack(fill=tk.X)
+        self.theme_btn = self._btn(
+            header, "◐  Dark" if MODE == "light" else "◐  Light", self._toggle_theme,
+            C_CARD2, C_TXT1, font_size=8, bold=True)
+        self.theme_btn.pack(side=tk.RIGHT, padx=14, pady=12, ipady=5, ipadx=10)
+
+        tk.Frame(self.root, bg=C_BORDER, height=1).pack(fill=tk.X)
+
+    def _toggle_theme(self):
+        new = toggle_mode()
+        messagebox.showinfo(
+            "Theme", f"{new.capitalize()} theme saved.\n\nIt applies the next time you open Jelibox.",
+            parent=self.root)
 
     def _btn(self, parent, text, command, bg, fg, font_size=9, bold=False):
         weight = 'bold' if bold else 'normal'
@@ -176,15 +188,15 @@ class WorkspacePickerApp:
 
         try:
             from PIL import Image, ImageTk
-            logo_img = Image.open("assets/boxify.png").resize((112, 112))
+            logo_img = Image.open("assets/jelibox.png").resize((112, 112))
             self.welcome_logo = ImageTk.PhotoImage(logo_img)
             tk.Label(center, image=self.welcome_logo, bg=C_BASE).pack(pady=(0, 18))
         except Exception:
             pass
 
-        tk.Label(center, text="BOXIFY", bg=C_BASE, fg=C_TXT1,
-                 font=('Segoe UI', 28, 'bold')).pack()
-        tk.Label(center, text="Local Annotation Tools", bg=C_BASE, fg=C_TXT2,
+        tk.Label(center, text="Jelibox", bg=C_BASE, fg=C_TXT1,
+                 font=('Segoe UI', 30, 'bold')).pack()
+        tk.Label(center, text="Soft to use. Sharp on every object.", bg=C_BASE, fg=C_TXT2,
                  font=('Segoe UI', 12)).pack(pady=(4, 24))
         tk.Label(center, text="Select a workspace on the left, then pick a dataset\n"
                               "to start annotating.",
@@ -276,13 +288,13 @@ class WorkspacePickerApp:
             del_btn.config(bg=C_PANEL)
 
         def add_btn_enter(event=None):
-            add_btn.config(bg=C_GREEN, fg='#000000')
+            add_btn.config(bg=C_ACCENT, fg=C_ON_ACCENT)
 
         def add_btn_leave(event=None):
             add_btn.config(bg=C_CARD2, fg=C_TXT3)
 
         def del_btn_enter(event=None):
-            del_btn.config(bg=C_RED, fg='#ffffff')
+            del_btn.config(bg=C_RED, fg=C_ON_RED)
 
         def del_btn_leave(event=None):
             del_btn.config(bg=C_CARD2, fg=C_TXT3)
@@ -344,7 +356,7 @@ class WorkspacePickerApp:
             self._confirm_delete_instance(n)
 
         def del_btn_enter(event=None):
-            del_btn.config(bg=C_RED, fg='#ffffff')
+            del_btn.config(bg=C_RED, fg=C_ON_RED)
 
         def del_btn_leave(event=None):
             del_btn.config(bg=C_CARD, fg=C_TXT3)
@@ -388,8 +400,8 @@ class WorkspacePickerApp:
     def on_close(self):
         if self.process is not None and self.process.poll() is None:
             if not messagebox.askyesno(
-                "Close Boxify",
-                "An annotation window is still open. Close Boxify anyway?",
+                "Close Jelibox",
+                "An annotation window is still open. Close Jelibox anyway?",
                 parent=self.root
             ):
                 return
@@ -422,7 +434,7 @@ class WorkspacePickerApp:
                       else f"➕  Add Instance to “{existing_workspace}”")
         dialog.title("Add Workspace" if existing_workspace is None else f"Add Instance — {existing_workspace}")
         tk.Label(hdr, text=title_text, font=('Segoe UI', 12, 'bold'),
-                 bg=C_ACCENT, fg='#000000').pack(side=tk.LEFT, padx=16, pady=10)
+                 bg=C_ACCENT, fg=C_ON_ACCENT).pack(side=tk.LEFT, padx=16, pady=10)
 
         form = tk.Frame(dialog, bg=C_BASE, padx=24, pady=18)
         form.pack(fill=tk.BOTH, expand=True)
@@ -678,7 +690,7 @@ class WorkspacePickerApp:
                 parent=self.root
             )
 
-        self._btn(btn_row, create_label, on_create, '#0e2218', C_GREEN,
+        self._btn(btn_row, create_label, on_create, C_ACCENT, C_ON_ACCENT,
                   font_size=10, bold=True).pack(side=tk.RIGHT, ipady=8, ipadx=16)
 
         dialog.bind('<Escape>', lambda e: dialog.destroy())
@@ -779,7 +791,7 @@ class WorkspacePickerApp:
         hdr.pack(fill=tk.X)
         hdr.pack_propagate(False)
         tk.Label(hdr, text=f"⚠  Delete Workspace “{workspace_name}”",
-                 font=('Segoe UI', 12, 'bold'), bg=C_RED, fg='#ffffff'
+                 font=('Segoe UI', 12, 'bold'), bg=C_RED, fg=C_ON_RED
                  ).pack(side=tk.LEFT, padx=16, pady=10)
 
         body = tk.Frame(dialog, bg=C_BASE, padx=24, pady=18)
@@ -831,8 +843,8 @@ class WorkspacePickerApp:
 
         def on_confirm_change(*_):
             if confirm_var.get() == workspace_name:
-                delete_btn.config(state=tk.NORMAL, bg=C_RED, fg='#ffffff',
-                                  activebackground=C_RED, activeforeground='#ffffff',
+                delete_btn.config(state=tk.NORMAL, bg=C_RED, fg=C_ON_RED,
+                                  activebackground=C_RED, activeforeground=C_ON_RED,
                                   cursor='hand2')
             else:
                 delete_btn.config(state=tk.DISABLED, bg=C_CARD2, fg=C_TXT3,
@@ -886,7 +898,7 @@ class WorkspacePickerApp:
         hdr.pack(fill=tk.X)
         hdr.pack_propagate(False)
         tk.Label(hdr, text="⬇  Import Dataset", font=('Segoe UI', 12, 'bold'),
-                 bg=C_ACCENT, fg='#000000').pack(side=tk.LEFT, padx=16, pady=10)
+                 bg=C_ACCENT, fg=C_ON_ACCENT).pack(side=tk.LEFT, padx=16, pady=10)
 
         form = tk.Frame(dialog, bg=C_BASE, padx=24, pady=18)
         form.pack(fill=tk.BOTH, expand=True)
@@ -1116,7 +1128,7 @@ class WorkspacePickerApp:
                 parent=self.root
             )
 
-        self._btn(btn_row, "⬇  Import Dataset", on_import, '#0e2218', C_GREEN,
+        self._btn(btn_row, "⬇  Import Dataset", on_import, C_ACCENT, C_ON_ACCENT,
                   font_size=10, bold=True).pack(side=tk.RIGHT, ipady=8, ipadx=16)
 
         dialog.bind('<Escape>', lambda e: dialog.destroy())

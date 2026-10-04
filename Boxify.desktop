@@ -1,8 +1,0 @@
-[Desktop Entry]
-Name=Boxify
-Exec=bash -c "source /home/ai-server/Boxify/boxify/bin/activate && python -u /home/ai-server/Boxify/utils/Annotator.py; exec bash"
-Icon=/home/ai-server/Boxify/assets/boxify.png
-Type=Application
-Path=/home/ai-server/Boxify
-Terminal=true
-Categories=Development;

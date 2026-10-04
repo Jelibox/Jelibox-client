@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Jelibox
+Exec=bash -c "source /home/ai-server/Boxify/jelibox/bin/activate && python -u /home/ai-server/Boxify/utils/Annotator.py; exec bash"
+Icon=/home/ai-server/Boxify/assets/jelibox.png
+Type=Application
+Path=/home/ai-server/Boxify
+Terminal=true
+Categories=Development;

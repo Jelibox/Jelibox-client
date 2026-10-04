@@ -2,11 +2,11 @@
 set -Eeuo pipefail
 
 # ==========================================
-#    Boxify Universal Installer
+#    Jelibox Universal Installer
 # ==========================================
 
 echo "=========================================="
-echo "  Welcome to Boxify, Local annotation tool"
+echo "  Welcome to Jelibox, Local annotation tool"
 echo "        Thanks for choosing us"
 echo "=========================================="
 echo "System is preparing your environment..."
@@ -37,7 +37,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 APP_PATH="$SCRIPT_DIR"
 PYTHON_VERSION_PREFIX="3.12"
 PYTHON_BIN="python3.12"
-VENV_DIR="$APP_PATH/boxify"
+VENV_DIR="$APP_PATH/jelibox"
 
 # ──────────────────────────────────────────
 # DEBIAN / UBUNTU / MINT
@@ -93,7 +93,7 @@ echo "[OK] Python $PYTHON_ACTUAL_VERSION detected."
 
 # Cek apakah versi python depannya "3.12"
 if [[ "$PYTHON_ACTUAL_VERSION" != ${PYTHON_VERSION_PREFIX}.* ]]; then
-    echo "[ERROR] Boxify requires Python $PYTHON_VERSION_PREFIX.x exactly."
+    echo "[ERROR] Jelibox requires Python $PYTHON_VERSION_PREFIX.x exactly."
     echo "[ERROR] The detected interpreter is $PYTHON_ACTUAL_VERSION."
     exit 1
 fi
@@ -148,11 +148,16 @@ fi
 echo "[*] Installing application dependencies..."
 pip install ultralytics pyinstaller
 
+# CLIP powers the YOLO-World Label Assistant. Installed from a zip archive so
+# git is not required. Non-fatal: without it only YOLO-World is unavailable.
+echo "[*] Installing CLIP (required by YOLO-World)..."
+pip install ftfy regex tqdm https://github.com/ultralytics/CLIP/archive/refs/heads/main.zip ||     echo "[WARNING] CLIP installation failed. YOLO-World Label Assistant will be unavailable."
+
 # ──────────────────────────────────────────
 # CREATE DESKTOP ENTRY
 # ──────────────────────────────────────────
-LAUNCHER_PATH="$APP_PATH/Boxify-launcher.sh"
-DESKTOP_FILE="$APP_PATH/Boxify.desktop"
+LAUNCHER_PATH="$APP_PATH/Jelibox-launcher.sh"
+DESKTOP_FILE="$APP_PATH/Jelibox.desktop"
 
 cat <<EOF > "$LAUNCHER_PATH"
 #!/bin/bash
@@ -165,10 +170,10 @@ chmod +x "$LAUNCHER_PATH"
 
 cat <<EOF > "$DESKTOP_FILE"
 [Desktop Entry]
-Name=Boxify
-Comment=Annotate dataset with Boxify
+Name=Jelibox
+Comment=Annotate dataset with Jelibox
 Exec=$LAUNCHER_PATH
-Icon=$APP_PATH/assets/boxify.png
+Icon=$APP_PATH/assets/jelibox.png
 Type=Application
 Path=$APP_PATH
 Terminal=true
@@ -179,21 +184,21 @@ chmod +x "$DESKTOP_FILE"
 
 USER_APP_DIR="$HOME/.local/share/applications"
 mkdir -p "$USER_APP_DIR"
-cp "$DESKTOP_FILE" "$USER_APP_DIR/Boxify.desktop"
+cp "$DESKTOP_FILE" "$USER_APP_DIR/Jelibox.desktop"
 
 if command -v update-desktop-database &> /dev/null; then
     update-desktop-database "$USER_APP_DIR" 2>/dev/null || true
 fi
-echo "[OK] Boxify added to your Application Menu (App Drawer)."
+echo "[OK] Jelibox added to your Application Menu (App Drawer)."
 
 DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
 if [[ -n "$DESKTOP_DIR" && -d "$DESKTOP_DIR" ]]; then
-    cp "$DESKTOP_FILE" "$DESKTOP_DIR/Boxify.desktop"
-    chmod +x "$DESKTOP_DIR/Boxify.desktop"
+    cp "$DESKTOP_FILE" "$DESKTOP_DIR/Jelibox.desktop"
+    chmod +x "$DESKTOP_DIR/Jelibox.desktop"
     if command -v gio &> /dev/null; then
-        gio set "$DESKTOP_DIR/Boxify.desktop" metadata::trusted true 2>/dev/null || true
+        gio set "$DESKTOP_DIR/Jelibox.desktop" metadata::trusted true 2>/dev/null || true
     fi
-    echo "[OK] Desktop shortcut created at $DESKTOP_DIR/Boxify.desktop"
+    echo "[OK] Desktop shortcut created at $DESKTOP_DIR/Jelibox.desktop"
 fi
 
 # ──────────────────────────────────────────
@@ -203,6 +208,6 @@ echo ""
 echo "=========================================="
 echo "      INSTALLATION COMPLETED!"
 echo "=========================================="
-echo "You can now run Boxify from your Application Menu"
+echo "You can now run Jelibox from your Application Menu"
 echo "or via the Desktop shortcut!"
 echo "=========================================="

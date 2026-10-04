@@ -12,7 +12,7 @@ def prettify_xml(elem):
     return minidom.parseString(ET.tostring(elem)).toprettyxml(indent="   ")
 
 def build_voc_xml(img_name, img_shape, bboxes, polygons):
-    """Build a Pascal VOC <annotation> element (Boxify's schema: bbox/polygon
+    """Build a Pascal VOC <annotation> element (Jelibox's schema: bbox/polygon
     objects, each with a <type>) from bboxes/polygons in ORIGINAL image
     coordinates. Pure - no config/state dependency, so it's reusable by the
     dataset importer as well as save_pascal_voc."""

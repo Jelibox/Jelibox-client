@@ -1,6 +1,9 @@
 boxify/*
 !boxify/.gitignore
 
+jelibox/*
+!jelibox/.gitignore
+
 venv/*
 !venv/.gitignore
 
@@ -30,3 +33,6 @@ vocdataset/*
 
 YOLOdataset/*
 !YOLOdataset/.gitignore
+
+__pycache__/
+*.pyc

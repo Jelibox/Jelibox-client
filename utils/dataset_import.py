@@ -1,5 +1,5 @@
 """
-Universal dataset importer for Boxify.
+Universal dataset importer for Jelibox.
 
 Rather than building a format-specific importer (e.g. "Import from
 Roboflow") that only understands one export layout, this scans an arbitrary
@@ -10,16 +10,16 @@ for images plus at most one annotation format:
   - YOLO         (.txt)
   - COCO         (.json)
 
-...and converts whatever it finds into Boxify's own native storage, the
+...and converts whatever it finds into Jelibox's own native storage, the
 same two representations every other part of the app already expects:
 
   datasetsInput/<workspace>-<N>/   the images (copied in)
   vocdataset/<workspace>/          VOC XML (source of truth for the editor)
   YOLOdataset/<workspace>/labels/  YOLO .txt (used for training/export)
-  configs/<workspace>.txt          class list (only written if the
+  configs/<workspace>.json         class list (only written if the
                                     workspace doesn't already have one)
 
-A folder that mixes more than one annotation format is rejected - Boxify
+A folder that mixes more than one annotation format is rejected - Jelibox
 has no way to know which one is authoritative for a given image.
 
 No tkinter/config imports here on purpose, same as workspace_manager - this
@@ -31,6 +31,7 @@ import json
 import shutil
 import xml.etree.ElementTree as ET
 
+from . import workspace_config
 from .workspace_manager import (
     DATASETS_ROOT, CONFIGS_ROOT, BASE_DIR, IMAGE_EXTENSIONS,
     next_instance_name, existing_classes_for_workspace,
@@ -204,7 +205,7 @@ def _image_size(path):
 
 
 # ============================================================
-#  VOC import - already Boxify's native annotation format, so this mostly
+#  VOC import - already Jelibox's native annotation format, so this mostly
 #  copies XML in (our loader already tolerates plain Pascal VOC bndboxes,
 #  our own <type> tag, and Roboflow-style <polygon><x1/><y1/>...), then
 #  backfills YOLO labels from it.
@@ -264,7 +265,7 @@ def _import_voc_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, pr
 
 # ============================================================
 #  YOLO import - normalized coords need image dimensions to convert back
-#  to the absolute-pixel VOC XML Boxify's editor expects.
+#  to the absolute-pixel VOC XML Jelibox's editor expects.
 # ============================================================
 
 def _import_yolo_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total):
@@ -462,7 +463,7 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None)
     """
     Import an external folder (any layout, searched recursively) as a new
     datasetsInput/<workspace>-<N> instance, converting whichever single
-    annotation format it contains (or none) into Boxify's native VOC XML +
+    annotation format it contains (or none) into Jelibox's native VOC XML +
     YOLO label storage.
 
     If `prefix` is given, every imported image (and its matching annotation
@@ -521,10 +522,7 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None)
             scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total)
 
     if class_order and existing_classes_for_workspace(workspace_name) is None:
-        os.makedirs(CONFIGS_ROOT, exist_ok=True)
-        with open(os.path.join(CONFIGS_ROOT, f"{workspace_name}.txt"), "w", encoding="utf-8") as f:
-            for cls in class_order:
-                f.write(cls + "\n")
+        workspace_config.set_classes(workspace_name, class_order)
 
     format_labels = {"voc": "Pascal VOC", "yolo": "YOLO", "coco": "COCO", None: None}
     return {

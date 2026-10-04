@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-title Boxify Installer
+title Jelibox Installer
 cd /d %~dp0
 
 :: =========================================================
@@ -17,6 +17,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 set FAILED=0
 set TORCH_STATUS=SUCCESS
+set CLIP_STATUS=SUCCESS
 set GPU_TYPE=CPU
 set ARCH=x64
 
@@ -26,7 +27,7 @@ set PYTHON_INSTALLER=%TEMP%\python_installer.exe
 
 cls
 echo ==========================================
-echo   Welcome to Boxify, Local annotation tool
+echo   Welcome to Jelibox, Local annotation tool
 echo         Thanks for choosing us
 echo ==========================================
 echo System is preparing your environment...
@@ -210,7 +211,7 @@ if errorlevel 1 (
 :: 6. INSTALL DEPENDENCIES
 :: =========================================================
 echo.
-echo [6/6] Installing Boxify dependencies...
+echo [6/6] Installing Jelibox dependencies...
 python -m pip install ultralytics pyinstaller streamlit yt-dlp --retries 5 --timeout 30
 
 if %ERRORLEVEL% NEQ 0 (
@@ -220,21 +221,32 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo [OK] Dependencies installed successfully.
 
+:: CLIP powers the YOLO-World Label Assistant. Installed from a zip archive so
+:: git is not required. Non-fatal: without it only YOLO-World is unavailable.
+echo [*] Installing CLIP (required by YOLO-World)...
+python -m pip install ftfy regex tqdm https://github.com/ultralytics/CLIP/archive/refs/heads/main.zip --retries 5 --timeout 60
+if %ERRORLEVEL% NEQ 0 (
+    echo [WARNING] CLIP installation failed. YOLO-World Label Assistant will be unavailable.
+    set CLIP_STATUS=FAILED
+) else (
+    echo [OK] CLIP installed successfully.
+)
+
 :: =========================================================
 :: CREATE SHORTCUTS
 :: =========================================================
 echo.
-echo [*] Creating Boxify shortcuts...
+echo [*] Creating Jelibox shortcuts...
 
-set "PS_SCRIPT=%TEMP%\boxify_shortcut.ps1"
+set "PS_SCRIPT=%TEMP%\jelibox_shortcut.ps1"
 
 > "%PS_SCRIPT%" echo $rootPath = Split-Path -Parent "%~f0"
 >> "%PS_SCRIPT%" echo $desktop = [Environment]::GetFolderPath('Desktop')
 >> "%PS_SCRIPT%" echo $pythonExe = Join-Path $rootPath 'venv\Scripts\python.exe'
 >> "%PS_SCRIPT%" echo $scriptPath = Join-Path $rootPath 'utils\Annotator.py'
->> "%PS_SCRIPT%" echo $iconPath = Join-Path $rootPath 'assets\boxify.ico'
->> "%PS_SCRIPT%" echo $rootShortcut = Join-Path $rootPath 'Boxify Launcher.lnk'
->> "%PS_SCRIPT%" echo $desktopShortcut = Join-Path $desktop 'Boxify.lnk'
+>> "%PS_SCRIPT%" echo $iconPath = Join-Path $rootPath 'assets\jelibox.ico'
+>> "%PS_SCRIPT%" echo $rootShortcut = Join-Path $rootPath 'Jelibox Launcher.lnk'
+>> "%PS_SCRIPT%" echo $desktopShortcut = Join-Path $desktop 'Jelibox.lnk'
 >> "%PS_SCRIPT%" echo $ws = New-Object -ComObject WScript.Shell
 
 >> "%PS_SCRIPT%" echo $sc1 = $ws.CreateShortcut($rootShortcut)
@@ -268,7 +280,7 @@ echo =========================================================
 if %FAILED% equ 1 (
     echo                    INSTALLATION FAILED
 ) else (
-    echo                     BOXIFY IS READY
+    echo                     JELIBOX IS READY
 )
 echo =========================================================
 
@@ -285,12 +297,17 @@ if "%TORCH_STATUS%"=="FAILED" (
     echo [WARNING] PyTorch installation failed.
 )
 
+if "%CLIP_STATUS%"=="FAILED" (
+    echo [WARNING] CLIP installation failed - YOLO-World Label Assistant is unavailable.
+    echo [WARNING] Retry with: venv\Scripts\python -m pip install ftfy regex tqdm https://github.com/ultralytics/CLIP/archive/refs/heads/main.zip
+)
+
 echo.
 echo Desktop shortcut created:
 echo.
-echo   Boxify.lnk
+echo   Jelibox.lnk
 echo.
-echo Thank you for using Boxify.
+echo Thank you for using Jelibox.
 echo =========================================================
 goto FINISH
 

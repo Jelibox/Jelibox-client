@@ -29,11 +29,19 @@ class TrainingConfigDialog:
             self._load_existing_model_info(model_path)
 
         # ── Theme colors ──────────────────────────────────────
-        self.bg_dark      = "#1e1e1e"
-        self.bg_secondary = "#2d2d2d"
-        self.fg_light     = "#e0e0e0"
-        self.accent_blue  = "#0d7377"
-        self.accent_green = "#14a76c"
+        from .theme import (C_BASE, C_CARD, C_TXT1, C_TXT2, C_TXT3, C_ACCENT, C_ON_ACCENT,
+                            C_BORDER, C_RED, C_ON_RED)
+        self.bg_dark      = C_BASE
+        self.bg_secondary = C_CARD
+        self.fg_light     = C_TXT1
+        self.fg_muted     = C_TXT2
+        self.fg_hint      = C_TXT3
+        self.accent_blue  = C_ACCENT
+        self.accent_green = C_ACCENT
+        self.on_accent    = C_ON_ACCENT
+        self.border       = C_BORDER
+        self.danger       = C_RED
+        self.on_danger    = C_ON_RED
 
         # ── Window ────────────────────────────────────────────
         self.dialog = tk.Toplevel(parent)
@@ -112,11 +120,11 @@ class TrainingConfigDialog:
             frame,
             text="⚙️  Training Configuration",
             font=("Segoe UI", 16, "bold"),
-            bg=self.accent_blue, fg="white"
+            bg=self.accent_blue, fg=self.on_accent
         ).pack(pady=15)
 
     def _build_separator(self, parent):
-        tk.Frame(parent, bg="#444444", height=1).pack(fill=tk.X, pady=10)
+        tk.Frame(parent, bg=self.border, height=1).pack(fill=tk.X, pady=10)
 
     def _build_hint_label(self, parent):
         tk.Label(
@@ -124,7 +132,7 @@ class TrainingConfigDialog:
             text="💡  Batch size depends on GPU VRAM.\n"
                  "    More epochs = longer training time.",
             font=("Segoe UI", 9),
-            bg=self.bg_dark, fg="#aaaaaa",
+            bg=self.bg_dark, fg=self.fg_muted,
             justify=tk.LEFT
         ).pack(pady=(6, 2), anchor="w")
 
@@ -135,7 +143,7 @@ class TrainingConfigDialog:
         tk.Button(
             frame, text="❌  Cancel",
             font=("Segoe UI", 11, "bold"),
-            bg="#e74c3c", fg="white", activebackground="#c0392b",
+            bg=self.danger, fg=self.on_danger, activebackground=self.danger,
             cursor="hand2", relief=tk.FLAT,
             command=self.cancel, width=12
         ).pack(side=tk.LEFT, padx=5, ipady=6)
@@ -143,7 +151,7 @@ class TrainingConfigDialog:
         tk.Button(
             frame, text="🚀  Start Training",
             font=("Segoe UI", 11, "bold"),
-            bg=self.accent_green, fg="white", activebackground="#12925f",
+            bg=self.accent_green, fg=self.on_accent, activebackground=self.accent_green,
             cursor="hand2", relief=tk.FLAT,
             command=self.start, width=15
         ).pack(side=tk.RIGHT, padx=5, ipady=6)
@@ -202,7 +210,7 @@ class TrainingConfigDialog:
             panel,
             text="Training will CONTINUE from this model.",
             font=("Segoe UI", 9, "italic"),
-            bg=self.bg_secondary, fg="#aaaaaa"
+            bg=self.bg_secondary, fg=self.fg_muted
         ).pack(anchor="w")
 
         # Tombol Remove
@@ -210,7 +218,7 @@ class TrainingConfigDialog:
             panel,
             text="🗑  Remove Model",
             font=("Segoe UI", 9, "bold"),
-            bg="#e74c3c", fg="white", activebackground="#c0392b",
+            bg=self.danger, fg=self.on_danger, activebackground=self.danger,
             cursor="hand2", relief=tk.FLAT,
             command=self._confirm_remove_model
         ).pack(anchor="e", pady=(8, 2))
@@ -246,7 +254,7 @@ class TrainingConfigDialog:
             row,
             text=f"(task: {task_label})",
             font=("Segoe UI", 9),
-            bg=self.bg_dark, fg="#888888"
+            bg=self.bg_dark, fg=self.fg_hint
         ).pack(side=tk.LEFT)
 
     def _get_base_model_list(self):
@@ -305,7 +313,7 @@ class TrainingConfigDialog:
             row,
             text="px  (multiples of 32 recommended)",
             font=("Segoe UI", 9),
-            bg=self.bg_dark, fg="#888888"
+            bg=self.bg_dark, fg=self.fg_hint
         ).pack(side=tk.LEFT)
 
     # ── Generic spinbox row ─────────────────────────────────────
@@ -341,7 +349,7 @@ class TrainingConfigDialog:
             row,
             text=hint,
             font=("Segoe UI", 9),
-            bg=self.bg_dark, fg="#888888"
+            bg=self.bg_dark, fg=self.fg_hint
         ).pack(side=tk.LEFT)
 
     # ─────────────────────────────────────────────────────────────

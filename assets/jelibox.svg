@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5"/></filter>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8CF3DC"/><stop offset="0.55" stop-color="#5E8BFF"/><stop offset="1" stop-color="#4A55E8"/></linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.38"/><stop offset="0.5" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <radialGradient id="jelly" cx="0.3" cy="0.22" r="0.95"><stop offset="0" stop-color="#fff" stop-opacity="0.98"/><stop offset="0.55" stop-color="#fff" stop-opacity="0.55"/><stop offset="1" stop-color="#fff" stop-opacity="0.28"/></radialGradient>
+  </defs>
+  <rect width="256" height="256" rx="58" fill="url(#bg)"/>
+  <rect width="256" height="256" rx="58" fill="url(#shine)"/>
+  <path d="M64 100 V80 a16 16 0 0 1 16 -16 H100 M156 64 H176 a16 16 0 0 1 16 16 V100 M192 156 V176 a16 16 0 0 1 -16 16 H156 M100 192 H80 a16 16 0 0 1 -16 -16 V156" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="128" cy="174" rx="28" ry="6" fill="#1B2270" opacity="0.4" filter="url(#blur)"/>
+  <rect x="94" y="94" width="68" height="68" rx="25" fill="url(#jelly)" stroke="#fff" stroke-opacity="0.7" stroke-width="2"/>
+  <ellipse cx="113" cy="112" rx="13" ry="6" transform="rotate(-35 113 112)" fill="#fff" opacity="0.95"/>
+</svg>

@@ -9,6 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Added
+- Groundwork for team collaboration (hidden unless `JELIBOX_COLLAB=1` or `"collab_enabled": true` in `configs/_app.json`): a per-installation device ID, a list of servers you can add, edit and remove from a ⚙ Server button in the workspace picker, and a separate private file for access keys. Jelibox still makes no network connections.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added

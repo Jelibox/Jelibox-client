@@ -13,7 +13,8 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 NEW_REPO_URL = "github.com/Jelibox/Jelibox-client"
 
 SKIP_DIRS = {"venv", ".git", "__pycache__", "datasetsInput", "datasetsOutput", "vocdataset", "YOLOdataset",
-             "models", "configs", "export dataset", "export model", "jelibox", "boxify", "VC_redist"}
+             "models", "configs", "export dataset", "export model", "jelibox", "boxify", "VC_redist",
+             "temp"}                        # git-ignored scratch space (plans, moved datasets), not repository content
 BINARY = (".png", ".ico", ".exe", ".lnk", ".pt", ".jpg", ".jpeg", ".pyc")
 
 

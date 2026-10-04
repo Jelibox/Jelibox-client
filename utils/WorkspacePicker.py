@@ -26,6 +26,8 @@ from .workspace_manager import (list_workspaces, instance_path, count_images, DA
                                 workspace_stats, delete_instance, delete_workspace)
 from .dataset_import import (scan_dataset_folder, detect_dataset_format, import_dataset,
                              yolo_classes_resolved, sanitize_filename_prefix)
+from . import collab
+from . import ServerSettingsDialog
 
 
 class WorkspacePickerApp:
@@ -90,7 +92,17 @@ class WorkspacePickerApp:
             C_CARD2, C_TXT1, font_size=8, bold=True)
         self.theme_btn.pack(side=tk.RIGHT, padx=14, pady=12, ipady=5, ipadx=10)
 
+        # Hidden until the server feature is switched on (see utils/collab).
+        self.server_btn = None
+        if collab.enabled():
+            self.server_btn = self._btn(header, "⚙  Server", self._open_server_settings,
+                                        C_CARD2, C_TXT1, font_size=8, bold=True)
+            self.server_btn.pack(side=tk.RIGHT, padx=(0, 0), pady=12, ipady=5, ipadx=10)
+
         tk.Frame(self.root, bg=C_BORDER, height=1).pack(fill=tk.X)
+
+    def _open_server_settings(self):
+        ServerSettingsDialog.open_dialog(self.root)
 
     def _toggle_theme(self):
         """Switch theme and relaunch the picker so every widget picks up the new colors."""

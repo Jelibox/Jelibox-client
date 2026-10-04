@@ -361,6 +361,69 @@ class OtherWindowTests(unittest.TestCase):
         self.assertTrue(self.root.title().startswith("Jelibox"))
         find_button(self.root, "Dark" if theme.MODE == "light" else "Light")
 
+    def _picker(self, flag):
+        from utils.WorkspacePicker import WorkspacePickerApp
+        env = {"JELIBOX_COLLAB": "1"} if flag else {}
+        with mock.patch.dict(os.environ, env):
+            if not flag:
+                os.environ.pop("JELIBOX_COLLAB", None)
+            app = WorkspacePickerApp(self.root, entry_script=os.path.join(os.getcwd(), "x.py"))
+        pump(self.root, 0.3)
+        return app
+
+    def test_server_gear_is_hidden_unless_the_feature_is_on(self):
+        app_settings.set("collab_enabled", None)
+        self.assertIsNone(self._picker(False).server_btn)
+
+    def test_server_gear_opens_the_settings_dialog(self):
+        app = self._picker(True)
+        self.assertIsNotNone(app.server_btn)
+        app.server_btn.invoke()
+        pump(self.root, 0.3)
+        dialogs = [w for w in self.root.winfo_children() if isinstance(w, tk.Toplevel)]
+        self.assertEqual(len(dialogs), 1)
+        self.assertEqual(dialogs[0].title(), "Server settings")
+
+    def test_server_dialog_adds_edits_and_removes_a_server(self):
+        from utils.ServerSettingsDialog import ServerSettingsDialog
+        from utils.collab import servers, identity
+        for e in servers.list_servers():
+            servers.remove_server(e["id"])
+        dlg = ServerSettingsDialog(self.root)
+        pump(self.root, 0.2)
+
+        texts = lambda: " ".join(str(w.cget("text")) for w in walk(dlg.win) if isinstance(w, (tk.Label, tk.Button)))
+        self.assertIn(identity.get_device_id(), texts())
+        self.assertIn("No servers yet", texts())
+
+        dlg.url_var.set("not a valid address")
+        dlg.save_btn.invoke()
+        self.assertIn("✗", dlg.status.cget("text"))
+        self.assertEqual(servers.list_servers(), [])
+
+        dlg.name_var.set("Lab")
+        dlg.url_var.set("192.168.1.10")
+        dlg.save_btn.invoke()
+        pump(self.root, 0.2)
+        self.assertEqual([e["url"] for e in servers.list_servers()], ["http://192.168.1.10:8420"])
+        self.assertIn("Not connected", texts())
+
+        entry = servers.list_servers()[0]
+        dlg._edit(entry)
+        dlg.url_var.set("192.168.1.11:9000")
+        dlg.save_btn.invoke()
+        self.assertEqual(servers.list_servers()[0]["url"], "http://192.168.1.11:9000")
+
+        servers.store_access_key(entry["id"], "jbk_TESTKEY00000000")
+        dlg.refresh()
+        self.assertIn("Connected", texts())
+        self.assertNotIn("jbk_TESTKEY", texts())                           # a key is never shown
+
+        dlg._remove(entry)                                                 # the stubbed confirmation answers yes
+        self.assertEqual(servers.list_servers(), [])
+        self.assertIsNone(servers.get_access_key(entry["id"]))
+        dlg.win.destroy()
+
     def test_unsupported_display_dialog_is_english_and_closes(self):
         from utils import ScreenGuard
         self.root.withdraw()

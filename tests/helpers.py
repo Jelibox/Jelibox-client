@@ -74,6 +74,8 @@ def isolated_workspace():
 
     from utils import app_settings
     app_settings._PATH = os.path.join(ctx.configs, "_app.json")
+    from utils.collab import servers
+    servers._SECRETS_PATH = os.path.join(ctx.configs, "_server.json")
 
     from utils import workspace_config, workspace_manager
     workspace_config.CONFIGS_ROOT = ctx.configs

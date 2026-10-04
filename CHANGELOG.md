@@ -9,11 +9,13 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Added
-- One-line install: `irm .../install.ps1 | iex` (Windows) and `curl .../install.sh | bash` (Linux), no git needed. Re-running updates in place and keeps your data.
-- Windows installer installs the Visual C++ runtime automatically when it is missing.
+## [0.2.0] - 2026-10-04
 
-### Fixed
+### Added
+- One-line install: `irm .../install.ps1 | iex` (Windows) and `curl .../install.sh | bash` (Linux), no git needed. Re-running updates in place and keeps your data.
+- Windows installer installs the Visual C++ runtime automatically when it is missing.
+
+### Fixed
 - Windows installer works from folders whose path contains spaces.
 
 ## [0.1.0] - 2026-10-04
@@ -42,5 +44,6 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Jelibox/Jelibox-client/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Jelibox/Jelibox-client/releases/tag/v0.1.0

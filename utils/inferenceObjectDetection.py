@@ -17,6 +17,7 @@ import cv2
 import torch
 
 from . import workspace_config as wcfg
+from .annotation_merge import merge as _merge, poly_rect as _poly_rect
 from .config import model_path, CLASSLIST, state, input_folder, workspaceName, BASE_DIR
 
 try:
@@ -26,7 +27,6 @@ except Exception as e:
     YOLOWorld = None
     print("[INFO] ultralytics not installed. Training won't work.", e)
 
-MERGE_IOU = 0.5
 YOLO_WORLD_DIR = os.path.join(BASE_DIR, "models", "_yolo_world")
 
 # (weights name, prompts) -> loaded model, so G doesn't reload CLIP + weights every press
@@ -35,35 +35,6 @@ _world_cache = {}
 
 def custom_model_available():
     return os.path.exists(model_path)
-
-
-def _iou(a, b):
-    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
-    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
-    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
-    if inter == 0:
-        return 0.0
-    area_a = max(0, a[2] - a[0]) * max(0, a[3] - a[1])
-    area_b = max(0, b[2] - b[0]) * max(0, b[3] - b[1])
-    return inter / float(area_a + area_b - inter)
-
-
-def _poly_rect(points):
-    xs = [p[0] for p in points]
-    ys = [p[1] for p in points]
-    return min(xs), min(ys), max(xs), max(ys)
-
-
-def _merge(predictions, existing_rects):
-    """Keep predictions (highest confidence first) that don't overlap an
-    existing annotation or an already-kept prediction. Returns kept list."""
-    kept, kept_rects = [], list(existing_rects)
-    for p in sorted(predictions, key=lambda p: p["conf"], reverse=True):
-        if any(_iou(p["rect"], r) >= MERGE_IOU for r in kept_rects):
-            continue
-        kept.append(p)
-        kept_rects.append(p["rect"])
-    return kept
 
 
 def _collect(results, class_name_for):

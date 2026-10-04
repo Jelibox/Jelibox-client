@@ -21,14 +21,8 @@ from .theme import (C_BASE, C_PANEL, C_CARD, C_CARD2, C_BORDER, C_ACCENT,
                     C_GREEN, C_AMBER, C_RED, C_TXT1, C_TXT2, C_TXT3,
                     C_ON_ACCENT, C_ON_RED, C_DANGER_BG, C_DANGER_FG)
 
-MAX_PROMPT_LEN = 40
 MAX_VISIBLE_ROWS = 5
 ROW_HEIGHT = 40
-
-
-def _valid_prompt_text(text):
-    """Letters and spaces only - no digits, no symbols."""
-    return all(ch.isalpha() or ch == " " for ch in text)
 
 
 class LabelAssistantDialog:
@@ -241,7 +235,7 @@ class LabelAssistantDialog:
         cls_var = tk.StringVar(value=map_to if map_to in self.classes else "")
 
         vcmd = (self.win.register(
-            lambda proposed: _valid_prompt_text(proposed) and len(proposed) <= MAX_PROMPT_LEN), '%P')
+            lambda proposed: wcfg.is_valid_prompt_text(proposed)), '%P')
         entry = tk.Entry(frame, textvariable=prompt_var, width=26, font=('Segoe UI', 10),
                          bg=C_CARD2, fg=C_TXT1, insertbackground=C_ACCENT, relief=tk.FLAT,
                          highlightthickness=1, highlightbackground=C_BORDER,
@@ -313,21 +307,7 @@ class LabelAssistantDialog:
     # -------------------------------------------------------------- save
     def _collect_targets(self):
         """Returns (targets, error). Fully empty rows are ignored."""
-        targets, seen = [], set()
-        for r in self.rows:
-            prompt = " ".join(r['prompt'].get().split())
-            cls = r['cls'].get()
-            if not prompt and not cls:
-                continue
-            if not prompt:
-                return None, "A target class has a workspace class but nothing to search for."
-            if not cls:
-                return None, f"Choose a workspace class for “{prompt}”."
-            if prompt.lower() in seen:
-                return None, f"“{prompt}” is listed more than once."
-            seen.add(prompt.lower())
-            targets.append({"prompt": prompt, "map_to": cls})
-        return targets, None
+        return wcfg.validate_targets((r['prompt'].get(), r['cls'].get()) for r in self.rows)
 
     def _save(self):
         provider = self.provider_var.get()

@@ -225,6 +225,19 @@ git checkout -b feature/your-feature-name
 
 Before opening a pull request, test the installer or application flow affected by your change and describe the platform used.
 
+## Testing
+
+One command checks everything (no data of yours is touched - tests run in a temp workspace):
+
+```bash
+python tests/run.py            # repo hygiene + unit + integration + GUI
+python tests/run.py --fast     # skip the GUI group (works without a display)
+python tests/run.py --only unit,repo
+python tests/run.py -k assistant -v
+```
+
+Run it with the project's virtual environment (`venv\Scripts\python` on Windows, `jelibox/bin/python` on Linux). It uses only the standard `unittest` module, so there is nothing extra to install.
+
 ## License
 
 Jelibox is released under the [Apache License 2.0](LICENSE).

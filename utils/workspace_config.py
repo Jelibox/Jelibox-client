@@ -165,3 +165,33 @@ def set_assistant(workspace_name, assistant):
     data = load(workspace_name) or _normalize({})
     data["label_assistant"] = assistant
     save(workspace_name, data)
+
+
+# ------------------------------------------------- YOLO-World target validation
+MAX_PROMPT_LEN = 40
+
+
+def is_valid_prompt_text(text):
+    """Prompt text may hold letters and spaces only - no digits, no symbols -
+    and at most MAX_PROMPT_LEN characters."""
+    return len(text) <= MAX_PROMPT_LEN and all(ch.isalpha() or ch == " " for ch in text)
+
+
+def validate_targets(rows):
+    """rows: iterable of (prompt, workspace_class). Fully empty rows are ignored.
+    Returns (targets, error) - targets is None when error is set."""
+    targets, seen = [], set()
+    for prompt, cls in rows:
+        prompt = " ".join((prompt or "").split())
+        cls = cls or ""
+        if not prompt and not cls:
+            continue
+        if not prompt:
+            return None, "A target class has a workspace class but nothing to search for."
+        if not cls:
+            return None, f"Choose a workspace class for “{prompt}”."
+        if prompt.lower() in seen:
+            return None, f"“{prompt}” is listed more than once."
+        seen.add(prompt.lower())
+        targets.append({"prompt": prompt, "map_to": cls})
+    return targets, None

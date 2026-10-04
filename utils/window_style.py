@@ -66,15 +66,21 @@ def _style_titlebar(widget):
 
 def setup(root):
     """Icon + title bar styling for `root` and every window opened from it."""
-    try:
-        from PIL import Image, ImageTk
-        root._jelibox_icon = ImageTk.PhotoImage(Image.open(os.path.join(_ICON_DIR, "jelibox.png")).resize((64, 64)))
-        root.iconphoto(True, root._jelibox_icon)        # True: also the default for new Toplevels
-    except Exception:
-        pass
-    if sys.platform == "win32":
+    ico = os.path.join(_ICON_DIR, "jelibox.ico")
+    if sys.platform == "win32" and os.path.exists(ico):
+        # The .ico carries hand-tuned 16-40 px frames (bolder mark) that stay
+        # recognisable in the title bar / taskbar; a downscaled photo would not.
         try:
-            root.iconbitmap(default=os.path.join(_ICON_DIR, "jelibox.ico"))
+            root.iconbitmap(ico)
+            root.iconbitmap(default=ico)
+        except Exception:
+            pass
+    else:
+        try:
+            from PIL import Image, ImageTk
+            root._jelibox_icon = ImageTk.PhotoImage(
+                Image.open(os.path.join(_ICON_DIR, "jelibox.png")).resize((64, 64)))
+            root.iconphoto(True, root._jelibox_icon)    # True: default for new Toplevels too
         except Exception:
             pass
 

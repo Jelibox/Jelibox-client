@@ -2917,10 +2917,19 @@ class AnnotationGUI:
         print(f"[GUI] Inference finished: {message}")
 
     def toggle_theme(self):
-        new = toggle_mode()
-        messagebox.showinfo(
-            "Theme", f"{new.capitalize()} theme saved.\n\nIt applies the next time you open Jelibox.",
-            parent=self.root)
+        """Switch theme and relaunch the window so every widget picks up the new colors."""
+        toggle_mode()
+        try:
+            # Same as navigating away - but don't mark an untouched, unannotated image as done.
+            xml_path = os.path.join(vocdataset_folder, os.path.splitext(self.images[state.current_index])[0] + '.xml')
+            if state.bboxes or state.polygons or os.path.exists(xml_path):
+                self.save_current()
+            from . import app_settings
+            app_settings.set("resume", {"folder": input_folder, "image": self.images[state.current_index]})
+        except Exception as exc:
+            print(f"[GUI] Could not save state before theme restart: {exc}")
+        self.root._jelibox_restart = True
+        self.close_main_gui()
 
     def show_label_assistant(self):
         open_label_assistant(self.root)

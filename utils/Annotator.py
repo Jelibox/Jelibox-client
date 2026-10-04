@@ -82,6 +82,33 @@ def _show_loading_splash(root):
     return splash, on_progress
 
 
+RESTART_EXIT_CODE = 75      # "relaunch me": the workspace picker restarts the window on this code
+PARENT_ENV = "JELIBOX_PARENT"   # set by the picker so the GUI knows someone will relaunch it
+
+
+def _restart_self(args):
+    """Relaunch this script with `args` (used when there is no picker above us)."""
+    import subprocess
+    subprocess.Popen([sys.executable, os.path.abspath(__file__)] + list(args))
+
+
+def _resume_image_index(dataset_folder):
+    """After a restart (e.g. theme change) reopen on the image the user was on."""
+    from utils import app_settings
+    resume = app_settings.get("resume")
+    if not resume:
+        return None
+    app_settings.set("resume", None)
+    if os.path.normcase(os.path.normpath(resume.get("folder", ""))) != \
+            os.path.normcase(os.path.normpath(dataset_folder)):
+        return None
+    images = sorted(f for f in os.listdir(dataset_folder) if f.lower().endswith(('.jpg', '.png', '.jpeg')))
+    try:
+        return images.index(resume.get("image"))
+    except ValueError:
+        return None
+
+
 def run_annotation_gui(dataset_folder):
     """Load the given dataset folder as the active workspace and open the
     annotation GUI for it. Must run before utils.AnnotationGUI is imported,
@@ -106,6 +133,10 @@ def run_annotation_gui(dataset_folder):
 
     config.load_workspace(dataset_folder, progress_cb=on_progress)
 
+    resume_index = _resume_image_index(dataset_folder)
+    if resume_index is not None:
+        config.state.current_index = resume_index
+
     from utils.AnnotationGUI import AnnotationGUI
 
     # Build the whole window while still hidden, so nothing but the loading
@@ -120,6 +151,11 @@ def run_annotation_gui(dataset_folder):
         root.focus_force()
 
     root.mainloop()
+
+    if getattr(root, "_jelibox_restart", False):
+        if os.environ.get(PARENT_ENV):
+            sys.exit(RESTART_EXIT_CODE)           # the picker relaunches us
+        _restart_self([dataset_folder])
 
 
 def run_workspace_picker():

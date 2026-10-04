@@ -93,10 +93,14 @@ class WorkspacePickerApp:
         tk.Frame(self.root, bg=C_BORDER, height=1).pack(fill=tk.X)
 
     def _toggle_theme(self):
-        new = toggle_mode()
-        messagebox.showinfo(
-            "Theme", f"{new.capitalize()} theme saved.\n\nIt applies the next time you open Jelibox.",
-            parent=self.root)
+        """Switch theme and relaunch the picker so every widget picks up the new colors."""
+        toggle_mode()
+        try:
+            subprocess.Popen([self.python_exe, self.entry_script])
+        except OSError as e:
+            messagebox.showerror("Theme", f"Theme saved, but Jelibox could not restart:\n{e}", parent=self.root)
+            return
+        self.root.destroy()
 
     def _btn(self, parent, text, command, bg, fg, font_size=9, bold=False):
         weight = 'bold' if bold else 'normal'
@@ -378,19 +382,33 @@ class WorkspacePickerApp:
             return
 
         folder = instance_path(instance_name)
-        try:
-            self.process = subprocess.Popen([self.python_exe, self.entry_script, folder])
-        except OSError as e:
-            messagebox.showerror("Failed to Open Workspace", str(e), parent=self.root)
+        if not self._launch(folder):
             return
 
         self.root.withdraw()
         self._poll_process()
 
+    def _launch(self, folder):
+        self._current_folder = folder
+        try:
+            self.process = subprocess.Popen([self.python_exe, self.entry_script, folder],
+                                            env={**os.environ, "JELIBOX_PARENT": "1"})
+        except OSError as e:
+            messagebox.showerror("Failed to Open Workspace", str(e), parent=self.root)
+            return False
+        return True
+
     def _poll_process(self):
         if self.process is not None and self.process.poll() is None:
             self.root.after(400, self._poll_process)
             return
+
+        if self.process is not None and self.process.returncode == 75 and getattr(self, "_current_folder", None):
+            # The window asked to be relaunched (theme change): reopen the same workspace
+            # without flashing the picker.
+            if self._launch(self._current_folder):
+                self.root.after(400, self._poll_process)
+                return
 
         self.process = None
         self.refresh_workspaces()

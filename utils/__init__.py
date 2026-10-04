@@ -9,4 +9,4 @@ time anymore - that used to force a workspace to be picked (via a blocking
 folder dialog) just by importing anything from this package.
 """
 
-__version__ = "0.0.0"   # bumped by tools/release.py - never edit by hand
+__version__ = "0.1.0"   # bumped by tools/release.py - never edit by hand

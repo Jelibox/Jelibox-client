@@ -9,6 +9,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-04
+
 ### Added
 - **Label Assistant** (`G`): choose YOLO-World (8 models, text prompts mapped to your workspace classes) or your own trained model; predictions are merged into existing boxes and skip anything that overlaps.
 - Per-workspace `configs/<workspace>.json` holding classes and assistant settings; the old `<workspace>.txt` class files are migrated automatically.
@@ -33,4 +35,5 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/commits/main
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Jelibox/Jelibox-client/releases/tag/v0.1.0

@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import unittest
 
+from tests.shell import find_bash
+
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 NEW_REPO_URL = "github.com/Jelibox/Jelibox-client"
 
@@ -144,9 +146,9 @@ class InstallerTests(unittest.TestCase):
         text = read(os.path.join(REPO, "jelibox_linux_installation.bash"))
         for needle in ("jelibox", "ultralytics", "ftfy", "CLIP/archive", "Jelibox.desktop"):
             self.assertTrue(needle in text, f"installer is missing {needle!r}")
-        bash = shutil.which("bash")
+        bash = find_bash()
         if not bash:
-            self.skipTest("bash not available")
+            self.skipTest("no working bash available")
         # check an LF-normalised copy: a Windows checkout may have converted the line endings
         with tempfile.NamedTemporaryFile("w", suffix=".bash", delete=False, newline="\n", encoding="utf-8") as tmp:
             tmp.write(text.replace("\r\n", "\n"))

@@ -11,6 +11,8 @@ import tempfile
 import unittest
 import zipfile
 
+from tests.shell import find_bash
+
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 RAW = "https://raw.githubusercontent.com/Jelibox/Jelibox-client/main"
 PS_CMD = f"irm {RAW}/install.ps1 | iex"
@@ -83,9 +85,9 @@ class ScriptContentTests(unittest.TestCase):
         self.assertIn("/dev/tty", text)                           # sudo prompt needs the keyboard
 
     def test_bash_syntax(self):
-        bash = shutil.which("bash")
+        bash = find_bash()
         if not bash:
-            self.skipTest("bash not available")
+            self.skipTest("no working bash available")
         with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False, newline="\n", encoding="utf-8") as tmp:
             tmp.write(read("install.sh").replace("\r\n", "\n"))
         try:
@@ -169,17 +171,17 @@ class BootstrapRunTests(unittest.TestCase):
         with open(os.path.join(data, "a.xml")) as f:
             self.assertEqual(f.read(), "keep me")
 
-    @unittest.skipUnless(shutil.which("bash") and shutil.which("tar"), "bash/tar not available")
+    @unittest.skipUnless(find_bash() and shutil.which("tar"), "no working bash/tar available")
     def test_bash_install_and_update_when_piped_like_curl_does(self):
         home = os.path.join(self.work, "sh_home")
         script = os.path.join(REPO, "install.sh")
-        run = lambda: subprocess.run(["bash", "-c", 'cat "$1" | bash', "_", script], env=self.env(self.tgz, home),
+        run = lambda: subprocess.run([find_bash(), "-c", 'cat "$1" | bash', "_", script], env=self.env(self.tgz, home),
                                      capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.check_install_and_update(run, home)
 
-    @unittest.skipUnless(shutil.which("bash") and shutil.which("tar"), "bash/tar not available")
+    @unittest.skipUnless(find_bash() and shutil.which("tar"), "no working bash/tar available")
     def test_bash_fails_clearly_without_an_archive(self):
-        r = subprocess.run(["bash", os.path.join(REPO, "install.sh")], env=self.env(os.path.join(self.work, "nope.tar.gz"),
+        r = subprocess.run([find_bash(), os.path.join(REPO, "install.sh")], env=self.env(os.path.join(self.work, "nope.tar.gz"),
                            os.path.join(self.work, "x")), capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("not found", r.stderr)

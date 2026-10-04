@@ -36,6 +36,23 @@ GROUPS = ["repo", "unit", "integration", "gui"]
 GUARDED = ["configs", "vocdataset", "YOLOdataset", "models", "datasetsInput"]
 
 
+NOISE = re.compile(r"^(\[(ClassManager|WorkspaceConfig|GUI|INFO|Config|Assistant|STREAM)\]|\s+(Original|Display|Annotations):)")
+
+
+def clean_output(text):
+    """Drop the app's own progress chatter so only test results/failures remain."""
+    return "\n".join(line for line in text.splitlines() if not NOISE.match(line))
+
+
+def github_annotation(group, text, limit=3500):
+    """A GitHub Actions `::error` workflow command: it shows the failure on the run page and in the
+    checks API, so a red CI run can be diagnosed without downloading logs. Keeps the END of the
+    output, where unittest prints the failures."""
+    body = clean_output(text)[-limit:]
+    body = body.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::error title=Jelibox tests: {group} failed::{body}"
+
+
 def fingerprint():
     """(file count, hash of names+sizes+mtimes) for each guarded data folder."""
     out = {}
@@ -115,8 +132,9 @@ def main():
     failed = [r for r in results if not r["ok"]]
     for r in failed:
         print("\n" + "=" * 70 + f"\n{r['group']} - output\n" + "=" * 70)
-        noise = re.compile(r"^(\[(ClassManager|WorkspaceConfig|GUI|INFO|Config|Assistant|STREAM)\]|\s+(Original|Display|Annotations):)")
-        print("\n".join(l for l in r["output"].splitlines() if not noise.match(l)))
+        print(clean_output(r["output"]))
+        if os.environ.get("GITHUB_ACTIONS"):
+            print(github_annotation(r["group"], r["output"]))
     if args.verbose and not failed:
         for r in results:
             print("\n" + r["output"])

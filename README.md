@@ -219,7 +219,7 @@ Issues, documentation improvements, bug fixes, and feature contributions are wel
 
 ```bash
 git clone https://github.com/Jelibox/Jelibox-client.git
-cd Jelibox
+cd Jelibox-client
 git checkout -b feature/your-feature-name
 ```
 

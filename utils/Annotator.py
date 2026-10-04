@@ -89,7 +89,10 @@ def run_annotation_gui(dataset_folder):
     utils.config at import time."""
     from utils import config
 
+    from utils import window_style
+    window_style.set_app_id()
     root = tk.Tk()
+    window_style.setup(root)
     root.withdraw()
 
     from utils import ScreenGuard
@@ -122,7 +125,10 @@ def run_annotation_gui(dataset_folder):
 def run_workspace_picker():
     from utils.WorkspacePicker import WorkspacePickerApp
 
+    from utils import window_style
+    window_style.set_app_id()
     root = tk.Tk()
+    window_style.setup(root)
     WorkspacePickerApp(root, entry_script=os.path.abspath(__file__))
     root.mainloop()
 

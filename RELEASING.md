@@ -61,7 +61,7 @@ Prerequisites: you are on `main`, up to date, the tree is clean, and `[Unrelease
 git switch main && git pull
 
 python tools/release.py minor --dry-run     # preview: new version + the notes. Touches nothing.
-python tools/release.py minor               # for real: tests -> bump version -> changelog -> commit -> tag
+python tools/release.py minor               # for real: bump version + changelog -> tests on the result -> commit -> tag
 ```
 
 `patch`, `minor`, `major`, or an explicit `0.4.0` are accepted. The tool refuses if you are not on `main`, the tree is dirty, `[Unreleased]` is empty, the tag already exists, or any test fails.

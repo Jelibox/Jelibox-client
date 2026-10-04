@@ -8,8 +8,8 @@ Release helper: turns "what is in [Unreleased]" into a tagged version.
 
 What a release does (see RELEASING.md for the why):
   1. refuses unless you are on `main` with a clean tree and [Unreleased] has entries
-  2. runs the test suite
-  3. sets utils.__version__, moves [Unreleased] into "## [X.Y.Z] - date" and fixes the compare links
+  2. sets utils.__version__ and moves [Unreleased] into "## [X.Y.Z] - date" (fixing the compare links)
+  3. runs the test suite on that result; any failure undoes the edits
   4. commits "Release vX.Y.Z" and creates the annotated tag vX.Y.Z
 It never pushes - it prints the two commands to do that yourself.
 """
@@ -135,9 +135,13 @@ def main(argv=None):
     if not args.version:
         ap.error("give a version: patch | minor | major | X.Y.Z")
 
-    new = next_version(current, args.version)
-    date = datetime.date.today().isoformat()
-    new_changelog = release_changelog(read(CHANGELOG), new, date)     # raises if [Unreleased] is empty
+    try:
+        new = next_version(current, args.version)
+        date = datetime.date.today().isoformat()
+        new_changelog = release_changelog(read(CHANGELOG), new, date)     # raises if [Unreleased] is empty
+    except ValueError as exc:
+        print(f"Cannot release: {exc}")
+        return 1
 
     problems = []
     branch = git("rev-parse", "--abbrev-ref", "HEAD")
@@ -159,14 +163,19 @@ def main(argv=None):
         print("(dry run - nothing was changed)")
         return 0
 
+    # Write the new version first, THEN test: the suite also checks that version, changelog,
+    # tag and workflows agree, so it must see the release exactly as it will be published.
+    original_init, original_log = read(INIT), read(CHANGELOG)
+    write(INIT, write_version(original_init, new))
+    write(CHANGELOG, new_changelog)
     if not args.skip_tests:
-        print("Running the test suite ...")
+        print("Running the test suite on the release candidate ...")
         if subprocess.run([sys.executable, os.path.join(REPO, "tests", "run.py")], cwd=REPO).returncode != 0:
-            print("Tests failed - release aborted.")
+            write(INIT, original_init)
+            write(CHANGELOG, original_log)
+            print("Tests failed - release aborted and the version/changelog edits were undone.")
             return 1
 
-    write(INIT, write_version(read(INIT), new))
-    write(CHANGELOG, new_changelog)
     git("add", "utils/__init__.py", "CHANGELOG.md")
     git("commit", "-m", f"Release v{new}")
     git("tag", "-a", f"v{new}", "-m", f"Jelibox {new}")

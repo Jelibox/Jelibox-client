@@ -1,5 +1,4 @@
 """The release machinery must stay consistent with itself."""
-import hashlib
 import os
 import re
 import subprocess
@@ -7,6 +6,7 @@ import sys
 import unittest
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+VERSION_FILE = '__version__ = "0.4.0"\n'
 
 
 def read(*parts):
@@ -51,18 +51,79 @@ class ReleaseProcessTests(unittest.TestCase):
             self.assertIn(needle, doc)
         self.assertIn("tests/run.py", read(".github", "pull_request_template.md"))
 
+    # The two tests below run the release tool against COPIES of the version file and
+    # changelog, so they pass no matter what the real [Unreleased] section holds today.
+    def _tool_on_copies(self, changelog_text):
+        import contextlib
+        import io
+        import tempfile
+        from tools import release as R
+        tmp = tempfile.mkdtemp()
+        init, log = os.path.join(tmp, "__init__.py"), os.path.join(tmp, "CHANGELOG.md")
+        with open(init, "w", encoding="utf-8", newline="") as f:
+            f.write(VERSION_FILE)
+        with open(log, "w", encoding="utf-8", newline="") as f:
+            f.write(changelog_text)
+        old = R.INIT, R.CHANGELOG
+        R.INIT, R.CHANGELOG = init, log
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                code = R.main(["minor", "--dry-run"])
+        finally:
+            R.INIT, R.CHANGELOG = old
+        with open(init, encoding="utf-8", newline="") as f:
+            init_after = f.read()
+        with open(log, encoding="utf-8", newline="") as f:
+            log_after = f.read()
+        return code, out.getvalue(), init_after, log_after
+
     def test_dry_run_never_modifies_anything(self):
-        def snapshot():
-            h = hashlib.sha1()
-            for rel in ("utils/__init__.py", "CHANGELOG.md"):
-                h.update(open(os.path.join(REPO, rel), "rb").read())
-            return h.hexdigest()
-        before = snapshot()
-        r = subprocess.run([sys.executable, "tools/release.py", "patch", "--dry-run"], cwd=REPO,
-                           capture_output=True, text=True, encoding="utf-8", errors="replace")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("dry run", r.stdout)
-        self.assertEqual(snapshot(), before)
+        log = "\n".join(["## [Unreleased]", "", "### Added", "- Something.", "",
+                         "[Unreleased]: https://example.com/compare/v0.4.0...HEAD", ""])
+        code, out, init_after, log_after = self._tool_on_copies(log)
+        self.assertEqual(code, 0, out)
+        self.assertIn("0.4.0 -> 0.5.0", out)
+        self.assertIn("dry run", out)
+        self.assertEqual(init_after, VERSION_FILE)
+        self.assertEqual(log_after, log)
+
+    def test_empty_unreleased_gives_a_clear_refusal_not_a_crash(self):
+        log = "\n".join(["## [Unreleased]", "", "## [0.4.0] - 2026-01-01", "- x", ""])
+        code, out, *_ = self._tool_on_copies(log)
+        self.assertEqual(code, 1)
+        self.assertIn("Cannot release", out)
+        self.assertIn("[Unreleased] is empty", out)
+
+    def test_failing_tests_undo_the_version_and_changelog_edits(self):
+        import contextlib
+        import io
+        import tempfile
+        from unittest import mock
+        from tools import release as R
+        tmp = tempfile.mkdtemp()
+        init, log = os.path.join(tmp, "__init__.py"), os.path.join(tmp, "CHANGELOG.md")
+        changelog = "\n".join(["## [Unreleased]", "", "- Something.", ""])
+        for path, text in ((init, VERSION_FILE), (log, changelog)):
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+        fake_git = lambda *a, **k: {"rev-parse": "main"}.get(a[0], "")       # on main, clean tree, no tag yet
+        failing_suite = mock.Mock(return_value=mock.Mock(returncode=1))
+        old = R.INIT, R.CHANGELOG
+        R.INIT, R.CHANGELOG = init, log
+        try:
+            with mock.patch.object(R, "git", fake_git), mock.patch.object(R.subprocess, "run", failing_suite), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                code = R.main(["minor"])
+        finally:
+            R.INIT, R.CHANGELOG = old
+        self.assertEqual(code, 1)
+        self.assertIn("undone", out.getvalue())
+        failing_suite.assert_called_once()
+        with open(init, encoding="utf-8", newline="") as f:
+            self.assertEqual(f.read(), VERSION_FILE)
+        with open(log, encoding="utf-8", newline="") as f:
+            self.assertEqual(f.read(), changelog)
 
     def test_check_tag_rejects_a_mismatch(self):
         from utils import __version__

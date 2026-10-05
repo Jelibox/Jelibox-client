@@ -308,6 +308,10 @@ if %FAILED% equ 1 (
 )
 echo =========================================================
 
+:: Tells the one-line installer (install.ps1) that this install finished, so it can
+:: say "already up to date" next time instead of repeating the whole setup.
+if %FAILED% neq 1 echo done> "%~dp0.jelibox-ready"
+
 if "%TORCH_STATUS%"=="SKIPPED_ARM" (
     echo [NOTICE] ARM platform detected.
     echo [NOTICE] AI acceleration disabled.

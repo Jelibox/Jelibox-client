@@ -204,6 +204,10 @@ fi
 # ──────────────────────────────────────────
 # DONE
 # ──────────────────────────────────────────
+# Tells the one-line installer (install.sh) that this install finished, so it can
+# say "already up to date" next time instead of repeating the whole setup.
+date > "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.jelibox-ready" 2>/dev/null || true
+
 echo ""
 echo "=========================================="
 echo "      INSTALLATION COMPLETED!"

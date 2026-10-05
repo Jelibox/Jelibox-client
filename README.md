@@ -48,7 +48,7 @@ The application can run on CPU. NVIDIA GPU support requires a compatible NVIDIA 
 
 ### Quick install (recommended)
 
-One command, no `git` needed. It downloads the newest release, unpacks it, and runs the installer for you.
+One command, no `git` needed. It checks whether Jelibox is already installed in the default folder: if not, it installs the newest release fresh; if it is, it updates it automatically.
 
 **Windows** - open **PowerShell** and paste:
 
@@ -66,8 +66,9 @@ What happens:
 
 - Jelibox is unpacked into `%LOCALAPPDATA%\Jelibox` (Windows) or `~/.local/share/jelibox` (Linux).
 - The normal installer then runs: it installs Python 3.12 if missing, creates a virtual environment, installs the dependencies and adds shortcuts. Windows asks for administrator permission once; Linux asks for your `sudo` password.
-- **Updating:** run the same command again. Your datasets, models and configs are never touched.
-- **A specific version:** set `JELIBOX_VERSION` first, for example `$env:JELIBOX_VERSION="v0.1.0"` (PowerShell) or `JELIBOX_VERSION=v0.1.0 curl ... | bash`. Other options: `JELIBOX_HOME` (install location) and `JELIBOX_NO_INSTALL=1` (download and unpack only).
+- **Updating:** run the same command again. It reports what it found (`Found Jelibox v0.1.0 ... updating to v0.2.0`), updates in place, and never touches your datasets, models or configs. If you are already on the newest version it says so and stops (`JELIBOX_FORCE=1` reinstalls anyway). A folder that is a `git` checkout is left alone - use `git pull` there.
+- **Find the install folder:** click **Open Folder** in the Jelibox header.
+- **A specific version:** set `JELIBOX_VERSION` first, for example `$env:JELIBOX_VERSION="v0.1.0"` (PowerShell) or `JELIBOX_VERSION=v0.1.0 curl ... | bash`. Other options: `JELIBOX_HOME` (install location), `JELIBOX_NO_INSTALL=1` (download and unpack only) and `JELIBOX_FORCE=1` (reinstall even if current).
 - **Want to read it before running it?** That is a good habit. The scripts are short: [`install.ps1`](install.ps1) and [`install.sh`](install.sh).
 - **Uninstall:** delete the install folder above, plus the Jelibox shortcuts (Desktop / application menu).
 

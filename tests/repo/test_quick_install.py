@@ -179,6 +179,118 @@ class BootstrapRunTests(unittest.TestCase):
                                      capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.check_install_and_update(run, home)
 
+    # ------------------------------------------------ fresh install / update / up to date
+    def flow_runner(self, kind, home):
+        """run(version=None, **extra_env) -> CompletedProcess, for the bash or the PowerShell installer."""
+        def run(version=None, **extra):
+            env = self.env(self.tgz if kind == "sh" else self.zip, home)
+            if version:
+                env["JELIBOX_VERSION"] = version
+            env.update(extra)
+            if kind == "sh":
+                cmd = [find_bash(), "-c", 'cat "$1" | bash', "_", os.path.join(REPO, "install.sh")]
+            else:
+                script = os.path.join(REPO, "install.ps1")
+                cmd = ["powershell", "-NoProfile", "-Command",
+                       f"Get-Content -Raw -LiteralPath '{script}' | Invoke-Expression"]
+            return subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        return run
+
+    def check_fresh_update_and_up_to_date(self, kind):
+        home = os.path.join(self.work, kind + "_flow")
+        run = self.flow_runner(kind, home)
+        said = lambda r: r.stdout + r.stderr
+
+        r = run("v1.0.0")                                              # nothing there yet -> fresh install
+        self.assertEqual(r.returncode, 0, said(r))
+        self.assertIn("not installed yet", said(r))
+        self.assertIn("installing v1.0.0", said(r))
+        with open(os.path.join(home, ".jelibox-version")) as f:
+            self.assertEqual(f.read().strip(), "v1.0.0")
+
+        # An install whose dependency step never finished must be retried, not skipped
+        r = run("v1.0.0")
+        self.assertIn("Found Jelibox v1.0.0", said(r))
+        self.assertNotIn("up to date", said(r))
+
+        # Finished install, same version -> nothing to do (and the files are left alone)
+        open(os.path.join(home, ".jelibox-ready"), "w").close()
+        marker = os.path.join(home, "utils", "theme.py")
+        with open(marker, "a") as f:
+            f.write("\n# local edit\n")
+        r = run("v1.0.0")
+        self.assertEqual(r.returncode, 0, said(r))
+        self.assertIn("already installed and up to date", said(r))
+        with open(marker) as f:
+            self.assertIn("# local edit", f.read())
+
+        # Newer version -> update in place, the finished-marker is cleared until setup completes again
+        r = run("v1.1.0")
+        self.assertIn("Found Jelibox v1.0.0", said(r))
+        self.assertIn("updating to v1.1.0", said(r))
+        with open(os.path.join(home, ".jelibox-version")) as f:
+            self.assertEqual(f.read().strip(), "v1.1.0")
+        self.assertFalse(os.path.exists(os.path.join(home, ".jelibox-ready")))
+        with open(marker) as f:
+            self.assertNotIn("# local edit", f.read())               # code replaced by the new release
+
+        # JELIBOX_FORCE=1 reinstalls even when current
+        open(os.path.join(home, ".jelibox-ready"), "w").close()
+        r = run("v1.1.0", JELIBOX_FORCE="1")
+        self.assertIn("updating to v1.1.0", said(r))
+
+    def check_old_install_without_marker_is_recognised(self, kind):
+        home = os.path.join(self.work, kind + "_old")
+        os.makedirs(os.path.join(home, "utils"))
+        open(os.path.join(home, "utils", "AnnotationGUI.py"), "w").close()      # installed before version tracking
+        r = self.flow_runner(kind, home)("v2.0.0")
+        out = r.stdout + r.stderr
+        self.assertEqual(r.returncode, 0, out)
+        self.assertIn("unknown version", out)
+        self.assertIn("updating to v2.0.0", out)
+
+    def check_git_checkout_is_left_alone(self, kind):
+        home = os.path.join(self.work, kind + "_git")
+        os.makedirs(os.path.join(home, ".git"))
+        r = self.flow_runner(kind, home)("v2.0.0")
+        out = r.stdout + r.stderr
+        self.assertEqual(r.returncode, 0, out)
+        self.assertIn("git pull", out)
+        self.assertFalse(os.path.exists(os.path.join(home, "utils", "theme.py")))
+
+    @unittest.skipUnless(find_bash() and shutil.which("tar"), "no working bash/tar available")
+    def test_bash_fresh_install_then_update_then_up_to_date(self):
+        self.check_fresh_update_and_up_to_date("sh")
+
+    @unittest.skipUnless(find_bash() and shutil.which("tar"), "no working bash/tar available")
+    def test_bash_recognises_an_install_from_before_version_tracking(self):
+        self.check_old_install_without_marker_is_recognised("sh")
+
+    @unittest.skipUnless(find_bash() and shutil.which("tar"), "no working bash/tar available")
+    def test_bash_does_not_overwrite_a_git_checkout(self):
+        self.check_git_checkout_is_left_alone("sh")
+
+    @unittest.skipUnless(sys.platform == "win32" and shutil.which("powershell"), "Windows PowerShell only")
+    def test_powershell_fresh_install_then_update_then_up_to_date(self):
+        self.check_fresh_update_and_up_to_date("ps")
+
+    @unittest.skipUnless(sys.platform == "win32" and shutil.which("powershell"), "Windows PowerShell only")
+    def test_powershell_recognises_an_install_from_before_version_tracking(self):
+        self.check_old_install_without_marker_is_recognised("ps")
+
+    @unittest.skipUnless(sys.platform == "win32" and shutil.which("powershell"), "Windows PowerShell only")
+    def test_powershell_does_not_overwrite_a_git_checkout(self):
+        self.check_git_checkout_is_left_alone("ps")
+
+    def test_both_installers_write_the_finished_marker_the_scripts_read(self):
+        self.assertIn(".jelibox-ready", read("jelibox_windows_installation.bat"))
+        self.assertIn(".jelibox-ready", read("jelibox_linux_installation.bash"))
+        for name in ("install.ps1", "install.sh"):
+            text = read(name)
+            for token in (".jelibox-ready", ".jelibox-version", "JELIBOX_FORCE"):
+                self.assertIn(token, text, name)
+        self.assertIn("JELIBOX_FORCE", read("README.md"))
+
     @unittest.skipUnless(find_bash() and shutil.which("tar"), "no working bash/tar available")
     def test_bash_fails_clearly_without_an_archive(self):
         r = subprocess.run([find_bash(), os.path.join(REPO, "install.sh")], env=self.env(os.path.join(self.work, "nope.tar.gz"),

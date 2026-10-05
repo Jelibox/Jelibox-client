@@ -3,10 +3,12 @@
 #   irm https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.ps1 | iex
 #
 # What it does (read it - it is short):
-#   1. finds the newest Jelibox release on GitHub (falls back to the main branch)
-#   2. downloads that release as a .zip and unpacks it into  %LOCALAPPDATA%\Jelibox
-#      (running it again updates the code and never touches your datasets, models or configs)
-#   3. starts jelibox_windows_installation.bat, which installs Python 3.12 if needed, creates the
+#   1. looks for an existing Jelibox in %LOCALAPPDATA%\Jelibox
+#   2. finds the newest Jelibox release on GitHub (falls back to the main branch)
+#   3. not installed yet   -> installs the newest version fresh
+#      installed, older    -> updates it (your datasets, models and configs are never touched)
+#      installed, current  -> says so and stops
+#   4. starts jelibox_windows_installation.bat, which installs Python 3.12 if needed, creates the
 #      virtual environment, installs the dependencies and creates the shortcuts.
 #      Windows will ask for administrator permission once for that step.
 #
@@ -14,6 +16,7 @@
 #   JELIBOX_VERSION     install a specific release, e.g.  v0.1.0   (default: newest release)
 #   JELIBOX_HOME        install somewhere else               (default: %LOCALAPPDATA%\Jelibox)
 #   JELIBOX_NO_INSTALL  1 = only download and unpack, do not run the installer
+#   JELIBOX_FORCE       1 = reinstall even when this version is already installed
 #   JELIBOX_ARCHIVE     path to a local .zip instead of downloading (offline installs, tests)
 
 function Install-Jelibox {
@@ -32,6 +35,20 @@ function Install-Jelibox {
     function Fail([string]$text) { Write-Host "[Jelibox] $text" -ForegroundColor Red; throw $text }
 
     if ($env:OS -ne 'Windows_NT') { Fail 'This installer is for Windows. On Linux use install.sh.' }
+
+    # Is Jelibox already here? (.jelibox-version is written by this script; older installs only have the code.)
+    if (Test-Path -LiteralPath (Join-Path $dest '.git')) {
+        Say "$dest is a git checkout, so it is updated with git rather than this installer:"
+        Say "    cd `"$dest`"; git pull"
+        return
+    }
+    $existing = $false
+    $installed = ''
+    $versionFile = Join-Path $dest '.jelibox-version'
+    if ((Test-Path -LiteralPath $versionFile) -or (Test-Path -LiteralPath (Join-Path $dest 'utils\AnnotationGUI.py'))) {
+        $existing = $true
+        if (Test-Path -LiteralPath $versionFile) { $installed = ([string](Get-Content -LiteralPath $versionFile -TotalCount 1)).Trim() }
+    }
 
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ('jelibox_' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -57,6 +74,23 @@ function Install-Jelibox {
                 Say 'Downloading Jelibox (main) ...'
             }
             $zip = Join-Path $tmp 'jelibox.zip'
+        }
+
+        # Fresh install, update, or nothing to do?
+        $target = if ($version) { $version } elseif ($archive) { 'local archive' } else { 'main' }
+        if ($existing) {
+            if ($version -and ($installed -eq $version) -and (Test-Path -LiteralPath (Join-Path $dest '.jelibox-ready')) -and ($env:JELIBOX_FORCE -ne '1')) {
+                Say "Jelibox $version is already installed and up to date ($dest)."
+                Say 'Nothing to do. (JELIBOX_FORCE=1 reinstalls it anyway.)'
+                return
+            }
+            $was = if ($installed) { $installed } else { '(unknown version)' }
+            Say "Found Jelibox $was in $dest - updating to $target."
+        } else {
+            Say "Jelibox is not installed yet ($dest) - installing $target."
+        }
+
+        if (-not $archive) {
             Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
         }
 
@@ -69,6 +103,8 @@ function Install-Jelibox {
         New-Item -ItemType Directory -Force -Path $dest | Out-Null
         # Copy over the existing install. Nothing is deleted, so datasets/models/configs/venv survive an update.
         Copy-Item -Path (Join-Path $top.FullName '*') -Destination $dest -Recurse -Force
+        Set-Content -LiteralPath $versionFile -Value $target -Encoding ASCII
+        Remove-Item -LiteralPath (Join-Path $dest '.jelibox-ready') -Force -ErrorAction SilentlyContinue   # set again by the installer below once everything worked
         Say "Installed files are in $dest"
 
         if ($env:JELIBOX_NO_INSTALL -eq '1') {
@@ -80,7 +116,7 @@ function Install-Jelibox {
         if (-not (Test-Path $bat)) { Fail "Installer script missing: $bat" }
         New-Item -ItemType File -Force -Path (Join-Path $dest '.install-yes') | Out-Null    # skip the Y/N question
 
-        Say 'Starting the installer. Approve the Windows permission prompt when it appears.'
+        Say 'Setting up Python and the dependencies. Approve the Windows permission prompt when it appears.'
         Say 'It opens in its own window and shows its progress there.'
         Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "`"$bat`"" -WorkingDirectory $dest
         Say "When it says JELIBOX IS READY, open the Jelibox shortcut on your Desktop."

@@ -41,6 +41,9 @@ __pycache__/
 Jelibox.desktop
 Jelibox-launcher.sh
 *.lnk
+.install-yes
+.jelibox-version
+.jelibox-ready
 
 # scratch folder for moving datasets around
 temp/

@@ -48,7 +48,13 @@ def parse_args():
                         help="Training batch size")
     parser.add_argument("--imgsz",          type=int, default=640,
                         help="Input image size (pixels, multiple of 32)")
-    parser.add_argument("--ratio",          type=float, default=0.7,
+    parser.add_argument("--freeze",         type=int, default=0,
+                        help="Number of leading layers to freeze (0 = none)")
+    parser.add_argument("--lr0",            type=float, default=0.001,
+                        help="Initial learning rate (AdamW)")
+    parser.add_argument("--weight_decay",   type=float, default=0.0005,
+                        help="AdamW weight decay")
+    parser.add_argument("--ratio",         type=float, default=0.7,
                         help="Train/val split ratio")
 
     return parser.parse_args()
@@ -194,7 +200,10 @@ def train_model(args):
             epochs=args.epochs,
             imgsz=args.imgsz,           # ← dari argparse, bukan hardcoded
             batch=args.batch,
-            optimizer="auto",
+            optimizer="AdamW",
+            lr0=args.lr0,
+            weight_decay=args.weight_decay,
+            freeze=args.freeze if args.freeze > 0 else None,
             project=model_folder,
             name="train_run",
             exist_ok=True,

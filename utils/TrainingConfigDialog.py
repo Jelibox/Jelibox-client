@@ -62,6 +62,9 @@ class TrainingConfigDialog:
         self._build_imgsz_row(content, default_imgsz=640)
         self._build_spinbox_row(content, "Epochs:",     "epoch_var", default_epoch, 1,   1000, "(1–1000)")
         self._build_spinbox_row(content, "Batch Size:", "batch_var", default_batch, 1,   128,  "(1–128)")
+        self._build_spinbox_row(content, "Freeze:",     "freeze_var", 0,            0,   100,  "layers (0 = none, 10 = backbone)")
+        self._build_float_row(content,   "LR (lr0):",   "lr0_var",    0.001,        "AdamW start LR (1e-5 – 0.1)")
+        self._build_float_row(content,   "Weight Decay:", "wd_var",   0.0005,       "AdamW weight decay (0 – 0.1)")
         self._build_hint_label(content)
         self._build_action_buttons(content)
 
@@ -352,6 +355,39 @@ class TrainingConfigDialog:
             bg=self.bg_dark, fg=self.fg_hint
         ).pack(side=tk.LEFT)
 
+    # ── Float entry row ─────────────────────────────────────────
+
+    def _build_float_row(self, parent, label, var_name, default, hint):
+        row = tk.Frame(parent, bg=self.bg_dark)
+        row.pack(fill=tk.X, pady=6)
+
+        tk.Label(
+            row,
+            text=label,
+            font=("Segoe UI", 11, "bold"),
+            bg=self.bg_dark, fg=self.fg_light,
+            width=12, anchor="w"
+        ).pack(side=tk.LEFT)
+
+        var = tk.StringVar(value=str(default))
+        setattr(self, var_name, var)
+
+        tk.Entry(
+            row,
+            textvariable=var,
+            font=("Segoe UI", 11),
+            width=10,
+            bg=self.bg_secondary, fg=self.fg_light,
+            relief=tk.FLAT, insertbackground=self.fg_light
+        ).pack(side=tk.LEFT, padx=10)
+
+        tk.Label(
+            row,
+            text=hint,
+            font=("Segoe UI", 9),
+            bg=self.bg_dark, fg=self.fg_hint
+        ).pack(side=tk.LEFT)
+
     # ─────────────────────────────────────────────────────────────
     # Actions
     # ─────────────────────────────────────────────────────────────
@@ -409,7 +445,23 @@ class TrainingConfigDialog:
             epoch = self.epoch_var.get()
             batch = self.batch_var.get()
             imgsz = self.imgsz_var.get()
+            freeze = self.freeze_var.get()
+            try:
+                lr0 = float(self.lr0_var.get())
+                weight_decay = float(self.wd_var.get())
+            except ValueError:
+                messagebox.showwarning("Invalid Input", "LR and Weight Decay must be numbers!", parent=self.dialog)
+                return
 
+            if not (0 <= freeze <= 100):
+                messagebox.showwarning("Invalid Input", "Freeze must be between 0–100 layers!", parent=self.dialog)
+                return
+            if not (1e-5 <= lr0 <= 0.1):
+                messagebox.showwarning("Invalid Input", "LR (lr0) must be between 0.00001–0.1!", parent=self.dialog)
+                return
+            if not (0 <= weight_decay <= 0.1):
+                messagebox.showwarning("Invalid Input", "Weight decay must be between 0–0.1!", parent=self.dialog)
+                return
             if not (1 <= epoch <= 1000):
                 messagebox.showwarning("Invalid Input", "Epochs must be between 1–1000!", parent=self.dialog)
                 return
@@ -424,6 +476,9 @@ class TrainingConfigDialog:
                 'epoch': epoch,
                 'batch': batch,
                 'imgsz': imgsz,
+                'freeze': freeze,
+                'lr0': lr0,
+                'weight_decay': weight_decay,
             }
 
             # base_model hanya relevan jika tidak ada existing model

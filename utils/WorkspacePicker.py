@@ -27,6 +27,7 @@ from .workspace_manager import (list_workspaces, instance_path, count_images, DA
 from .dataset_import import (scan_dataset_folder, detect_dataset_format, import_dataset,
                              yolo_classes_resolved, sanitize_filename_prefix)
 from . import collab
+from . import workspace_manager
 from . import ServerSettingsDialog
 
 
@@ -85,6 +86,9 @@ class WorkspacePickerApp:
                   C_ACCENT, C_ON_ACCENT, bold=True).pack(side=tk.LEFT, padx=(0, 6), pady=12, ipady=5, ipadx=10)
 
         self._btn(header, "⬇  Import Dataset", self._open_import_dataset_dialog,
+                  C_CARD2, C_TXT1, bold=True).pack(side=tk.LEFT, padx=(0, 6), pady=12, ipady=5, ipadx=10)
+
+        self._btn(header, "📂  Open Folder", self._open_install_folder,
                   C_CARD2, C_TXT1, bold=True).pack(side=tk.LEFT, pady=12, ipady=5, ipadx=10)
 
         self.theme_btn = self._btn(
@@ -100,6 +104,20 @@ class WorkspacePickerApp:
             self.server_btn.pack(side=tk.RIGHT, padx=(0, 0), pady=12, ipady=5, ipadx=10)
 
         tk.Frame(self.root, bg=C_BORDER, height=1).pack(fill=tk.X)
+
+    def _open_install_folder(self):
+        """Show the folder Jelibox is installed in (datasets, models, exports... all live there)."""
+        folder = os.path.abspath(workspace_manager.BASE_DIR)
+        try:
+            if sys.platform == 'win32':
+                os.startfile(folder)
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', folder])
+            else:
+                subprocess.Popen(['xdg-open', folder])
+        except Exception as exc:
+            messagebox.showerror("Open Folder",
+                                 f"Could not open the folder:\n{folder}\n\n{exc}", parent=self.root)
 
     def _open_server_settings(self):
         ServerSettingsDialog.open_dialog(self.root)

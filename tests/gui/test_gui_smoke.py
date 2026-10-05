@@ -4,6 +4,7 @@ import os
 import re
 import time
 import tkinter as tk
+from tkinter import ttk
 import unittest
 from unittest import mock
 
@@ -270,6 +271,189 @@ class MainWindowTests(unittest.TestCase):
         self.assertNotEqual(cv2.imread(path)[200, 300].tolist(), [0, 0, 0])
         self._fresh_image(0)
 
+    # ------------------------------------------------- export with augmentation
+    def _augmenter(self, splits=("train",), copies=1):
+        from utils.augmentation import AugmentConfig, Augmenter, OpSetting
+        return Augmenter(AugmentConfig(
+            ops={"brightness": OpSetting(True, 25, 100), "blur": OpSetting(True, 3, 100)},
+            copies=copies, splits=splits, seed=11))
+
+    def _label_the_test_images(self):
+        import utils.AnnotationGUI as agui
+        os.makedirs(agui.yolo_labels_folder, exist_ok=True)
+        os.makedirs(agui.vocdataset_folder, exist_ok=True)
+        for name in ("img1", "img2", "img3"):
+            with open(os.path.join(agui.yolo_labels_folder, name + ".txt"), "w") as f:
+                f.write("0 0.5 0.5 0.4 0.4\n")
+            with open(os.path.join(agui.vocdataset_folder, name + ".xml"), "w") as f:
+                f.write(f"<annotation><filename>{name}.png</filename><path>/somewhere/{name}.png</path>"
+                        "<size><width>320</width><height>240</height><depth>3</depth></size>"
+                        "<object><name>cat</name><bndbox><xmin>10</xmin><ymin>10</ymin>"
+                        "<xmax>100</xmax><ymax>100</ymax></bndbox></object></annotation>")
+
+    def _target(self):
+        import tempfile
+        return tempfile.mkdtemp(prefix="jelibox_export_")
+
+    def test_yolo_export_adds_augmented_copies_with_identical_labels(self):
+        self._label_the_test_images()
+        target = self._target()
+        aug = self._augmenter()
+        self.gui._export_yolo_dataset(target, 100, 0, (".png",), augment=aug)
+        imgs = sorted(os.listdir(os.path.join(target, "train", "images")))
+        lbls = sorted(os.listdir(os.path.join(target, "train", "labels")))
+        self.assertEqual(imgs, ["img1.png", "img1_aug1.png", "img2.png", "img2_aug1.png", "img3.png", "img3_aug1.png"])
+        self.assertEqual(lbls, [n.replace(".png", ".txt") for n in imgs])
+        def read(n):
+            with open(os.path.join(target, "train", "labels", n)) as f:
+                return f.read()
+        self.assertEqual(read("img1.txt"), read("img1_aug1.txt"))
+        self.assertEqual(aug.created, 3)
+
+    def test_yolo_export_without_augmentation_is_unchanged(self):
+        self._label_the_test_images()
+        target = self._target()
+        self.gui._export_yolo_dataset(target, 100, 0, (".png",))
+        self.assertEqual(len(os.listdir(os.path.join(target, "train", "images"))), 3)
+
+    def test_valid_and_test_are_only_augmented_when_asked(self):
+        self._label_the_test_images()
+        names = lambda t, s: os.listdir(os.path.join(t, s, "images"))
+        only_train = self._target()
+        self.gui._export_yolo_dataset(only_train, 34, 33, (".png",), augment=self._augmenter())
+        self.assertEqual((len(names(only_train, "train")), len(names(only_train, "val")), len(names(only_train, "test"))),
+                         (2, 1, 1))
+        everything = self._target()
+        self.gui._export_yolo_dataset(everything, 34, 33, (".png",),
+                                      augment=self._augmenter(splits=("train", "val", "test")))
+        self.assertEqual((len(names(everything, "train")), len(names(everything, "val")), len(names(everything, "test"))),
+                         (2, 2, 2))                        # 3 images split 1/1/1, each gets one copy
+
+    def test_voc_export_copies_xml_and_points_it_at_the_new_image(self):
+        import xml.etree.ElementTree as ET
+        self._label_the_test_images()
+        target = self._target()
+        self.gui._export_voc_dataset(target, 100, 0, (".png",), augment=self._augmenter())
+        files = sorted(os.listdir(os.path.join(target, "train")))
+        self.assertIn("img1_aug1.png", files)
+        self.assertIn("img1_aug1.xml", files)
+        root = ET.parse(os.path.join(target, "train", "img1_aug1.xml")).getroot()
+        self.assertEqual(root.findtext("filename"), "img1_aug1.png")
+        self.assertEqual(root.findtext("path"), "img1_aug1.png")
+        self.assertEqual(root.findtext("object/bndbox/xmax"), "100")
+
+    def test_coco_export_duplicates_annotations_under_new_image_ids(self):
+        import json
+        self._label_the_test_images()
+        target = self._target()
+        self.gui._export_coco_dataset(target, 100, 0, (".png",), augment=self._augmenter())
+        with open(os.path.join(target, "annotations", "instances_train.json"), encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(len(data["images"]), 6)
+        self.assertEqual(len(data["annotations"]), 6)
+        ids = [i["id"] for i in data["images"]]
+        self.assertEqual(len(set(ids)), 6)
+        self.assertEqual({a["image_id"] for a in data["annotations"]}, set(ids))
+        self.assertEqual(len({a["id"] for a in data["annotations"]}), 6)
+        by_name = {i["file_name"]: i["id"] for i in data["images"]}
+        boxes = {a["image_id"]: a["bbox"] for a in data["annotations"]}
+        self.assertEqual(boxes[by_name["img1.png"]], boxes[by_name["img1_aug1.png"]])
+        for i in data["images"]:
+            self.assertTrue(os.path.exists(os.path.join(target, "images", "train", i["file_name"])))
+
+    def test_export_dialog_augmentation_panel(self):
+        opened = []
+        real = tk.Toplevel
+        with mock.patch.object(tk, "Toplevel", side_effect=lambda *a, **k: opened.append(real(*a, **k)) or opened[-1]):
+            self.gui.show_export_dataset_dialog()
+        dlg = opened[0]
+        try:
+            pump(self.root, 0.2)
+            shown = lambda: " ".join(str(w.cget("text")) for w in walk(dlg)
+                                     if isinstance(w, (tk.Checkbutton, tk.Label)) and w.winfo_ismapped())
+            labels = shown()
+            self.assertIn("Augment exported images", labels)
+            self.assertNotIn("Brightness", labels)             # panel starts collapsed
+            toggle = next(w for w in walk(dlg) if isinstance(w, tk.Checkbutton)
+                          and "Augment exported images" in str(w.cget("text")))
+            toggle.invoke()
+            pump(self.root, 0.2)
+            labels = shown()
+            for op in ("Brightness", "Contrast", "Saturation", "Hue", "Blur", "Noise", "Grayscale", "JPEG compression", "Effect", "Value", "Chance"):
+                self.assertIn(op, labels)
+            self.assertLess(dlg.winfo_reqheight(), 800)
+
+            tabs = next(w for w in walk(dlg) if isinstance(w, ttk.Notebook))
+            self.assertEqual(len(tabs.tabs()), 2)
+            self.assertIn("(2)", tabs.tab(0, "text"))           # brightness + blur are ticked by default
+            tabs.select(1)
+            pump(self.root, 0.2)
+            labels = shown()
+            for op in ("Flip horizontal", "Flip vertical", "Rotation"):
+                self.assertIn(op, labels)
+            rotation_box = next(w for w in walk(dlg) if isinstance(w, tk.Checkbutton)
+                                and w.cget("text") == "Rotation")
+            rotation_box.invoke()
+            self.assertIn("(1)", tabs.tab(1, "text"))
+        finally:
+            dlg.destroy()
+
+    def test_yolo_export_flips_and_rotates_labels_with_the_pictures(self):
+        from utils.augmentation import AugmentConfig, Augmenter, OpSetting
+        import cv2
+        self._label_the_test_images()
+        flipper = Augmenter(AugmentConfig(ops={"flip_h": OpSetting(True, 0, 100)},
+                                          copies=1, splits=("train",), seed=1))
+        target = self._target()
+        self.gui._export_yolo_dataset(target, 100, 0, (".png",), augment=flipper)
+        def label(n):
+            with open(os.path.join(target, "train", "labels", n), encoding="utf-8") as f:
+                return f.read().split()
+        self.assertEqual(label("img1.txt"), "0 0.5 0.5 0.4 0.4".split())
+        self.assertEqual(label("img1_aug1.txt"), "0 0.500000 0.500000 0.400000 0.400000".split())
+
+        rotator = Augmenter(AugmentConfig(ops={"rotate": OpSetting(True, 90, 100)},
+                                          copies=1, splits=("train",), seed=2))
+        target = self._target()
+        self.gui._export_yolo_dataset(target, 100, 0, (".png",), augment=rotator)
+        for name in ("img1", "img2", "img3"):
+            img = cv2.imread(os.path.join(target, "train", "images", name + "_aug1.png"))
+            self.assertGreaterEqual(img.shape[0], 240)            # canvas never shrinks below the original
+            parts = label(name + "_aug1.txt")
+            self.assertEqual(len(parts), 5)
+            self.assertTrue(all(0.0 <= float(v) <= 1.0 for v in parts[1:]))
+
+    def test_voc_and_coco_exports_report_the_rotated_image_size(self):
+        import json
+        import xml.etree.ElementTree as ET
+        import cv2
+        from utils.augmentation import AugmentConfig, Augmenter, OpSetting
+        self._label_the_test_images()
+        make = lambda: Augmenter(AugmentConfig(ops={"rotate": OpSetting(True, 45, 100)},
+                                               copies=1, splits=("train",), seed=4))
+        target = self._target()
+        self.gui._export_voc_dataset(target, 100, 0, (".png",), augment=make())
+        img = cv2.imread(os.path.join(target, "train", "img1_aug1.png"))
+        root = ET.parse(os.path.join(target, "train", "img1_aug1.xml")).getroot()
+        self.assertEqual((int(root.findtext("size/width")), int(root.findtext("size/height"))),
+                         (img.shape[1], img.shape[0]))
+        xmax = int(root.findtext("object/bndbox/xmax"))
+        self.assertTrue(0 < xmax <= img.shape[1])
+
+        target = self._target()
+        self.gui._export_coco_dataset(target, 100, 0, (".png",), augment=make())
+        with open(os.path.join(target, "annotations", "instances_train.json"), encoding="utf-8") as f:
+            data = json.load(f)
+        for entry in data["images"]:
+            img = cv2.imread(os.path.join(target, "images", "train", entry["file_name"]))
+            self.assertEqual((entry["width"], entry["height"]), (img.shape[1], img.shape[0]))
+        by_id = {i["id"]: i for i in data["images"]}
+        for ann in data["annotations"]:
+            x, y, w, h = ann["bbox"]
+            self.assertLessEqual(x + w, by_id[ann["image_id"]]["width"] + 1e-6)
+            self.assertLessEqual(y + h, by_id[ann["image_id"]]["height"] + 1e-6)
+        self.assertEqual(len(data["annotations"]), 6)
+
     def test_theme_button_requests_a_restart_and_resumes_on_the_same_image(self):
         before = theme.MODE
         config.state.current_index = 2                       # img3.png, untouched
@@ -434,6 +618,25 @@ class OtherWindowTests(unittest.TestCase):
         self.assertIn("Jelibox", texts)
         self.assertTrue(self.root.title().startswith("Jelibox"))
         find_button(self.root, "Dark" if theme.MODE == "light" else "Light")
+
+    def test_open_folder_button_sits_after_import_dataset_and_opens_the_install_folder(self):
+        import sys
+        from utils.WorkspacePicker import WorkspacePickerApp
+        app = WorkspacePickerApp(self.root, entry_script=os.path.join(os.getcwd(), "x.py"))
+        pump(self.root, 0.3)
+        self.assertLess(find_button(self.root, "Import Dataset").winfo_rootx(),
+                        find_button(self.root, "Open Folder").winfo_rootx())
+        target = "os.startfile" if sys.platform == "win32" else "subprocess.Popen"
+        with mock.patch(target, create=True) as opener:
+            find_button(self.root, "Open Folder").invoke()
+        opener.assert_called_once()
+        shown = opener.call_args[0][0]
+        shown = os.path.abspath(shown if isinstance(shown, str) else shown[-1])
+        self.assertEqual(shown, os.path.abspath(ctx.root))
+        self.assertEqual(self.dialogs.calls, [])
+        with mock.patch(target, create=True, side_effect=OSError("no file manager")):
+            find_button(self.root, "Open Folder").invoke()
+        self.assertEqual(len(self.dialogs.calls), 1)
 
     def _picker(self, flag):
         from utils.WorkspacePicker import WorkspacePickerApp

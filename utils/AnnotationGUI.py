@@ -16,6 +16,10 @@ import shutil
 from .config import (CLASSLIST, state, input_folder, colorsPalette, vocdataset_folder,
                    class_manager, yolo_dataset_folder, yolo_labels_folder, model_path,
                    model_folder, export_model_folder, export_dataset_folder, workspaceName)
+from . import config as _config_module
+from . import augmentation
+from .augmentation import Augmenter, write_image
+from .augment_geometry import yolo_label_text, voc_xml_write, coco_annotation
 from .file_handler import load_annotation_local
 from .polygon_manager import polygon_manager
 from .inferenceObjectDetection import inference_current
@@ -643,8 +647,7 @@ class AnnotationGUI:
     # ----------------------------------------------------------
     def _find_workspace_images(self, image_exts):
         """Collect images from all indexed datasets for the active workspace."""
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        datasets_root = os.path.join(project_root, 'datasetsInput')
+        datasets_root = _config_module.datasets_root
         prefix = workspaceName + '-'
         records = []
 
@@ -744,7 +747,8 @@ class AnnotationGUI:
 
         return annotations
 
-    def _export_coco_dataset(self, target, train_pct, valid_pct, image_exts, progress_cb=None):
+    def _export_coco_dataset(self, target, train_pct, valid_pct, image_exts, progress_cb=None,
+                             augment=None):
         """Export indexed workspace images and VOC annotations as COCO JSON."""
         records = self._find_workspace_images(image_exts)
         if not records:
@@ -764,8 +768,7 @@ class AnnotationGUI:
             'test': records[train_count + valid_count:]
         }
         categories = {name: index + 1 for index, name in enumerate(CLASSLIST)}
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        xml_root = os.path.join(project_root, 'vocdataset', workspaceName)
+        xml_root = vocdataset_folder
 
         for split_name, split_records in splits.items():
             image_dir = os.path.join(target, 'images', split_name)
@@ -781,8 +784,10 @@ class AnnotationGUI:
                 ]
             }
             annotation_id = 1
+            image_id = 0
 
-            for image_id, record in enumerate(split_records, start=1):
+            for record in split_records:
+                image_id += 1
                 try:
                     with Image.open(record['source']) as image:
                         image_width, image_height = image.size
@@ -804,12 +809,38 @@ class AnnotationGUI:
                 })
 
                 xml_path = os.path.join(xml_root, record['base'] + '.xml')
-                for annotation in self._read_coco_annotations(
-                        xml_path, image_width, image_height, categories):
+                annotations = self._read_coco_annotations(
+                    xml_path, image_width, image_height, categories)
+                for annotation in annotations:
                     annotation['id'] = annotation_id
                     annotation['image_id'] = image_id
                     coco['annotations'].append(annotation)
                     annotation_id += 1
+
+                # Photometric copies keep the exact same boxes/polygons
+                if augment is not None:
+                    stem, ext = os.path.splitext(output_name)
+                    for suffix, aug_img, tf in augment.copies(record['source'], split_name):
+                        image_id += 1
+                        aug_name = f"{stem}{suffix}{ext}"
+                        try:
+                            write_image(os.path.join(image_dir, aug_name), aug_img)
+                        except (OSError, ValueError) as exc:
+                            print(f"[COCO] Could not write {aug_name}: {exc}")
+                            image_id -= 1
+                            continue
+                        coco['images'].append({
+                            'id': image_id,
+                            'file_name': aug_name,
+                            'width': aug_img.shape[1],
+                            'height': aug_img.shape[0]
+                        })
+                        for annotation in annotations:
+                            clone = copy.deepcopy(annotation) if tf is None else coco_annotation(annotation, tf)
+                            clone['id'] = annotation_id
+                            clone['image_id'] = image_id
+                            coco['annotations'].append(clone)
+                            annotation_id += 1
 
                 processed += 1
                 if progress_cb:
@@ -823,7 +854,8 @@ class AnnotationGUI:
 
         return target
 
-    def _export_yolo_dataset(self, target, train_pct, valid_pct, image_exts, progress_cb=None):
+    def _export_yolo_dataset(self, target, train_pct, valid_pct, image_exts, progress_cb=None,
+                             augment=None):
         """Export the workspace's YOLO labels as a train/val/test split, pulling
         source images straight from datasetsInput (never from a copied folder)."""
         records = self._find_workspace_images(image_exts)
@@ -867,6 +899,24 @@ class AnnotationGUI:
                 except Exception:
                     pass
 
+                # Augmented copies: photometric ones reuse the label as is, flips/rotations move it
+                if augment is not None:
+                    stem, ext = os.path.splitext(os.path.basename(img_src))
+                    for suffix, aug_img, tf in augment.copies(img_src, split_name):
+                        try:
+                            write_image(os.path.join(out_images, f"{stem}{suffix}{ext}"), aug_img)
+                            label_src = os.path.join(yolo_labels_folder, lbl_name)
+                            label_dst = os.path.join(out_labels, f"{stem}{suffix}.txt")
+                            if tf is None:
+                                shutil.copy2(label_src, label_dst)
+                            else:
+                                with open(label_src, encoding='utf-8') as f:
+                                    moved = yolo_label_text(f.read(), tf)
+                                with open(label_dst, 'w', encoding='utf-8') as f:
+                                    f.write(moved)
+                        except Exception as exc:
+                            print(f"[YOLO] Could not write augmented copy of {stem}: {exc}")
+
                 processed += 1
                 if progress_cb:
                     progress_cb(processed, n, f'Exporting YOLO... {processed}/{n}')
@@ -886,24 +936,13 @@ class AnnotationGUI:
 
         return target
 
-    def _export_voc_dataset(self, target, train_pct, valid_pct, image_exts, progress_cb=None):
+    def _export_voc_dataset(self, target, train_pct, valid_pct, image_exts, progress_cb=None,
+                            augment=None):
         """Export indexed workspace images and their VOC XML annotations."""
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        datasets_input_root = os.path.join(project_root, 'datasetsInput')
-        workspace_prefix = workspaceName
-
-        folders = [f for f in os.listdir(datasets_input_root) if f.startswith(workspace_prefix + '-')] if os.path.isdir(datasets_input_root) else []
-        images_found = []
-        for folder in folders:
-            full = os.path.join(datasets_input_root, folder)
-            if not os.path.isdir(full):
-                continue
-            files = [f for f in os.listdir(full) if os.path.splitext(f)[1].lower() in image_exts]
-            for f in files:
-                images_found.append(os.path.join(full, f))
+        images_found = [r['source'] for r in self._find_workspace_images(image_exts)]
 
         if not images_found:
-            raise ValueError(f'No images found for workspace {workspace_prefix} in datasetsInput')
+            raise ValueError(f'No images found for workspace {workspaceName} in datasetsInput')
 
         random.shuffle(images_found)
         n = len(images_found)
@@ -933,6 +972,19 @@ class AnnotationGUI:
                     except Exception:
                         pass
 
+                # Augmented copies: same objects (moved with the image for flips/rotations)
+                if augment is not None:
+                    img_stem, img_ext = os.path.splitext(os.path.basename(img_path))
+                    for suffix, aug_img, tf in augment.copies(img_path, split_name):
+                        aug_name = f"{img_stem}{suffix}{img_ext}"
+                        try:
+                            write_image(os.path.join(out_dir, aug_name), aug_img)
+                            if os.path.exists(xml_path):
+                                voc_xml_write(xml_path, os.path.join(out_dir, f"{img_stem}{suffix}.xml"),
+                                              aug_name, tf)
+                        except Exception as exc:
+                            print(f"[VOC] Could not write augmented copy of {img_stem}: {exc}")
+
                 processed += 1
                 if progress_cb:
                     progress_cb(processed, n, f'Exporting Pascal VOC... {processed}/{n}')
@@ -942,7 +994,7 @@ class AnnotationGUI:
     def show_export_dataset_dialog(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("Export Dataset")
-        dialog.geometry("520x350")
+        dialog.geometry("560x395")
         dialog.configure(bg=C_BASE)
         dialog.transient(self.root)
         dialog.grab_set()
@@ -950,7 +1002,7 @@ class AnnotationGUI:
 
         dialog.update_idletasks()
         x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
-        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        y = max(0, (dialog.winfo_screenheight() // 2) - 330)
         dialog.geometry(f"+{x}+{y}")
 
         body = tk.Frame(dialog, bg=C_CARD, padx=12, pady=12)
@@ -1125,16 +1177,146 @@ class AnnotationGUI:
             train_var.trace('w', lambda *a: on_spin_change())
             valid_var.trace('w', lambda *a: on_spin_change())
 
+        # ---- Augmentation (photometric) ---------------------------------
+        aug_enabled = tk.BooleanVar(value=False)
+        aug_widgets = []          # everything that must lock while exporting
+        aug_op_vars = {}          # op name -> (enabled, magnitude, probability) tk variables
+        base_height, panel_height = 395, 370
+
+        aug_panel = tk.Frame(body, bg=C_CARD)
+
+        def toggle_aug_panel():
+            if aug_enabled.get():
+                aug_panel.pack(fill=tk.X, after=aug_toggle, pady=(2, 0))
+                height = base_height + panel_height
+            else:
+                aug_panel.pack_forget()
+                height = base_height
+            top = max(0, (dialog.winfo_screenheight() - height) // 2 - 20)
+            dialog.geometry(f"560x{height}+{dialog.winfo_x()}+{top}")
+
+        aug_toggle = tk.Checkbutton(
+            body, text="Augment exported images (random, after the split)",
+            variable=aug_enabled, command=toggle_aug_panel, bg=C_CARD, fg=C_TXT1,
+            selectcolor=C_CARD2, activebackground=C_CARD, activeforeground=C_TXT1,
+            anchor='w', font=('Segoe UI', 9, 'bold'))
+        aug_toggle.pack(fill=tk.X, pady=(6, 0))
+        aug_widgets.append(aug_toggle)
+
+        aug_tabs = ttk.Notebook(aug_panel)
+        aug_tabs.pack(fill=tk.X, pady=(2, 0))
+        tab_frames = {}
+        tab_titles = {'color': 'Color & quality', 'geometry': 'Flip & rotate'}
+        next_row = {}
+        for group in tab_titles:
+            grid = tk.Frame(aug_tabs, bg=C_CARD, padx=4, pady=4)
+            aug_tabs.add(grid, text=tab_titles[group])
+            for col, text in ((0, 'Effect'), (1, 'Value'), (3, 'Chance')):
+                tk.Label(grid, text=text, bg=C_CARD, fg=C_TXT2, anchor='w',
+                         font=('Segoe UI', 9, 'bold')).grid(row=0, column=col, sticky='w', padx=(4, 8))
+            grid.grid_columnconfigure(0, minsize=170)
+            grid.grid_columnconfigure(1, minsize=62)
+            grid.grid_columnconfigure(2, minsize=44)
+            tab_frames[group] = grid
+            next_row[group] = 1
+
+        def refresh_tab_titles(*_):
+            for index, group in enumerate(tab_titles):
+                count = sum(1 for n, (on_, _m, _p) in aug_op_vars.items()
+                            if augmentation.OPERATIONS[n]['group'] == group and on_.get())
+                aug_tabs.tab(index, text=tab_titles[group] + (f'  ({count})' if count else ''))
+
+        for op_name, spec in augmentation.OPERATIONS.items():
+            grid, row = tab_frames[spec['group']], next_row[spec['group']]
+            next_row[spec['group']] += 1
+            on = tk.BooleanVar(value=op_name in ('brightness', 'blur'))
+            mag = tk.StringVar(value=str(spec['default']))
+            prob = tk.StringVar(value='50')
+            aug_op_vars[op_name] = (on, mag, prob)
+            on.trace_add('write', refresh_tab_titles)
+            cb = tk.Checkbutton(grid, text=spec['label'], variable=on, anchor='w',
+                                bg=C_CARD, fg=C_TXT1, selectcolor=C_CARD2,
+                                activebackground=C_CARD, activeforeground=C_TXT1)
+            cb.grid(row=row, column=0, sticky='w')
+            aug_widgets.append(cb)
+            lo, hi = spec['range']
+            if hi > 0:
+                sm = tk.Spinbox(grid, from_=lo, to=hi, textvariable=mag, width=5)
+                sm.grid(row=row, column=1, sticky='w', padx=(4, 0))
+                aug_widgets.append(sm)
+                tk.Label(grid, text=spec['unit'], bg=C_CARD, fg=C_TXT3,
+                         anchor='w').grid(row=row, column=2, sticky='w', padx=(2, 8))
+            else:
+                tk.Label(grid, text=spec.get('fixed_note', '-'), bg=C_CARD, fg=C_TXT3,
+                         anchor='w').grid(row=row, column=1, columnspan=2, sticky='w', padx=(4, 0))
+            sp = tk.Spinbox(grid, from_=1, to=100, textvariable=prob, width=5)
+            sp.grid(row=row, column=3, sticky='w', padx=(4, 0))
+            aug_widgets.append(sp)
+            tk.Label(grid, text='%', bg=C_CARD, fg=C_TXT3).grid(row=row, column=4, sticky='w', padx=(2, 0))
+        refresh_tab_titles()
+
+        aug_opts = tk.Frame(aug_panel, bg=C_CARD)
+        aug_opts.pack(fill=tk.X, pady=(8, 0))
+        copies_var = tk.StringVar(value='1')
+        seed_var = tk.StringVar(value='')
+        aug_valid = tk.BooleanVar(value=False)
+        aug_test = tk.BooleanVar(value=False)
+        tk.Label(aug_opts, text='Copies per image', bg=C_CARD, fg=C_TXT1, anchor='w'
+                 ).grid(row=0, column=0, sticky='w', padx=(4, 6))
+        sc = tk.Spinbox(aug_opts, from_=1, to=10, textvariable=copies_var, width=5)
+        sc.grid(row=0, column=1, sticky='w')
+        tk.Label(aug_opts, text='Seed (optional)', bg=C_CARD, fg=C_TXT1, anchor='w'
+                 ).grid(row=0, column=2, sticky='w', padx=(18, 6))
+        se = tk.Entry(aug_opts, textvariable=seed_var, width=9)
+        se.grid(row=0, column=3, sticky='w')
+        tk.Label(aug_opts, text='Also augment (train always is)', bg=C_CARD, fg=C_TXT1, anchor='w'
+                 ).grid(row=1, column=0, columnspan=2, sticky='w', padx=(4, 6), pady=(3, 0))
+        also = tk.Frame(aug_opts, bg=C_CARD)
+        also.grid(row=1, column=2, columnspan=2, sticky='w', pady=(3, 0))
+        cv_ = tk.Checkbutton(also, text='Valid', variable=aug_valid, bg=C_CARD, fg=C_TXT1,
+                             selectcolor=C_CARD2, activebackground=C_CARD, activeforeground=C_TXT1)
+        cv_.pack(side=tk.LEFT)
+        ct_ = tk.Checkbutton(also, text='Test', variable=aug_test, bg=C_CARD, fg=C_TXT1,
+                             selectcolor=C_CARD2, activebackground=C_CARD, activeforeground=C_TXT1)
+        ct_.pack(side=tk.LEFT, padx=(8, 0))
+        aug_widgets.extend([sc, se, cv_, ct_])
+
+        def build_augment_config():
+            """Read the panel into an AugmentConfig; returns (config, error message)."""
+            ops = {}
+            for op_name, (on, mag, prob) in aug_op_vars.items():
+                spec = augmentation.OPERATIONS[op_name]
+                lo, hi = spec['range']
+                magnitude = max(lo, min(hi, safe_to_int(mag.get()))) if hi > 0 else spec['default']
+                probability = max(1, min(100, safe_to_int(prob.get())))
+                ops[op_name] = augmentation.OpSetting(on.get(), magnitude, probability)
+            if not any(s.enabled for s in ops.values()):
+                return None, 'Tick at least one augmentation, or untick "Augment exported images".'
+            seed_text = seed_var.get().strip()
+            if seed_text and not seed_text.lstrip('-').isdigit():
+                return None, 'Seed must be a whole number (or empty).'
+            splits = ['train'] + (['val'] if aug_valid.get() else []) + (['test'] if aug_test.get() else [])
+            cfg = augmentation.AugmentConfig(
+                ops=ops,
+                copies=max(1, min(10, safe_to_int(copies_var.get()))),
+                splits=tuple(splits),
+                seed=int(seed_text) if seed_text else None)
+            return cfg, None
+
         status_lbl = tk.Label(body, text='', bg=C_CARD, fg=C_TXT1)
         status_lbl.pack(fill=tk.X, pady=(8,0))
 
         progress_bar = ttk.Progressbar(body, orient='horizontal', mode='determinate', maximum=100)
         progress_bar.pack(fill=tk.X, pady=(4,0))
 
+        dialog.geometry(f"560x{base_height}")
+
         def set_ui_locked(locked):
             export_state['active'] = locked
             state = 'disabled' if locked else 'readonly'
             fmt_combo.config(state=state)
+            for w in aug_widgets:
+                w.config(state='disabled' if locked else 'normal')
             sb_train.config(state='disabled' if locked else 'normal')
             sb_valid.config(state='disabled' if locked else 'normal')
             export_btn.config(state='disabled' if locked else 'normal')
@@ -1160,6 +1342,16 @@ class AnnotationGUI:
                 return
 
             image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
+
+            augmenter = None
+            seed = None
+            if aug_enabled.get():
+                aug_config, problem = build_augment_config()
+                if problem:
+                    messagebox.showerror('Augmentation', problem, parent=dialog)
+                    return
+                augmenter = Augmenter(aug_config)
+                seed = aug_config.seed
 
             set_ui_locked(True)
             progress_bar['value'] = 0
@@ -1203,20 +1395,29 @@ class AnnotationGUI:
                     except Exception:
                         os.makedirs(target, exist_ok=True)
 
+                    if seed is not None:
+                        random.seed(seed)       # makes the train/val/test shuffle repeatable too
+
                     if fmt == 'YOLO':
-                        self._export_yolo_dataset(target, t, v, image_exts, progress_cb)
+                        self._export_yolo_dataset(target, t, v, image_exts, progress_cb, augment=augmenter)
                     elif 'Pascal' in fmt or 'XML' in fmt:
-                        self._export_voc_dataset(target, t, v, image_exts, progress_cb)
+                        self._export_voc_dataset(target, t, v, image_exts, progress_cb, augment=augmenter)
                     elif fmt == 'COCO':
-                        self._export_coco_dataset(target, t, v, image_exts, progress_cb)
+                        self._export_coco_dataset(target, t, v, image_exts, progress_cb, augment=augmenter)
                     else:
                         raise ValueError(f'Unknown format: {fmt}')
+
+                    extra = ''
+                    if augmenter is not None:
+                        extra = f'\n\nAugmented copies added: {augmenter.created}'
+                        if augmenter.skipped:
+                            extra += f' ({augmenter.skipped} skipped: no effect fired)'
 
                     def on_success():
                         set_ui_locked(False)
                         progress_bar['value'] = 100
                         status_lbl.config(text=f'Export completed to: {target}')
-                        messagebox.showinfo('Export Completed', f'Dataset exported to:\n{target}', parent=dialog)
+                        messagebox.showinfo('Export Completed', f'Dataset exported to:\n{target}{extra}', parent=dialog)
                     self.root.after(0, on_success)
 
                 except Exception as e:

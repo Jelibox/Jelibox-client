@@ -2,6 +2,7 @@
 Main Annotation GUI Class
 Handles all GUI rendering, user interaction, annotation management, and training
 """
+import copy
 import cv2
 import os
 import tkinter as tk
@@ -79,7 +80,13 @@ class AnnotationGUI:
         # === MASKING TOOL ===
         self.mask_mode = False
         self.mask_polygon_points = []
-        self.masked_regions = []
+        self.hover_pos = None  # last mouse pos (display coords) for polygon rubber-band line
+        self.masked_regions = []  # ZeroFill polygons waiting to be burned into the image file
+
+        # === UNDO / REDO === (per image; cleared whenever the image changes)
+        self.undo_stack = []
+        self.redo_stack = []
+        self._drag_pushed = False
 
         # === SHIFT SELECT BOX ===
         self.shift_selecting = False
@@ -165,7 +172,13 @@ class AnnotationGUI:
         self.root.bind('<Escape>', lambda e: self.on_escape_pressed())
         self.root.bind('<Button-3>', lambda e: self.cancel_polygon_drawing())
         self.root.bind('<Return>', lambda e: self.on_return_pressed())
-        
+        for seq in ('<Control-z>', '<Control-Z>'):
+            self.root.bind(seq, self.on_undo_key)
+        for seq in ('<Control-y>', '<Control-Y>'):
+            self.root.bind(seq, self.on_redo_key)
+        self.root.bind('<Control-Shift-z>', self.on_redo_key)
+        self.root.bind('<Control-Shift-Z>', self.on_redo_key)
+
         for i in range(9):
             self.root.bind(str(i+1), lambda e, idx=i: self.select_class_by_number(idx))
 
@@ -293,6 +306,8 @@ class AnnotationGUI:
         tools.pack(side=tk.LEFT)
 
         quick_defs = [
+            ("↶  Undo",    self.undo,                    'secondary'),
+            ("↷  Redo",    self.redo,                    'secondary'),
             ("🔄  Repeat", self.repeat_annotations,     'secondary'),
             ("🤖  Infer",  self.run_inference,           'primary'),
             ("🗑  Delete", self.delete_image,            'danger'),
@@ -1420,6 +1435,9 @@ class AnnotationGUI:
         self.canvas_offset_y = (canvas_h - new_h) // 2
 
         state.bboxes, state.polygons = load_annotation_local(img_name)
+        self.masked_regions = []
+        self.mask_polygon_points = []
+        self.reset_history()
         state.polygon_points_preview = []
         state.polygon_editing_mode = False
         state.selected_polygon = None
@@ -1438,8 +1456,7 @@ class AnnotationGUI:
         if self.current_img_pil is None:
             return
 
-        img_copy = self.current_img_pil.copy()
-        img_array = np.array(img_copy)
+        img_array = self._base_array()
 
         # Draw all bboxes
         for i, (x1, y1, x2, y2, cls) in enumerate(state.bboxes):
@@ -1513,7 +1530,8 @@ class AnnotationGUI:
                 (int(x * state.display_scale), int(y * state.display_scale))
                 for x, y in state.polygon_points_preview
             ]
-            img_array = polygon_manager.draw_preview_polygon(img_array, preview_pts)
+            img_array = polygon_manager.draw_preview_polygon(
+                img_array, preview_pts, current_mouse_pos=self.hover_pos)
 
         # Draw mask polygon preview
         if self.mask_polygon_points and len(self.mask_polygon_points) > 0:
@@ -1522,7 +1540,8 @@ class AnnotationGUI:
                 for x, y in self.mask_polygon_points
             ]
             img_array = polygon_manager.draw_preview_polygon(
-                img_array, mask_pts, color=(255, 100, 100))
+                img_array, mask_pts, current_mouse_pos=self.hover_pos,
+                color=(255, 100, 100))
 
         # Force bbox indicator
         if state.force_new_bbox:
@@ -1895,7 +1914,7 @@ class AnnotationGUI:
             return
         
         if self.shift_selecting:
-            img_array = np.array(self.current_img_pil)
+            img_array = self._base_array()
             sx1 = min(self.shift_start_x, x)
             sy1 = min(self.shift_start_y, y)
             sx2 = max(self.shift_start_x, x)
@@ -1917,12 +1936,14 @@ class AnnotationGUI:
                                       anchor=tk.NW, image=self.photo)
             return
 
+        self.hover_pos = (x, y)
         if state.annotation_mode == "polygon":
             if (state.polygon_editing_mode and
                     state.selected_polygon is not None and
                     state.selected_polygon_point is not None):
                 x_orig = x / state.display_scale
                 y_orig = y / state.display_scale
+                self.push_undo_once_per_drag()
                 polygon_points = state.polygons[state.selected_polygon][0]
                 polygon_points = polygon_manager.move_polygon_point(
                     polygon_points, state.selected_polygon_point, (x_orig, y_orig))
@@ -1934,7 +1955,7 @@ class AnnotationGUI:
 
         elif self.drawing:
             # Lightweight render: just current bbox preview with crosshair
-            img_array = np.array(self.current_img_pil)
+            img_array = self._base_array()
             
             # Draw bbox preview
             cv2.rectangle(img_array, (self.start_x, self.start_y), (x, y), (0, 200, 255), 2)
@@ -1952,6 +1973,7 @@ class AnnotationGUI:
             # Convert display delta to original scale delta
             dx = (x - state.ix) / state.display_scale
             dy = (y - state.iy) / state.display_scale
+            self.push_undo_once_per_drag()
             state.bboxes[state.selected_bbox][0] += dx
             state.bboxes[state.selected_bbox][1] += dy
             state.bboxes[state.selected_bbox][2] += dx
@@ -1963,6 +1985,7 @@ class AnnotationGUI:
             # Convert display coordinates to original coordinates
             x_orig = x / state.display_scale
             y_orig = y / state.display_scale
+            self.push_undo_once_per_drag()
             x1, y1, x2, y2, cls = state.bboxes[state.selected_bbox]
             min_size = 5 / state.display_scale  # Minimum size in original coordinates
             if state.resize_mode == 'tl':
@@ -2050,6 +2073,7 @@ class AnnotationGUI:
             if w >= 8 and h >= 8:
                 # Ensure coords are integers
                 bbox = [int(x1_orig), int(y1_orig), int(x2_orig), int(y2_orig), state.current_class]
+                self.push_undo()
                 state.bboxes.append(bbox)
                 state.selected_bbox = None       
                 state.selected_bboxes = set()    
@@ -2064,6 +2088,7 @@ class AnnotationGUI:
         self.drawing = False
         self.moving = False
         state.resizing = False
+        self._drag_pushed = False
         state.force_new_bbox = False
         self.update_display()
         self.update_force_label()
@@ -2076,10 +2101,17 @@ class AnnotationGUI:
         x, y = self.get_canvas_coords(event)
         if x is None:
             return
-        
+        self.hover_pos = (x, y)
+
+        # While a polygon (annotation or ZeroFill) is in progress, redraw the
+        # full scene so the line from the last point follows the cursor.
+        if state.polygon_points_preview or self.mask_polygon_points:
+            self.update_display()
+            return
+
         # Only show crosshair if not drawing/moving/resizing and in bbox mode
         if not self.drawing and not self.moving and not state.resizing and state.annotation_mode == "bbox":
-            img_array = np.array(self.current_img_pil)
+            img_array = self._base_array()
             
             # Draw all existing bboxes
             for i, (x1, y1, x2, y2, cls) in enumerate(state.bboxes):
@@ -2141,9 +2173,18 @@ class AnnotationGUI:
                     show_points=False
                 )
             
+            # Keep the in-progress ZeroFill polygon visible while hovering
+            if self.mask_polygon_points:
+                mask_pts = [
+                    (int(px * state.display_scale), int(py * state.display_scale))
+                    for px, py in self.mask_polygon_points
+                ]
+                img_array = polygon_manager.draw_preview_polygon(
+                    img_array, mask_pts, color=(255, 100, 100))
+
             # Draw crosshair at current mouse position
             self.draw_crosshair(img_array, x, y, color=(255, 255, 255))
-            
+
             temp_img = Image.fromarray(img_array)
             self.photo = ImageTk.PhotoImage(temp_img)
             self.canvas.delete("all")
@@ -2332,6 +2373,7 @@ class AnnotationGUI:
                     return
                 elif button_num == 3:
                     if len(points_orig) > 3:
+                        self.push_undo()
                         points_orig = polygon_manager.delete_polygon_point(points_orig, point_idx)
                         state.polygons[poly_idx][0] = points_orig
                         print(f"[POLYGON] Deleted point {point_idx} from polygon {poly_idx}")
@@ -2383,6 +2425,7 @@ class AnnotationGUI:
                                    "Polygon is invalid or has duplicate points.")
             return
 
+        self.push_undo()
         state.polygons.append([state.polygon_points_preview.copy(), state.current_class])
         print(f"[POLYGON] Finished polygon with {len(state.polygon_points_preview)} points. "
               f"Class: {state.current_class}")
@@ -2495,13 +2538,13 @@ class AnnotationGUI:
         def on_ok():
             new_class = class_var.get()
             if new_class and new_class != current_class:
+                self.push_undo()
                 if annotation_type == 'bbox':
                     state.bboxes[index][4] = new_class
                     print(f"[GUI] Changed bbox class: {current_class} → {new_class}")
                 elif annotation_type == 'polygon':
                     state.polygons[index][1] = new_class
                     print(f"[GUI] Changed polygon class: {current_class} → {new_class}")
-                self.save_current()
                 self.update_display()
                 self.update_info()
                 dialog.destroy()
@@ -2540,7 +2583,8 @@ class AnnotationGUI:
                                 "ZeroFill masking mode activated!\n\n"
                                 "Click to add polygon points (min 3)\n"
                                 "Double-click or Enter to finish\n"
-                                "The area inside will be blackened\n"
+                                "The area inside is blackened on screen right away and\n"
+                                "written to the image when you switch images (Ctrl+Z to undo)\n"
                                 "Press ZeroFill again to cancel")
         else:
             self.mask_btn.config(text="⬛ ZeroFill: OFF", bg=C_CARD2, fg=C_TXT1,
@@ -2579,27 +2623,118 @@ class AnnotationGUI:
                                    "Polygon is invalid or has duplicate points.")
             return
 
+        self.push_undo()
         self.masked_regions.append(self.mask_polygon_points.copy())
-        print(f"[MASKING] Finished polygon with {len(self.mask_polygon_points)} points")
+        print(f"[MASKING] Finished polygon with {len(self.mask_polygon_points)} points "
+              "(pending until you leave this image)")
         self.mask_polygon_points = []
-        self.apply_mask_to_current_image()
         self.update_display()
 
-    def apply_mask_to_current_image(self):
+    def commit_pending_masks(self):
+        """Burn the pending ZeroFill polygons into the image file, then forget them."""
         if not self.masked_regions or self.current_img_pil is None:
-            return
+            self.masked_regions = []
+            return False
         img_name = self.images[state.current_index]
         img_path = os.path.join(input_folder, img_name)
         orig_img = cv2.imread(img_path)
         if orig_img is None:
             print(f"[MASKING] Error: Could not read {img_name}")
-            return
+            return False
         for polygon_points in self.masked_regions:
             pts = np.array(polygon_points, dtype=np.int32)
             cv2.fillPoly(orig_img, [pts], (0, 0, 0))
         cv2.imwrite(img_path, orig_img)
         print(f"[MASKING] Applied {len(self.masked_regions)} mask(s) to {img_name}")
-        self.load_current_image()
+        self.masked_regions = []
+        # Keep the on-screen pixels in sync now that the masks live in the file
+        state.frame = cv2.resize(orig_img, (state.display_width, state.display_height))
+        self.current_img_pil = Image.fromarray(cv2.cvtColor(state.frame, cv2.COLOR_BGR2RGB))
+        return True
+
+    # ----------------------------------------------------------
+    #  Undo / Redo (per image, snapshot based)
+    # ----------------------------------------------------------
+    HISTORY_LIMIT = 200
+
+    def _base_array(self):
+        """Current image as an array with the pending ZeroFill masks drawn in."""
+        arr = np.array(self.current_img_pil)
+        for polygon_points in self.masked_regions:
+            pts = np.array([(int(x * state.display_scale), int(y * state.display_scale))
+                            for x, y in polygon_points], dtype=np.int32)
+            cv2.fillPoly(arr, [pts], (0, 0, 0))
+        return arr
+
+    def _snapshot(self):
+        return copy.deepcopy((state.bboxes, state.polygons, self.masked_regions))
+
+    def _restore(self, snap):
+        bboxes, polygons, masks = copy.deepcopy(snap)
+        state.bboxes = bboxes
+        state.polygons = polygons
+        self.masked_regions = masks
+        state.selected_bbox = None
+        state.selected_bboxes = set()
+        state.selected_polygon = None
+        state.selected_polygon_point = None
+        state.polygon_editing_mode = False
+        self.update_display()
+        self.update_info()
+
+    def push_undo(self):
+        """Record the state *before* an edit. Call this right before mutating."""
+        self.undo_stack.append(self._snapshot())
+        del self.undo_stack[:-self.HISTORY_LIMIT]
+        self.redo_stack.clear()
+
+    def reset_history(self):
+        self.undo_stack = []
+        self.redo_stack = []
+        self._drag_pushed = False
+
+    def push_undo_once_per_drag(self):
+        if not self._drag_pushed:
+            self.push_undo()
+            self._drag_pushed = True
+
+    def undo(self):
+        # While a polygon is half-drawn, undo takes back its last point first.
+        if self.mask_polygon_points:
+            self.mask_polygon_points.pop()
+            self.update_display()
+            return
+        if state.polygon_points_preview:
+            state.polygon_points_preview.pop()
+            self.update_display()
+            return
+        if not self.undo_stack:
+            return
+        self.redo_stack.append(self._snapshot())
+        self._restore(self.undo_stack.pop())
+        print(f"[GUI] Undo ({len(self.undo_stack)} left)")
+
+    def redo(self):
+        if not self.redo_stack:
+            return
+        self.undo_stack.append(self._snapshot())
+        self._restore(self.redo_stack.pop())
+        print(f"[GUI] Redo ({len(self.redo_stack)} left)")
+
+    def _typing_in_entry(self, event):
+        return event.widget.winfo_class() in ('Entry', 'TEntry', 'Spinbox', 'Text')
+
+    def on_undo_key(self, event):
+        if self._typing_in_entry(event):
+            return
+        self.undo()
+        return 'break'
+
+    def on_redo_key(self, event):
+        if self._typing_in_entry(event):
+            return
+        self.redo()
+        return 'break'
 
     def cancel_mask_polygon(self):
         if len(self.mask_polygon_points) > 0:
@@ -2646,7 +2781,11 @@ class AnnotationGUI:
     def save_current(self):
         """Save current annotations - force zoom to 1x (normalized scale) first"""
         img_name = self.images[state.current_index]
-        
+
+        # Pending ZeroFill masks become real pixels now, and the undo record is spent
+        self.commit_pending_masks()
+        self.reset_history()
+
         # Store current zoom level untuk restore setelah save
         saved_zoom = state.display_scale
         
@@ -2713,6 +2852,9 @@ class AnnotationGUI:
     #  Annotation editing
     # ----------------------------------------------------------
     def delete_selected_bbox(self):
+        if (state.selected_bbox is not None or getattr(state, 'selected_bboxes', None)
+                or state.selected_polygon is not None):
+            self.push_undo()
         if state.selected_bbox is not None:
             deleted_class = state.bboxes[state.selected_bbox][4]
             del state.bboxes[state.selected_bbox]
@@ -2750,6 +2892,7 @@ class AnnotationGUI:
                 idx = 0
             idx = (idx + 1) % len(CLASSLIST)
             new_class = CLASSLIST[idx]
+            self.push_undo()
             state.bboxes[state.selected_bbox][4] = new_class
             print(f"[GUI] Changed bbox class: {current_class} → {new_class}")
             self.update_display()
@@ -2761,6 +2904,7 @@ class AnnotationGUI:
                 idx = 0
             idx = (idx + 1) % len(CLASSLIST)
             new_class = CLASSLIST[idx]
+            self.push_undo()
             state.polygons[state.selected_polygon][1] = new_class
             print(f"[GUI] Changed polygon class: {current_class} → {new_class}")
             self.update_display()
@@ -2906,9 +3050,15 @@ class AnnotationGUI:
     #  Inference & misc actions
     # ----------------------------------------------------------
     def run_inference(self):
-        self.save_current()
+        # Not saved here: the result lands in the in-memory record (undoable)
+        # and is written out when you leave the image.
+        before = self._snapshot()
         print("[GUI] Running inference...")
         ok, message = inference_current(self.images, state.current_index)
+        if (len(state.bboxes), len(state.polygons)) != (len(before[0]), len(before[1])):
+            self.undo_stack.append(before)
+            del self.undo_stack[:-self.HISTORY_LIMIT]
+            self.redo_stack.clear()
 
         self.update_display()
         self.update_info()
@@ -3183,6 +3333,7 @@ class AnnotationGUI:
     def repeat_annotations(self):
         global CLASSLIST, colorsPalette
         CLASSLIST = class_manager.get_classes()
+        self.push_undo()
         repeat_last_annotations(self.images, state.current_index, CLASSLIST)
         self.update_display()
         self.update_info()

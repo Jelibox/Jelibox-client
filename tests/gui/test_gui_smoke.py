@@ -196,6 +196,80 @@ class MainWindowTests(unittest.TestCase):
         pump(self.root, 0.4)
         self.assertEqual(config.state.current_index, 0)
 
+    # ------------------------------------------------------------ undo / redo
+    def _fresh_image(self, index=0):
+        config.state.current_index = index
+        self.gui.load_current_image()
+        self.gui.update_display()
+
+    def test_undo_redo_buttons_and_shortcuts_exist(self):
+        find_button(self.root, "Undo")
+        find_button(self.root, "Redo")
+        bound = set(self.root.bind())
+        for seq in ("<Control-Key-z>", "<Control-Key-y>"):
+            self.assertIn(seq, bound)
+
+    def test_undo_and_redo_bboxes_polygons_and_edits(self):
+        self._fresh_image()
+        g, s = self.gui, config.state
+        g.push_undo()
+        s.bboxes.append([10, 10, 80, 80, "cat"])
+        g.push_undo()
+        s.polygons.append([[(5, 5), (50, 5), (50, 50)], "cat"])
+        g.undo()
+        self.assertEqual((len(s.bboxes), len(s.polygons)), (1, 0))
+        g.undo()
+        self.assertEqual(len(s.bboxes), 0)
+        g.undo()                                            # nothing left: harmless
+        g.redo()
+        g.redo()
+        self.assertEqual((len(s.bboxes), len(s.polygons)), (1, 1))
+        g.undo()
+        g.push_undo()                                       # a new edit forks history
+        self.assertEqual(g.redo_stack, [])
+
+    def test_undo_takes_back_the_last_point_of_a_half_drawn_polygon(self):
+        self._fresh_image()
+        s = config.state
+        s.polygon_points_preview = [(1, 1), (30, 1), (30, 30)]
+        self.gui.undo()
+        self.assertEqual(s.polygon_points_preview, [(1, 1), (30, 1)])
+        s.polygon_points_preview = []
+
+    def test_changing_image_clears_the_record(self):
+        self._fresh_image(0)
+        self.gui.push_undo()
+        config.state.bboxes.append([10, 10, 80, 80, "cat"])
+        self.gui.next_image()
+        self.assertEqual((self.gui.undo_stack, self.gui.redo_stack), ([], []))
+        self.gui.undo()
+        self.assertEqual(config.state.bboxes, [])           # nothing leaked into image 2
+        self._fresh_image(0)
+
+    def test_zerofill_is_pending_until_the_image_changes(self):
+        import cv2
+        self._fresh_image(0)
+        g = self.gui
+        path = os.path.join(ctx.instance_dir, "img1.png")
+        before = cv2.imread(path).copy()
+        g.mask_mode = True
+        g.mask_polygon_points = [(20, 20), (120, 20), (120, 120), (20, 120)]
+        g.finish_mask_polygon()
+        g.mask_mode = False
+        self.assertEqual(len(g.masked_regions), 1)
+        self.assertTrue((cv2.imread(path) == before).all(), "file must not change yet")
+        self.assertEqual(g._base_array()[60, 60].tolist(), [0, 0, 0], "but it shows on screen")
+        g.undo()
+        self.assertEqual(g.masked_regions, [])
+        self.assertTrue((cv2.imread(path) == before).all())
+        g.redo()
+        self.assertEqual(len(g.masked_regions), 1)
+        g.next_image()                                      # commit happens here
+        self.assertEqual(g.masked_regions, [])
+        self.assertEqual(cv2.imread(path)[60, 60].tolist(), [0, 0, 0])
+        self.assertNotEqual(cv2.imread(path)[200, 300].tolist(), [0, 0, 0])
+        self._fresh_image(0)
+
     def test_theme_button_requests_a_restart_and_resumes_on_the_same_image(self):
         before = theme.MODE
         config.state.current_index = 2                       # img3.png, untouched

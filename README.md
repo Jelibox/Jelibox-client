@@ -64,10 +64,11 @@ curl -fsSL https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install
 
 What happens:
 
-- Jelibox is unpacked into `%LOCALAPPDATA%\Jelibox` (Windows) or `~/.local/share/jelibox` (Linux).
+- The installer first asks where to install. Press **Enter** for the default - a `Jelibox` folder in your user folder, next to Downloads/Documents/Pictures (`%USERPROFILE%\Jelibox` on Windows, `~/jelibox` on Linux) - press **B** to pick a folder in a window (Linux needs `zenity` or `kdialog` for that), or type a path. A `Jelibox` folder is created inside the folder you choose. An existing install in the old default location (`%LOCALAPPDATA%\Jelibox` / `~/.local/share/jelibox`) is found and updated in place without asking.
 - The normal installer then runs: it installs Python 3.12 if missing, creates a virtual environment, installs the dependencies and adds shortcuts. Windows asks for administrator permission once; Linux asks for your `sudo` password.
 - **Updating:** run the same command again. It reports what it found (`Found Jelibox v0.1.0 ... updating to v0.2.0`), updates in place, and never touches your datasets, models or configs. If you are already on the newest version it says so and stops (`JELIBOX_FORCE=1` reinstalls anyway). A folder that is a `git` checkout is left alone - use `git pull` there.
 - **Find the install folder:** click **Open Folder** in the Jelibox header.
+- **Move it somewhere else:** click **Move Jelibox** in the workspace picker and choose a folder. Jelibox creates `<folder>/Jelibox`, builds a fresh virtual environment there (same package versions, needs internet), moves your datasets, models and configs over, and deletes the old venv and folder. If anything fails before the files are moved, the old install is left untouched.
 - **A specific version:** set `JELIBOX_VERSION` first, for example `$env:JELIBOX_VERSION="v0.1.0"` (PowerShell) or `JELIBOX_VERSION=v0.1.0 curl ... | bash`. Other options: `JELIBOX_HOME` (install location), `JELIBOX_NO_INSTALL=1` (download and unpack only) and `JELIBOX_FORCE=1` (reinstall even if current).
 - **Want to read it before running it?** That is a good habit. The scripts are short: [`install.ps1`](install.ps1) and [`install.sh`](install.sh).
 - **Uninstall:** delete the install folder above, plus the Jelibox shortcuts (Desktop / application menu).

@@ -217,7 +217,7 @@ with ctrl_col:
                         info_dict = ydl.extract_info(yt_url, download=False)
                         target_vid = info_dict['url']
                 except Exception as e:
-                    st.error(f"Gagal memuat YouTube: {e}")
+                    st.error(f"Could not load YouTube: {e}")
                     st.session_state.streaming = False
         else:
             suffix = os.path.splitext(uploaded_file.name)[-1]

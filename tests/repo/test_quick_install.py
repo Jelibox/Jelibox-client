@@ -84,6 +84,15 @@ class ScriptContentTests(unittest.TestCase):
         self.assertIn('trap "rm -rf', text)                       # expands $tmp when set, not when it fires
         self.assertIn("/dev/tty", text)                           # sudo prompt needs the keyboard
 
+    def test_both_installers_ask_where_to_install_unless_told(self):
+        ps, sh = read("install.ps1"), read("install.sh")
+        self.assertIn("Read-Host", ps)                            # works even when piped into iex
+        self.assertIn("-not $dest", ps)                           # JELIBOX_HOME set = no question
+        self.assertIn("FolderBrowserDialog", ps)                  # B = pick the folder in a window
+        self.assertIn("< /dev/tty", sh)                           # stdin is the script itself when piped
+        self.assertIn('[ -z "$dest" ]', sh)
+        self.assertIn("zenity", sh)
+
     def test_bash_syntax(self):
         bash = find_bash()
         if not bash:

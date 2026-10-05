@@ -64,9 +64,9 @@ fi
 # ──────────────────────────────────────────
 if [[ "$OS" == "arch" || "$OS" == "manjaro" ]]; then
     echo "[*] Installing Python $PYTHON_VERSION_PREFIX, Tkinter, and virtual environment dependencies..."
-    # Memaksa instalasi python312 agar seragam, jika tidak ada di repo resmi mungkin butuh AUR (yay -S python312)
+    # Force python312 so every machine matches; if it is missing from the official repo it may need the AUR (yay -S python312)
     sudo pacman -S --noconfirm python312 tk mesa libcanberra || {
-        echo "[!] Gagal install python312 via pacman. Pastikan 'python312' tersedia atau gunakan AUR (contoh: yay -S python312)"
+        echo "[!] Failed to install python312 via pacman. Make sure python312 is available or use the AUR (for example: yay -S python312)"
         exit 1
     }
 fi
@@ -91,7 +91,7 @@ fi
 PYTHON_ACTUAL_VERSION="$($PYTHON_BIN -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')"
 echo "[OK] Python $PYTHON_ACTUAL_VERSION detected."
 
-# Cek apakah versi python depannya "3.12"
+# Check that the Python version starts with "3.12"
 if [[ "$PYTHON_ACTUAL_VERSION" != ${PYTHON_VERSION_PREFIX}.* ]]; then
     echo "[ERROR] Jelibox requires Python $PYTHON_VERSION_PREFIX.x exactly."
     echo "[ERROR] The detected interpreter is $PYTHON_ACTUAL_VERSION."

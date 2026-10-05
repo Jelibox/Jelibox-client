@@ -3,7 +3,7 @@
 #   irm https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.ps1 | iex
 #
 # What it does (read it - it is short):
-#   1. looks for an existing Jelibox in %LOCALAPPDATA%\Jelibox
+#   1. asks where to install (Enter = %USERPROFILE%\Jelibox, B = browse) and looks for an existing Jelibox there
 #   2. finds the newest Jelibox release on GitHub (falls back to the main branch)
 #   3. not installed yet   -> installs the newest version fresh
 #      installed, older    -> updates it (your datasets, models and configs are never touched)
@@ -14,7 +14,7 @@
 #
 # Optional environment variables (set them before running the command):
 #   JELIBOX_VERSION     install a specific release, e.g.  v0.1.0   (default: newest release)
-#   JELIBOX_HOME        install somewhere else               (default: %LOCALAPPDATA%\Jelibox)
+#   JELIBOX_HOME        install here without being asked     (default: you are asked; Enter = %USERPROFILE%\Jelibox)
 #   JELIBOX_NO_INSTALL  1 = only download and unpack, do not run the installer
 #   JELIBOX_FORCE       1 = reinstall even when this version is already installed
 #   JELIBOX_ARCHIVE     path to a local .zip instead of downloading (offline installs, tests)
@@ -27,7 +27,6 @@ function Install-Jelibox {
     } catch { }
 
     $repo    = 'Jelibox/Jelibox-client'
-    $dest    = if ($env:JELIBOX_HOME) { $env:JELIBOX_HOME } else { Join-Path $env:LOCALAPPDATA 'Jelibox' }
     $version = $env:JELIBOX_VERSION
     $archive = $env:JELIBOX_ARCHIVE
 
@@ -35,6 +34,57 @@ function Install-Jelibox {
     function Fail([string]$text) { Write-Host "[Jelibox] $text" -ForegroundColor Red; throw $text }
 
     if ($env:OS -ne 'Windows_NT') { Fail 'This installer is for Windows. On Linux use install.sh.' }
+
+    # Where to install: JELIBOX_HOME if set, otherwise ask. Enter = the default (a "Jelibox" folder next to Downloads,
+    # Documents, Pictures), B = pick a folder in a window, or type a path. A "Jelibox" folder is created inside the
+    # chosen folder (a path that already ends in "Jelibox" is used as-is).
+    $dest = $env:JELIBOX_HOME
+    if (-not $dest) {
+        # Earlier versions of this installer always used %LOCALAPPDATA%\Jelibox - keep updating that one instead of asking.
+        $legacy = Join-Path $env:LOCALAPPDATA 'Jelibox'
+        if ((Test-Path -LiteralPath (Join-Path $legacy '.jelibox-version')) -or (Test-Path -LiteralPath (Join-Path $legacy 'utils\AnnotationGUI.py'))) {
+            $dest = $legacy
+            Say "Found an existing Jelibox in $dest - it will be updated there. (To relocate it, use Move Jelibox inside the app.)"
+        }
+    }
+    if (-not $dest) {
+        $suggested = Join-Path $env:USERPROFILE 'Jelibox'
+        $answer = ''
+        try {
+            Write-Host ''
+            Write-Host '[Jelibox] Where should Jelibox be installed?' -ForegroundColor Cyan
+            Write-Host "          [Enter]  default: $suggested"
+            Write-Host '          [B]      browse - pick a folder in a window'
+            Write-Host '          or type a folder path'
+            $answer = Read-Host '          Your choice'
+        } catch {
+            Say 'No keyboard available - using the default location.'
+        }
+        $answer = "$answer".Trim().Trim('"')
+        if ($answer -ieq 'b') {
+            $answer = ''
+            try {
+                Add-Type -AssemblyName System.Windows.Forms
+                $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true }   # keeps the window in front of the console
+                $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+                $dialog.Description = 'Choose where Jelibox should be installed (a "Jelibox" folder is created inside it)'
+                $dialog.SelectedPath = $env:USERPROFILE
+                if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { $answer = $dialog.SelectedPath }
+                $owner.Dispose()
+            } catch {
+                Say 'Could not open the folder window.'
+            }
+            if (-not $answer) { Say 'No folder chosen - using the default location.' }
+        }
+        if ($answer) {
+            $answer = [Environment]::ExpandEnvironmentVariables($answer)
+            if ($answer -eq '~' -or $answer.StartsWith('~\') -or $answer.StartsWith('~/')) { $answer = $env:USERPROFILE + $answer.Substring(1) }
+            $answer = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($answer)
+            $dest = if ((Split-Path -Leaf $answer) -ieq 'Jelibox') { $answer } else { Join-Path $answer 'Jelibox' }
+        } else {
+            $dest = $suggested
+        }
+    }
 
     # Is Jelibox already here? (.jelibox-version is written by this script; older installs only have the code.)
     if (Test-Path -LiteralPath (Join-Path $dest '.git')) {

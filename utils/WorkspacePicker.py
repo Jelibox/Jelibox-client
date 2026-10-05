@@ -27,6 +27,7 @@ from .workspace_manager import (list_workspaces, instance_path, count_images, DA
 from .dataset_import import (scan_dataset_folder, detect_dataset_format, import_dataset,
                              yolo_classes_resolved, sanitize_filename_prefix)
 from . import collab
+from . import relocate
 from . import workspace_manager
 from . import ServerSettingsDialog
 
@@ -96,6 +97,9 @@ class WorkspacePickerApp:
             C_CARD2, C_TXT1, font_size=8, bold=True)
         self.theme_btn.pack(side=tk.RIGHT, padx=14, pady=12, ipady=5, ipadx=10)
 
+        self._btn(header, "⇄  Move Jelibox", self._move_jelibox,
+                  C_CARD2, C_TXT1, font_size=8, bold=True).pack(side=tk.RIGHT, pady=12, ipady=5, ipadx=10)
+
         # Hidden until the server feature is switched on (see utils/collab).
         self.server_btn = None
         if collab.enabled():
@@ -129,6 +133,43 @@ class WorkspacePickerApp:
             subprocess.Popen([self.python_exe, self.entry_script])
         except OSError as e:
             messagebox.showerror("Theme", f"Theme saved, but Jelibox could not restart:\n{e}", parent=self.root)
+            return
+        self.root.destroy()
+
+    def _move_jelibox(self):
+        """Move the whole install (+ a fresh venv) into <chosen folder>/Jelibox, then quit.
+        The work is done by a detached helper because the running venv can't delete itself."""
+        if self.process is not None and self.process.poll() is None:
+            messagebox.showwarning("Move Jelibox", "Close the annotation window first.", parent=self.root)
+            return
+
+        chosen = filedialog.askdirectory(
+            title="Choose where the new Jelibox folder should be created", parent=self.root)
+        if not chosen:
+            return
+        chosen = os.path.normpath(chosen)
+        error = relocate.validate_target(workspace_manager.BASE_DIR, chosen)
+        if error:
+            messagebox.showerror("Move Jelibox", error, parent=self.root)
+            return
+
+        target = relocate.target_for(chosen)
+        if not messagebox.askyesno(
+            "Move Jelibox",
+            f"Move Jelibox to:\n{target}\n\n"
+            f"• A new Jelibox folder and a new virtual environment are created there "
+            f"(the same package versions are reinstalled - this needs internet and can take a while).\n"
+            f"• Your datasets, models, configs and exports are moved across.\n"
+            f"• The old venv and the old Jelibox folder ({workspace_manager.BASE_DIR}) are deleted.\n\n"
+            f"Jelibox will close and a progress window takes over. Continue?",
+            icon='warning', parent=self.root
+        ):
+            return
+
+        try:
+            relocate.spawn_helper(workspace_manager.BASE_DIR, target, relocate.running_venv(workspace_manager.BASE_DIR))
+        except OSError as e:
+            messagebox.showerror("Move Jelibox", f"Could not start the move:\n{e}", parent=self.root)
             return
         self.root.destroy()
 

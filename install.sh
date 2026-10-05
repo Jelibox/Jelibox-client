@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.sh | bash
 #
 # What it does (read it - it is short):
-#   1. looks for an existing Jelibox in ~/.local/share/jelibox
+#   1. asks where to install (Enter = ~/jelibox, B = browse) and looks for an existing Jelibox there
 #   2. finds the newest Jelibox release on GitHub (falls back to the main branch)
 #   3. not installed yet   -> installs the newest version fresh
 #      installed, older    -> updates it (your datasets, models and configs are never touched)
@@ -15,7 +15,7 @@
 #
 # Optional environment variables (set them before the command):
 #   JELIBOX_VERSION     install a specific release, e.g.  v0.1.0   (default: newest release)
-#   JELIBOX_HOME        install somewhere else               (default: ~/.local/share/jelibox)
+#   JELIBOX_HOME        install here without being asked     (default: you are asked; Enter = ~/jelibox)
 #   JELIBOX_NO_INSTALL  1 = only download and unpack, do not run the installer
 #   JELIBOX_FORCE       1 = reinstall even when this version is already installed
 #   JELIBOX_ARCHIVE     path to a local .tar.gz instead of downloading (offline installs, tests)
@@ -26,7 +26,7 @@ main() {
     set -euo pipefail
 
     local repo="Jelibox/Jelibox-client"
-    local dest="${JELIBOX_HOME:-$HOME/.local/share/jelibox}"
+    local dest="${JELIBOX_HOME:-}"
     local version="${JELIBOX_VERSION:-}"
     local archive="${JELIBOX_ARCHIVE:-}"
     local installed="" existing=0 url=""
@@ -45,6 +45,57 @@ main() {
             fail "Neither 'curl' nor 'wget' is installed. Install one of them (for example: sudo apt install curl) and run this again."
         fi
     }
+
+    # Where to install: JELIBOX_HOME if set, otherwise ask on the terminal (stdin is the piped script, so read /dev/tty).
+    # Enter = the default (a "jelibox" folder in your home folder), B = pick a folder in a window (needs zenity or kdialog),
+    # or type a path. A "jelibox" folder is created inside the chosen folder (a path already ending in jelibox is used as-is).
+    if [ -z "$dest" ]; then
+        # Earlier versions of this installer always used ~/.local/share/jelibox - keep updating that one instead of asking.
+        local legacy="$HOME/.local/share/jelibox"
+        if [ -f "$legacy/.jelibox-version" ] || [ -f "$legacy/utils/AnnotationGUI.py" ]; then
+            dest="$legacy"
+            say "Found an existing Jelibox in $dest - it will be updated there. (To relocate it, use Move Jelibox inside the app.)"
+        fi
+    fi
+    if [ -z "$dest" ]; then
+        local suggested="$HOME/jelibox" answer=""
+        if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+            {
+                printf '\n\033[1;36m[Jelibox]\033[0m Where should Jelibox be installed?\n'
+                printf '          [Enter]  default: %s\n' "$suggested"
+                printf '          [B]      browse - pick a folder in a window\n'
+                printf '          or type a folder path\n'
+                printf '          Your choice: '
+            } > /dev/tty
+            read -r answer < /dev/tty || answer=""
+            if [ "$answer" = "b" ] || [ "$answer" = "B" ]; then
+                answer=""
+                if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null 2>&1; then
+                    answer="$(zenity --file-selection --directory --title="Where should Jelibox be installed?" --filename="$HOME/" 2>/dev/null || true)"
+                elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v kdialog >/dev/null 2>&1; then
+                    answer="$(kdialog --getexistingdirectory "$HOME" 2>/dev/null || true)"
+                else
+                    say "No folder window available (install zenity or kdialog) - using the default location." > /dev/tty
+                fi
+                [ -n "$answer" ] || say "No folder chosen - using the default location." > /dev/tty
+            fi
+        fi
+        if [ -n "$answer" ]; then
+            case "$answer" in
+                "~"|"~/"*) answer="$HOME${answer#"~"}" ;;
+                /*) ;;
+                *) answer="$PWD/$answer" ;;
+            esac
+            answer="${answer%/}"
+            if [ "$(basename "$answer" | tr '[:upper:]' '[:lower:]')" = "jelibox" ]; then
+                dest="$answer"
+            else
+                dest="$answer/jelibox"
+            fi
+        else
+            dest="$suggested"
+        fi
+    fi
 
     # Is Jelibox already here? (.jelibox-version is written by this script; older installs only have the code.)
     if [ -d "$dest/.git" ]; then

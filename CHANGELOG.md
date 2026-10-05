@@ -10,6 +10,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 ## [Unreleased]
 
 ### Added
+- **Move Jelibox** button in the workspace picker: moves the whole install (data included) to `<chosen folder>/Jelibox`, creates a new virtual environment with the same packages, and removes the old venv and folder.
+- The one-line installers (`install.ps1`, `install.sh`) now ask where to install: Enter for the default (`Jelibox` in your user folder), `B` to pick a folder in a window, or type a path. `JELIBOX_HOME` still skips the question, and an existing install in the old default location is still updated in place.
 - Groundwork for team collaboration (hidden unless `JELIBOX_COLLAB=1` or `"collab_enabled": true` in `configs/_app.json`): a per-installation device ID, a list of servers you can add, edit and remove from a ⚙ Server button in the workspace picker, and a separate private file for access keys. Jelibox still makes no network connections.
 
 ## [0.2.0] - 2026-10-04

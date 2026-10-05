@@ -3207,6 +3207,9 @@ class AnnotationGUI:
             "--epochs",         str(current_epoch),
             "--batch",          str(current_batch),
             "--imgsz",          str(current_imgsz),
+            "--freeze",         str(config['freeze']),
+            "--lr0",            str(config['lr0']),
+            "--weight_decay",   str(config['weight_decay']),
         ]
         if selected_base:
             cmd += ["--base_model", selected_base]

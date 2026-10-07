@@ -5,15 +5,11 @@ title Jelibox Installer
 cd /d "%~dp0"
 
 :: =========================================================
-:: ADMIN ELEVATION CHECK
+:: ADMINISTRATOR RIGHTS
+:: A normal install needs none: Python lives inside this folder. Windows is only asked for permission
+:: when a step really needs it (the Visual C++ runtime, or the system-wide Python fallback).
 :: =========================================================
-net session >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo This installer requires administrator privileges.
-    echo Requesting elevation...
-    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -WorkingDirectory '%~dp0' -Verb RunAs"
-    exit /b
-)
+set "SELF=%~f0"
 
 set FAILED=0
 set TORCH_STATUS=SUCCESS
@@ -27,6 +23,7 @@ set PYTHON_INSTALLER=%TEMP%\python_installer.exe
 
 :: The one-line installer (install.ps1) drops this marker so nobody has to answer Y/N.
 set ASSUME_YES=0
+if /i "%~1"=="/yes" set ASSUME_YES=1
 if exist "%~dp0.install-yes" (
     set ASSUME_YES=1
     del "%~dp0.install-yes" >nul 2>&1
@@ -91,7 +88,7 @@ if not errorlevel 1 (
     )
 ) else (
     :: Fallback for systems where the NVIDIA utility is unavailable or not on PATH.
-    powershell -NoProfile -Command "$ErrorActionPreference = 'Stop'; $gpu = Get-CimInstance Win32_VideoController; if($gpu.Name -match 'NVIDIA|RTX|GTX|TESLA'^){ exit 0 } else { exit 1 }"
+    powershell -NoProfile -Command "$ErrorActionPreference = 'Stop'; $gpu = Get-CimInstance Win32_VideoController; if($gpu.Name -match 'NVIDIA|RTX|GTX|TESLA'){ exit 0 } else { exit 1 }"
     if not errorlevel 1 (
         set GPU_TYPE=NVIDIA
         echo [OK] NVIDIA GPU detected through Windows device information.
@@ -108,6 +105,12 @@ if "%ARCH%"=="x64" (
     reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Installed 2>nul | find "0x1" >nul
     if errorlevel 1 (
         if exist "%~dp0VC_redist\VC_redist.x64.exe" (
+            echo [*] The Microsoft Visual C++ runtime is missing and needs administrator permission to install.
+            call :REQUIRE_ADMIN
+            if errorlevel 1 (
+                set FAILED=1
+                goto END
+            )
             echo [*] Installing Microsoft Visual C++ runtime...
             "%~dp0VC_redist\VC_redist.x64.exe" /install /quiet /norestart
         )
@@ -117,14 +120,29 @@ if "%ARCH%"=="x64" (
 )
 
 :: =========================================================
-:: 2. CHECK PYTHON
+:: 2. PYTHON
+:: By default Jelibox gets its own private Python 3.12, downloaded with uv into this folder: nothing is
+:: installed system-wide and the Python you already have is left alone. Set JELIBOX_PYTHON=system to
+:: use the old behaviour (a system-wide Python from python.org), which is also the fallback.
 :: =========================================================
 echo.
-echo [2/6] Checking Python installation...
+echo [2/6] Preparing Python 3.12...
 
+if /i "%JELIBOX_PYTHON%"=="system" goto PYTHON_SYSTEM
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\setup_python.ps1" -Root "%~dp0."
+if %ERRORLEVEL% EQU 0 goto PYTHON_READY
+echo [!] The private Python could not be set up - falling back to the system Python.
+
+:PYTHON_SYSTEM
 py -3.12 --version >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
     echo [!] Python 3.12 not found.
+    echo [*] Installing it system-wide needs administrator permission.
+    call :REQUIRE_ADMIN
+    if errorlevel 1 (
+        set FAILED=1
+        goto END
+    )
     echo [*] Downloading Python %PYTHON_VERSION% installer...
     
     powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/%PYTHON_VERSION%/python-%PYTHON_VERSION%-amd64.exe' -OutFile '%PYTHON_INSTALLER%'"
@@ -156,12 +174,6 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo [OK] Python detected.
 
-:: =========================================================
-:: 3. VIRTUAL ENVIRONMENT
-:: =========================================================
-echo.
-echo [3/6] Preparing virtual environment...
-
 if not exist "%~dp0venv\" (
     echo [*] Creating virtual environment...
     py -3.12 -m venv "%~dp0venv"
@@ -171,6 +183,13 @@ if not exist "%~dp0venv\" (
         goto END
     )
 )
+
+:PYTHON_READY
+:: =========================================================
+:: 3. VIRTUAL ENVIRONMENT
+:: =========================================================
+echo.
+echo [3/6] Preparing virtual environment...
 
 if not exist "%~dp0venv\Scripts\activate.bat" (
     echo [ERROR] Virtual environment is corrupted.
@@ -353,4 +372,24 @@ echo =========================================================
 :FINISH
 echo.
 pause
+exit
+
+:: =========================================================
+:: REQUIRE_ADMIN - continue when already elevated, otherwise restart this installer elevated.
+:: Returns 1 when Windows permission was refused. When the restart works this window closes
+:: and the elevated copy takes over (it skips the Y/N question: /yes).
+:: =========================================================
+:REQUIRE_ADMIN
+net session >nul 2>&1
+if not errorlevel 1 exit /b 0
+echo [*] Windows will ask you to approve administrator permission...
+if "%ASSUME_YES%"=="1" (
+    powershell -NoProfile -Command "Start-Process -FilePath '%SELF%' -ArgumentList '/yes' -WorkingDirectory '%CD%' -Verb RunAs"
+) else (
+    powershell -NoProfile -Command "Start-Process -FilePath '%SELF%' -WorkingDirectory '%CD%' -Verb RunAs"
+)
+if errorlevel 1 (
+    echo [ERROR] Administrator permission was not granted.
+    exit /b 1
+)
 exit

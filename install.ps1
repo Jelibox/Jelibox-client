@@ -8,15 +8,17 @@
 #   3. not installed yet   -> installs the newest version fresh
 #      installed, older    -> updates it (your datasets, models and configs are never touched)
 #      installed, current  -> says so and stops
-#   4. starts jelibox_windows_installation.bat, which installs Python 3.12 if needed, creates the
-#      virtual environment, installs the dependencies and creates the shortcuts.
-#      Windows will ask for administrator permission once for that step.
+#   4. starts jelibox_windows_installation.bat, which gives Jelibox its own private Python 3.12
+#      (downloaded with uv into the Jelibox folder - your own Python is not touched and nothing is
+#      installed system-wide), creates the virtual environment, installs the dependencies and creates
+#      the shortcuts. Windows only asks for administrator permission if the Visual C++ runtime is missing.
 #
 # Optional environment variables (set them before running the command):
 #   JELIBOX_VERSION     install a specific release, e.g.  v0.1.0   (default: newest release)
 #   JELIBOX_HOME        install here without being asked     (default: you are asked; Enter = %USERPROFILE%\Jelibox)
 #   JELIBOX_NO_INSTALL  1 = only download and unpack, do not run the installer
 #   JELIBOX_FORCE       1 = reinstall even when this version is already installed
+#   JELIBOX_PYTHON      system = use a system-wide Python from python.org instead of the private one
 #   JELIBOX_ARCHIVE     path to a local .zip instead of downloading (offline installs, tests)
 
 function Install-Jelibox {
@@ -166,7 +168,7 @@ function Install-Jelibox {
         if (-not (Test-Path $bat)) { Fail "Installer script missing: $bat" }
         New-Item -ItemType File -Force -Path (Join-Path $dest '.install-yes') | Out-Null    # skip the Y/N question
 
-        Say 'Setting up Python and the dependencies. Approve the Windows permission prompt when it appears.'
+        Say 'Setting up Python and the dependencies. Windows asks for permission only if something system-wide is missing.'
         Say 'It opens in its own window and shows its progress there.'
         Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "`"$bat`"" -WorkingDirectory $dest
         Say "When it says JELIBOX IS READY, open the Jelibox shortcut on your Desktop."

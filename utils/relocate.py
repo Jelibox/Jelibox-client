@@ -108,6 +108,40 @@ def base_python(gui=False):
     return exe
 
 
+PRIVATE_PYTHON = ".python"     # where the installers put Jelibox's own Python (see tools/setup_python.*)
+
+
+def private_python_dir(venv_dir, root):
+    """If `venv_dir` was built from the private Python that lives inside `root`, return that Python's folder
+    (<root>/.python/<name>), else None. Such a venv points at its Python by absolute path, so moving the
+    install has to bring a copy of that Python along."""
+    if not venv_dir:
+        return None
+    try:
+        with open(os.path.join(venv_dir, "pyvenv.cfg"), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    home = next((l.split("=", 1)[1].strip() for l in lines if l.lower().startswith("home") and "=" in l), None)
+    store = os.path.join(root, PRIVATE_PYTHON)
+    if not home or not _is_inside(home, store) or _real(home) == _real(store):
+        return None
+    first = os.path.relpath(_real(home), _real(store)).split(os.sep)[0]
+    return os.path.join(store, first)
+
+
+def python_in(folder, gui=False):
+    """The interpreter inside a standalone Python folder (gui=True prefers pythonw on Windows)."""
+    if IS_WIN:
+        w = os.path.join(folder, "pythonw.exe")
+        return w if gui and os.path.exists(w) else os.path.join(folder, "python.exe")
+    for name in ("python3", "python"):
+        exe = os.path.join(folder, "bin", name)
+        if os.path.exists(exe):
+            return exe
+    return os.path.join(folder, "bin", "python3")
+
+
 def clean_requirements(freeze_output):
     """Keep only lines pip can reinstall from an index / URL (no editable or local-path installs)."""
     keep = []
@@ -187,7 +221,13 @@ def spawn_helper(src, target, venv_dir):
     tmp = tempfile.mkdtemp(prefix="jelibox_move_")
     script = os.path.join(tmp, "relocate.py")
     shutil.copy2(os.path.abspath(__file__), script)
-    cmd = [base_python(gui=True), script, "--src", src, "--dest", target,
+    helper_python = base_python(gui=True)
+    private = private_python_dir(venv_dir, src)
+    if private:
+        # The helper deletes the old install at the end, so it must not run from the Python inside it.
+        shutil.copytree(private, os.path.join(tmp, "python"))
+        helper_python = python_in(os.path.join(tmp, "python"), gui=True)
+    cmd = [helper_python, script, "--src", src, "--dest", target,
            "--pid", str(os.getpid()), "--freeze-python", sys.executable]
     if venv_dir:
         cmd += ["--venv", venv_dir]
@@ -339,6 +379,9 @@ def relocate(src, dest, venv_dir, freeze_python, wait_pid, log, step):
         old_venv = venv_dir
         new_venv_name = os.path.basename(os.path.normpath(venv_dir))
     new_venv = os.path.join(dest, new_venv_name)
+    private = private_python_dir(venv_dir, src)
+    build_python = base_python()
+    skip = {new_venv_name} if old_venv else set()
     moved_something = False
 
     def cleanup():
@@ -346,6 +389,8 @@ def relocate(src, dest, venv_dir, freeze_python, wait_pid, log, step):
             return          # data now lives in dest - never delete that
         if os.path.lexists(new_venv):
             _rmtree(new_venv)
+        if private and os.path.lexists(os.path.join(dest, PRIVATE_PYTHON)):
+            _rmtree(os.path.join(dest, PRIVATE_PYTHON))
         if not dest_existed:
             try:
                 os.rmdir(dest)
@@ -358,8 +403,14 @@ def relocate(src, dest, venv_dir, freeze_python, wait_pid, log, step):
         log(f"{len(requirements)} package(s) will be reinstalled.")
 
         step(1)
+        if private:
+            log("Copying Jelibox's private Python to the new location...")
+            new_private = os.path.join(dest, PRIVATE_PYTHON, os.path.basename(private))
+            shutil.copytree(private, new_private)
+            build_python = python_in(new_private)
+            skip.add(PRIVATE_PYTHON)        # the old copy is deleted together with the old install
         log("Creating the new virtual environment...")
-        run_command([base_python(), "-m", "venv", new_venv], log)
+        run_command([build_python, "-m", "venv", new_venv], log)
         new_py = venv_python(new_venv)
 
         step(2)
@@ -385,7 +436,7 @@ def relocate(src, dest, venv_dir, freeze_python, wait_pid, log, step):
         log("Moving files...")
         moved_something = True          # from here on, a half-move is rolled back by move_tree itself
         try:
-            move_tree(src, dest, {new_venv_name} if old_venv else set(), log)
+            move_tree(src, dest, skip, log)
         except RelocateError:
             moved_something = False
             raise
@@ -503,6 +554,22 @@ def _run_gui(args):
     root.mainloop()
 
 
+def schedule_cleanup_of_helper_copy():
+    """The helper may be running from a throw-away copy of Python in %TEMP%/jelibox_move_*. A process
+    cannot delete the folder it runs from, so hand that to a tiny detached command that waits for us to exit."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if not os.path.basename(here).startswith("jelibox_move_") or not os.path.isdir(os.path.join(here, "python")):
+        return
+    try:
+        if IS_WIN:
+            subprocess.Popen(f'cmd /c ping -n 6 127.0.0.1 >nul & rmdir /s /q "{here}"', shell=True,
+                             creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW, close_fds=True)
+        else:
+            subprocess.Popen(["sh", "-c", 'sleep 3; rm -rf "$1"', "sh", here], start_new_session=True, close_fds=True)
+    except OSError:
+        pass
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="Move a Jelibox install (internal helper).")
     p.add_argument("--src", required=True)
@@ -521,6 +588,7 @@ def main(argv=None):
             return 1
         return 0
     _run_gui(args)
+    schedule_cleanup_of_helper_copy()
     return 0
 
 

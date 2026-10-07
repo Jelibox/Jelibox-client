@@ -30,15 +30,16 @@ Jelibox is designed for individuals and teams that need a private, offline-first
 ### Linux
 
 - Debian/Ubuntu/Mint, Fedora/RHEL/CentOS, or Arch/Manjaro
-- Python **3.11.9** for the pinned installer
-- Tkinter and Python virtual-environment support
+- Nothing to install first: Jelibox downloads its own private Python 3.12 (with Tkinter) into its folder, no `sudo` needed
+- With `JELIBOX_PYTHON=system` it uses a system Python 3.12 instead (Tkinter and virtual-environment support required)
 - Internet access during installation
+- System graphics library for OpenCV (`libgl1` / `mesa-libGL` / `mesa`) - already present on normal desktops
 - An NVIDIA driver and `nvidia-smi` for the CUDA PyTorch path
 
 ### Windows
 
 - 64-bit Windows is recommended
-- Python 3.12 is installed by the Windows installer when needed
+- Nothing to install first: Jelibox downloads its own private Python 3.12 into its folder (your own Python is never touched)
 - Microsoft Visual C++ Redistributable from [`VC_redist/`](VC_redist/)
 - Internet access during installation
 
@@ -65,13 +66,14 @@ curl -fsSL https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install
 What happens:
 
 - The installer first asks where to install. Press **Enter** for the default - a `Jelibox` folder in your user folder, next to Downloads/Documents/Pictures (`%USERPROFILE%\Jelibox` on Windows, `~/jelibox` on Linux) - press **B** to pick a folder in a window (Linux needs `zenity` or `kdialog` for that), or type a path. A `Jelibox` folder is created inside the folder you choose. An existing install in the old default location (`%LOCALAPPDATA%\Jelibox` / `~/.local/share/jelibox`) is found and updated in place without asking.
-- The normal installer then runs: it installs Python 3.12 if missing, creates a virtual environment, installs the dependencies and adds shortcuts. Windows asks for administrator permission once; Linux asks for your `sudo` password.
+- The normal installer then runs: it gives Jelibox its **own private Python 3.12** (fetched with [uv](https://docs.astral.sh/uv/) into the install folder), creates a virtual environment, installs the dependencies and adds shortcuts. Nothing is installed system-wide: **no admin rights on Windows (unless the Visual C++ runtime is missing), no `sudo` on Linux, no PATH changes**, and the Python you already use is left alone.
+- **Prefer your system Python?** Set `JELIBOX_PYTHON=system` first (`$env:JELIBOX_PYTHON="system"` in PowerShell, `JELIBOX_PYTHON=system curl ... | bash` on Linux). The installer also falls back to it by itself if the private one cannot be set up.
 - **Updating:** run the same command again. It reports what it found (`Found Jelibox v0.1.0 ... updating to v0.2.0`), updates in place, and never touches your datasets, models or configs. If you are already on the newest version it says so and stops (`JELIBOX_FORCE=1` reinstalls anyway). A folder that is a `git` checkout is left alone - use `git pull` there.
-- **Find the install folder:** click **Open Folder** in the Jelibox header.
+- **Find the install folder:** click **Open Folder** in the workspace picker toolbar (next to Import Dataset).
 - **Move it somewhere else:** click **Move Jelibox** in the workspace picker and choose a folder. Jelibox creates `<folder>/Jelibox`, builds a fresh virtual environment there (same package versions, needs internet), moves your datasets, models and configs over, and deletes the old venv and folder. If anything fails before the files are moved, the old install is left untouched.
-- **A specific version:** set `JELIBOX_VERSION` first, for example `$env:JELIBOX_VERSION="v0.1.0"` (PowerShell) or `JELIBOX_VERSION=v0.1.0 curl ... | bash`. Other options: `JELIBOX_HOME` (install location), `JELIBOX_NO_INSTALL=1` (download and unpack only) and `JELIBOX_FORCE=1` (reinstall even if current).
+- **A specific version:** set `JELIBOX_VERSION` first, for example `$env:JELIBOX_VERSION="v0.1.0"` (PowerShell) or `JELIBOX_VERSION=v0.1.0 curl ... | bash`. Other options: `JELIBOX_HOME` (install location), `JELIBOX_NO_INSTALL=1` (download and unpack only) and `JELIBOX_FORCE=1` (reinstall even if current). If `uv` is already on your machine it is reused; otherwise a checksum-verified copy is downloaded into `.uv` inside the install folder.
 - **Want to read it before running it?** That is a good habit. The scripts are short: [`install.ps1`](install.ps1) and [`install.sh`](install.sh).
-- **Uninstall:** delete the install folder above, plus the Jelibox shortcuts (Desktop / application menu).
+- **Uninstall:** delete the install folder above, plus the Jelibox shortcuts (Desktop / application menu). The private Python lives inside that folder, so nothing else is left behind.
 
 ### Manual install (with git)
 

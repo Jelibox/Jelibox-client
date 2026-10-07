@@ -44,6 +44,8 @@ Jelibox-launcher.sh
 .install-yes
 .jelibox-version
 .jelibox-ready
+.python/
+.uv/
 
 # scratch folder for moving datasets around
 temp/

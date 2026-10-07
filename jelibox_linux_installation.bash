@@ -13,26 +13,6 @@ echo "System is preparing your environment..."
 echo "=========================================="
 sleep 1
 
-# Ask for the sudo password before changing the system.
-echo "[*] Sudo access is required to install system packages."
-sudo -v || {
-    echo "[ERROR] Sudo authentication failed."
-    exit 1
-}
-
-# ──────────────────────────────────────────
-# DETECT OS
-# ──────────────────────────────────────────
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$ID
-else
-    echo "[ERROR] Unsupported OS"
-    exit 1
-fi
-
-echo "[*] Detecting OS: $OS"
-
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 APP_PATH="$SCRIPT_DIR"
 PYTHON_VERSION_PREFIX="3.12"
@@ -40,77 +20,112 @@ PYTHON_BIN="python3.12"
 VENV_DIR="$APP_PATH/jelibox"
 
 # ──────────────────────────────────────────
-# DEBIAN / UBUNTU / MINT
+# SYSTEM-WIDE PYTHON (fallback)
+# Only used when JELIBOX_PYTHON=system is set, or when the private Python below could not be set up.
 # ──────────────────────────────────────────
-if [[ "$OS" == "ubuntu" || "$OS" == "debian" || "$OS" == "linuxmint" ]]; then
-    echo "[*] Installing Python $PYTHON_VERSION_PREFIX and Tkinter packages..."
-    sudo apt update
-    sudo apt install -y software-properties-common
-
-    if [[ "$OS" == "ubuntu" || "$OS" == "linuxmint" ]]; then
-        sudo add-apt-repository -y ppa:deadsnakes/ppa
-        sudo apt update
-    fi
-
-    sudo apt install -y \
-        python3.12 \
-        python3.12-venv \
-        python3.12-dev \
-        python3.12-tk
-fi
-
-# ──────────────────────────────────────────
-# ARCH / MANJARO
-# ──────────────────────────────────────────
-if [[ "$OS" == "arch" || "$OS" == "manjaro" ]]; then
-    echo "[*] Installing Python $PYTHON_VERSION_PREFIX, Tkinter, and virtual environment dependencies..."
-    # Force python312 so every machine matches; if it is missing from the official repo it may need the AUR (yay -S python312)
-    sudo pacman -S --noconfirm python312 tk mesa libcanberra || {
-        echo "[!] Failed to install python312 via pacman. Make sure python312 is available or use the AUR (for example: yay -S python312)"
+use_system_python() {
+    # Ask for the sudo password before changing the system.
+    echo "[*] Sudo access is required to install system packages."
+    sudo -v || {
+        echo "[ERROR] Sudo authentication failed."
         exit 1
     }
-fi
 
-# ──────────────────────────────────────────
-# FEDORA / RHEL / CENTOS
-# ──────────────────────────────────────────
-if [[ "$OS" == "fedora" || "$OS" == "rhel" || "$OS" == "centos" ]]; then
-    echo "[*] Installing Python $PYTHON_VERSION_PREFIX and Tkinter packages..."
-    sudo dnf install -y \
-        python3.12 \
-        python3.12-devel \
-        python3.12-tkinter
-    sudo dnf install -y mesa-libGL libglvnd-glx
-fi
+    # DETECT OS
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+    else
+        echo "[ERROR] Unsupported OS"
+        exit 1
+    fi
 
-if ! command -v "$PYTHON_BIN" &> /dev/null; then
-    echo "[ERROR] Python interpreter $PYTHON_BIN was not found."
-    exit 1
-fi
+    echo "[*] Detecting OS: $OS"
 
-PYTHON_ACTUAL_VERSION="$($PYTHON_BIN -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')"
-echo "[OK] Python $PYTHON_ACTUAL_VERSION detected."
+    # DEBIAN / UBUNTU / MINT
+    if [[ "$OS" == "ubuntu" || "$OS" == "debian" || "$OS" == "linuxmint" ]]; then
+        echo "[*] Installing Python $PYTHON_VERSION_PREFIX and Tkinter packages..."
+        sudo apt update
+        sudo apt install -y software-properties-common
 
-# Check that the Python version starts with "3.12"
-if [[ "$PYTHON_ACTUAL_VERSION" != ${PYTHON_VERSION_PREFIX}.* ]]; then
-    echo "[ERROR] Jelibox requires Python $PYTHON_VERSION_PREFIX.x exactly."
-    echo "[ERROR] The detected interpreter is $PYTHON_ACTUAL_VERSION."
-    exit 1
-fi
+        if [[ "$OS" == "ubuntu" || "$OS" == "linuxmint" ]]; then
+            sudo add-apt-repository -y ppa:deadsnakes/ppa
+            sudo apt update
+        fi
 
-# ──────────────────────────────────────────
-# CREATE VENV
-# ──────────────────────────────────────────
-echo "[*] Creating Virtual Environment with $PYTHON_BIN..."
+        sudo apt install -y \
+            python3.12 \
+            python3.12-venv \
+            python3.12-dev \
+            python3.12-tk
+    fi
 
-$PYTHON_BIN -m venv "$VENV_DIR" || {
-    echo "[ERROR] Failed creating venv"
-    exit 1
+    # ARCH / MANJARO
+    if [[ "$OS" == "arch" || "$OS" == "manjaro" ]]; then
+        echo "[*] Installing Python $PYTHON_VERSION_PREFIX, Tkinter, and virtual environment dependencies..."
+        # Force python312 so every machine matches; if it is missing from the official repo it may need the AUR (yay -S python312)
+        sudo pacman -S --noconfirm python312 tk mesa libcanberra || {
+            echo "[!] Failed to install python312 via pacman. Make sure python312 is available or use the AUR (for example: yay -S python312)"
+            exit 1
+        }
+    fi
+
+    # FEDORA / RHEL / CENTOS
+    if [[ "$OS" == "fedora" || "$OS" == "rhel" || "$OS" == "centos" ]]; then
+        echo "[*] Installing Python $PYTHON_VERSION_PREFIX and Tkinter packages..."
+        sudo dnf install -y \
+            python3.12 \
+            python3.12-devel \
+            python3.12-tkinter
+        sudo dnf install -y mesa-libGL libglvnd-glx
+    fi
+
+    if ! command -v "$PYTHON_BIN" &> /dev/null; then
+        echo "[ERROR] Python interpreter $PYTHON_BIN was not found."
+        exit 1
+    fi
+
+    PYTHON_ACTUAL_VERSION="$($PYTHON_BIN -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')"
+    echo "[OK] Python $PYTHON_ACTUAL_VERSION detected."
+
+    # Check that the Python version starts with "3.12"
+    if [[ "$PYTHON_ACTUAL_VERSION" != ${PYTHON_VERSION_PREFIX}.* ]]; then
+        echo "[ERROR] Jelibox requires Python $PYTHON_VERSION_PREFIX.x exactly."
+        echo "[ERROR] The detected interpreter is $PYTHON_ACTUAL_VERSION."
+        exit 1
+    fi
+
+    # CREATE VENV
+    echo "[*] Creating Virtual Environment with $PYTHON_BIN..."
+
+    $PYTHON_BIN -m venv "$VENV_DIR" || {
+        echo "[ERROR] Failed creating venv"
+        exit 1
+    }
+
+    if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+        echo "[ERROR] Virtual environment was not created correctly."
+        exit 1
+    fi
 }
 
-if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-    echo "[ERROR] Virtual environment was not created correctly."
-    exit 1
+# ──────────────────────────────────────────
+# PYTHON
+# By default Jelibox gets its own private Python 3.12 (downloaded with uv into this folder), so nothing
+# is installed system-wide, no sudo is needed and the Python you already have is left alone.
+# ──────────────────────────────────────────
+USE_SYSTEM_PYTHON=0
+if [[ "${JELIBOX_PYTHON:-}" == "system" ]]; then
+    USE_SYSTEM_PYTHON=1
+else
+    echo "[*] Preparing Python $PYTHON_VERSION_PREFIX (private copy - no sudo needed)..."
+    if ! bash "$SCRIPT_DIR/tools/setup_python.sh" "$APP_PATH" "$(basename "$VENV_DIR")"; then
+        echo "[!] The private Python could not be set up - falling back to the system Python."
+        USE_SYSTEM_PYTHON=1
+    fi
+fi
+if [[ "$USE_SYSTEM_PYTHON" == "1" ]]; then
+    use_system_python
 fi
 
 source "$VENV_DIR/bin/activate"
@@ -152,6 +167,13 @@ pip install ultralytics pyinstaller
 # git is not required. Non-fatal: without it only YOLO-World is unavailable.
 echo "[*] Installing CLIP (required by YOLO-World)..."
 pip install ftfy regex tqdm https://github.com/ultralytics/CLIP/archive/refs/heads/main.zip ||     echo "[WARNING] CLIP installation failed. YOLO-World Label Assistant will be unavailable."
+
+# OpenCV needs the system graphics library (libGL). The private Python does not install system packages, so say so
+# instead of letting the app fail later with a confusing "libGL.so.1" error.
+python -c "import cv2" 2>/dev/null || {
+    echo "[WARNING] OpenCV could not load - it usually needs the system graphics library:"
+    echo "          Debian/Ubuntu: sudo apt install libgl1    Fedora: sudo dnf install mesa-libGL    Arch: sudo pacman -S mesa"
+}
 
 # ──────────────────────────────────────────
 # CREATE DESKTOP ENTRY

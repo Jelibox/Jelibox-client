@@ -9,15 +9,16 @@
 #   3. not installed yet   -> installs the newest version fresh
 #      installed, older    -> updates it (your datasets, models and configs are never touched)
 #      installed, current  -> says so and stops
-#   4. runs jelibox_linux_installation.bash, which installs Python 3.12 + Tkinter (it asks for your
-#      sudo password), creates the virtual environment, installs the dependencies and adds
-#      Jelibox to your application menu.
+#   4. runs jelibox_linux_installation.bash, which gives Jelibox its own private Python 3.12 (downloaded
+#      with uv into the Jelibox folder - no sudo, your own Python is not touched), creates the virtual
+#      environment, installs the dependencies and adds Jelibox to your application menu.
 #
 # Optional environment variables (set them before the command):
 #   JELIBOX_VERSION     install a specific release, e.g.  v0.1.0   (default: newest release)
 #   JELIBOX_HOME        install here without being asked     (default: you are asked; Enter = ~/jelibox)
 #   JELIBOX_NO_INSTALL  1 = only download and unpack, do not run the installer
 #   JELIBOX_FORCE       1 = reinstall even when this version is already installed
+#   JELIBOX_PYTHON      system = install Python 3.12 system-wide (needs sudo) instead of the private one
 #   JELIBOX_ARCHIVE     path to a local .tar.gz instead of downloading (offline installs, tests)
 
 # Everything lives in one function so bash has read the whole script before running any of it.
@@ -174,7 +175,7 @@ main() {
     [ -f "$installer" ] || fail "Installer script missing: $installer"
     chmod +x "$installer"
 
-    say "Setting up Python and the dependencies. It will ask for your sudo password."
+    say "Setting up Python and the dependencies (no sudo needed unless the system Python is used)."
     if [ -r /dev/tty ]; then
         bash "$installer" < /dev/tty      # keep the keyboard available for the sudo prompt
     else

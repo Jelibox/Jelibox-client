@@ -144,8 +144,9 @@ class WindowsInstallerEditsTests(unittest.TestCase):
                     bad.append(f"{name}:{i}")
         self.assertEqual(bad, [])
 
-    def test_confirmation_is_the_only_interactive_step_before_install(self):
-        self.assertEqual(self.bat.count("choice /c YN"), 1)
+    def test_only_two_questions_are_asked_and_the_gpu_one_can_be_preset(self):
+        self.assertEqual(self.bat.count("choice /c YN"), 2)        # continue? + NVIDIA GPU?
+        self.assertIn("if defined JELIBOX_GPU goto GPU_PRESET", self.bat)    # install.ps1 already asked
 
 
 class BootstrapRunTests(unittest.TestCase):
@@ -187,6 +188,22 @@ class BootstrapRunTests(unittest.TestCase):
         run = lambda: subprocess.run([find_bash(), "-c", 'cat "$1" | bash', "_", script], env=self.env(self.tgz, home),
                                      capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.check_install_and_update(run, home)
+
+    def check_bad_gpu_choice_is_refused_before_anything_is_installed(self, kind):
+        home = os.path.join(self.work, kind + "_gpu")
+        r = self.flow_runner(kind, home)("v1.0.0", JELIBOX_NO_INSTALL="", JELIBOX_GPU="amd")
+        out = r.stdout + r.stderr
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("JELIBOX_GPU must be 'nvidia' or 'cpu'", out)
+        self.assertFalse(os.path.exists(os.path.join(home, "utils")), "nothing may be unpacked first")
+
+    @unittest.skipUnless(find_bash() and shutil.which("tar"), "no working bash/tar available")
+    def test_bash_refuses_an_unknown_gpu_choice(self):
+        self.check_bad_gpu_choice_is_refused_before_anything_is_installed("sh")
+
+    @unittest.skipUnless(sys.platform == "win32" and shutil.which("powershell"), "Windows PowerShell only")
+    def test_powershell_refuses_an_unknown_gpu_choice(self):
+        self.check_bad_gpu_choice_is_refused_before_anything_is_installed("ps")
 
     # ------------------------------------------------ fresh install / update / up to date
     def flow_runner(self, kind, home):

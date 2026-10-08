@@ -4,18 +4,18 @@
 #
 # What it does:
 #   * a working environment already exists  -> keeps it (nothing is downloaded, nothing is deleted)
-#   * otherwise it downloads `uv` (one small program, checksum-verified) into  <Root>\.uv,
-#     lets uv fetch a standalone Python into  <Root>\.python,  and builds  <Root>\<Venv>  from it.
-#   Nothing is installed system-wide: no administrator rights, no PATH changes, no registry entries.
-#   Uninstalling Jelibox = deleting its folder.
+#   * otherwise it makes sure `uv` is installed (the official installer from astral.sh runs only when uv is
+#     missing), lets uv fetch a standalone Python into  <Root>\.python,  and builds  <Root>\<Venv>  from it.
+#   No administrator rights are needed. Python itself is never put on your PATH, never registered with
+#   Windows (so `py -3.12` does not see it) and never installed outside the Jelibox folder.
+#   The only thing outside the folder is uv: the official uv installer adds its own folder to your user PATH.
+#   Uninstalling Jelibox = deleting its folder (and uv, if you do not want it, see https://docs.astral.sh/uv/).
 #
-# Exit code 0 = the environment is ready, anything else = it could not be set up (the installer then
-# falls back to a system-wide Python).
+# Exit code 0 = the environment is ready, anything else = it could not be set up.
 #
 # Optional environment variables:
 #   JELIBOX_PYTHON_VERSION  exact Python to use              (default: 3.12.10)
-#   JELIBOX_UV_VERSION      uv release to download           (default: 0.12.23)
-#   JELIBOX_UV              path to an existing uv.exe to use instead of downloading one
+#   JELIBOX_UV              path to an existing uv.exe to use instead of looking for / installing one
 param(
     [string]$Root = (Split-Path -Parent $PSScriptRoot),
     [string]$Venv = 'venv'
@@ -28,7 +28,6 @@ try {
 } catch { }
 
 $pyVersion = if ($env:JELIBOX_PYTHON_VERSION) { $env:JELIBOX_PYTHON_VERSION } else { '3.12.10' }
-$uvVersion = if ($env:JELIBOX_UV_VERSION) { $env:JELIBOX_UV_VERSION } else { '0.12.23' }
 
 $venvDir = Join-Path $Root $Venv
 $venvPy  = Join-Path $venvDir 'Scripts\python.exe'
@@ -45,43 +44,35 @@ function Get-PythonVersion([string]$exe) {
     return $null
 }
 
-function Get-Uv {
+# Path of an installed uv, or $null. Looks on PATH first, then where the official installer puts it
+# (it may have just been installed, and this process's PATH does not know about it yet).
+function Find-Uv {
     if ($env:JELIBOX_UV) {
         if (Test-Path -LiteralPath $env:JELIBOX_UV) { return $env:JELIBOX_UV }
         throw "JELIBOX_UV points to a file that does not exist: $env:JELIBOX_UV"
     }
-    $onPath = Get-Command uv -ErrorAction SilentlyContinue
-    if ($onPath) { Say "Using the uv that is already installed ($($onPath.Source))."; return $onPath.Source }
-    $own = Join-Path $Root '.uv\uv.exe'
-    if (Test-Path -LiteralPath $own) { return $own }
-
-    $isArm = ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') -or ($env:PROCESSOR_ARCHITEW6432 -eq 'ARM64')
-    $target = if ($isArm) { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
-    $name = "uv-$target.zip"
-    $base = "https://github.com/astral-sh/uv/releases/download/$uvVersion"
-
-    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('jelibox_uv_' + [Guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $tmp | Out-Null
-    try {
-        Say "Downloading uv $uvVersion (the tool that fetches Python) ..."
-        $zip = Join-Path $tmp $name
-        Invoke-WebRequest -UseBasicParsing -Uri "$base/$name" -OutFile $zip
-        $sumFile = Join-Path $tmp "$name.sha256"
-        Invoke-WebRequest -UseBasicParsing -Uri "$base/$name.sha256" -OutFile $sumFile    # .Content is raw bytes in Windows PowerShell 5.1
-        $expected = ([string](Get-Content -LiteralPath $sumFile -TotalCount 1)).Trim().Split(' ')[0]
-        $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
-        if ($expected.ToLower() -ne $actual.ToLower()) { throw "The uv download is corrupted (checksum mismatch)." }
-
-        Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $tmp 'x') -Force
-        $exe = Get-ChildItem -LiteralPath (Join-Path $tmp 'x') -Recurse -Filter 'uv.exe' | Select-Object -First 1
-        if (-not $exe) { throw 'uv.exe was not found inside the download.' }
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $own) | Out-Null
-        Copy-Item -LiteralPath $exe.FullName -Destination $own -Force
-        return $own
+    $onPath = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($onPath) { return $onPath.Source }
+    $dirs = @($env:UV_INSTALL_DIR, $env:XDG_BIN_HOME)
+    if ($env:USERPROFILE) { $dirs += (Join-Path $env:USERPROFILE '.local\bin'); $dirs += (Join-Path $env:USERPROFILE '.cargo\bin') }
+    foreach ($dir in $dirs) {
+        if (-not $dir) { continue }
+        $candidate = Join-Path $dir 'uv.exe'
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
     }
-    finally {
-        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    return $null
+}
+
+function Get-Uv {
+    $uv = Find-Uv
+    if ($uv) { Say "Using uv ($uv)."; return $uv }
+
+    Say 'uv is not installed - installing it with the official installer (https://astral.sh/uv) ...'
+    & powershell -NoProfile -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex" | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'The uv installer failed.' }
+    $uv = Find-Uv
+    if (-not $uv) { throw 'uv was installed but could not be found afterwards.' }
+    return $uv
 }
 
 try {
@@ -97,8 +88,9 @@ try {
     }
 
     $uv = Get-Uv
-    # Keep everything inside the Jelibox folder, whatever uv settings this machine has.
+    # Keep Python inside the Jelibox folder, whatever uv settings this machine has, and leave no trace outside it.
     $env:UV_PYTHON_INSTALL_DIR = Join-Path $Root '.python'
+    $env:UV_PYTHON_INSTALL_REGISTRY = '0'      # do not register it with Windows (`py -3.12` must not find it)
 
     Say "Getting a private Python $pyVersion (your own Python is not touched) ..."
     & $uv python install $pyVersion --no-bin --no-config

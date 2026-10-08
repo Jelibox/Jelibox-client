@@ -3,24 +3,29 @@ Label Assistant window: choose what powers the G (infer) shortcut.
 
   - YOLO-World   : zero-shot, driven by text prompts that are translated into the
                    workspace's own classes (e.g. "white horse" -> horse)
-  - Trained model: the workspace's own models/<ws>/modelAssistant.pt
+  - Trained model: the workspace's own models/<ws>/modelAssistant.pt, or any Ultralytics model chosen with
+                   "Browse custom model" (its class names are mapped to workspace classes)
 
 Settings are stored per workspace in configs/<workspace>.json.
 Import this module only after config.load_workspace() has run.
 """
 import copy
+import os
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 
 from PIL import Image, ImageTk
 
 from . import workspace_config as wcfg
-from .config import class_manager, workspaceName
-from .inferenceObjectDetection import custom_model_available
+from . import assistant_providers as providers
+from .dialog_scroll import ScrollBody
+from .config import class_manager, workspaceName, model_folder, BASE_DIR
+from .inferenceObjectDetection import custom_model_available, custom_model_file
 from .theme import (C_BASE, C_PANEL, C_CARD, C_CARD2, C_BORDER, C_ACCENT,
                     C_GREEN, C_AMBER, C_RED, C_TXT1, C_TXT2, C_TXT3,
                     C_ON_ACCENT, C_ON_RED, C_DANGER_BG, C_DANGER_FG)
 
+SKIP = "(skip)"
 MAX_VISIBLE_ROWS = 5
 ROW_HEIGHT = 40
 
@@ -31,6 +36,14 @@ class LabelAssistantDialog:
         self.cfg = copy.deepcopy(wcfg.get_assistant(workspaceName))
         self.classes = list(class_manager.get_classes())
         self.custom_ok = custom_model_available()
+        self.model_path = self.cfg["custom_model"]["path"]        # a browsed model, or "" for the workspace's own
+        self.model_names = []
+        self.map_vars = {}
+        if self.model_path and os.path.isfile(self.model_path):
+            try:
+                self.model_names = [n for n in providers.model_class_names(self.model_path) if n]
+            except providers.AssistantError:
+                pass
         self.rows = []          # [{'frame','prompt','cls','entry','combo','x'}]
 
         provider = self.cfg["provider"]
@@ -54,11 +67,7 @@ class LabelAssistantDialog:
             self._add_row()
         self._apply_provider_state()
 
-        self.win.update_idletasks()
-        w, h = 660, self.win.winfo_reqheight()
-        x = parent.winfo_x() + (parent.winfo_width() // 2) - (w // 2)
-        y = parent.winfo_y() + (parent.winfo_height() // 2) - (h // 2)
-        self.win.geometry(f"{w}x{h}+{max(x, 0)}+{max(y, 0)}")
+        self.scroll.fit(self.win, 660, parent)
         self.win.bind('<Escape>', lambda e: self.win.destroy())
         self.win.grab_set()
         self.win.focus_force()
@@ -97,8 +106,11 @@ class LabelAssistantDialog:
                  font=('Segoe UI', 12, 'bold')).pack(side=tk.LEFT)
         tk.Frame(self.win, bg=C_ACCENT, height=2).pack(fill=tk.X)
 
-        body = tk.Frame(self.win, bg=C_BASE)
-        body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(14, 8))
+        footer = tk.Frame(self.win, bg=C_BASE)            # packed first: a tall body can never push it off the screen
+        footer.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=(4, 16))
+        self.scroll = ScrollBody(self.win, C_BASE)
+        self.scroll.pack(fill=tk.BOTH, expand=True, padx=20, pady=(14, 8))
+        body = self.scroll.inner
 
         tk.Label(body, text="Choose the model that annotates for you when you press G.",
                  bg=C_BASE, fg=C_TXT2, font=('Segoe UI', 9)).pack(anchor='w', pady=(0, 10))
@@ -107,8 +119,6 @@ class LabelAssistantDialog:
         self._build_custom_card(body)
         self._build_confidence(body)
 
-        footer = tk.Frame(self.win, bg=C_BASE)
-        footer.pack(fill=tk.X, padx=20, pady=(4, 16))
         tk.Button(footer, text="Save", command=self._save, bg=C_ACCENT, fg=C_ON_ACCENT,
                   font=('Segoe UI', 9, 'bold'), relief=tk.FLAT, cursor='hand2',
                   activebackground=C_ACCENT, borderwidth=0
@@ -187,6 +197,7 @@ class LabelAssistantDialog:
                               lambda e: self.list_canvas.itemconfig(self.rows_window, width=e.width))
         self.list_canvas.bind('<Enter>', lambda e: self.list_canvas.bind_all('<MouseWheel>', self._on_wheel))
         self.list_canvas.bind('<Leave>', lambda e: self.list_canvas.unbind_all('<MouseWheel>'))
+        self.scroll.nested.append(self.list_canvas)         # the target list keeps the wheel while it is over it
 
         self.empty_hint = tk.Label(
             self.yw_body, text="", bg=C_CARD, fg=C_AMBER, font=('Segoe UI', 8), anchor='w')
@@ -198,14 +209,101 @@ class LabelAssistantDialog:
         inner = tk.Frame(self.custom_card, bg=C_CARD)
         inner.pack(fill=tk.X, padx=14, pady=10)
 
-        self._radio(inner, "My trained model", wcfg.PROVIDER_CUSTOM,
-                    state=tk.NORMAL if self.custom_ok else tk.DISABLED).pack(anchor='w')
-        if self.custom_ok:
-            tk.Label(inner, text="Uses the model you trained in this workspace.",
-                     bg=C_CARD, fg=C_TXT2, font=('Segoe UI', 8)).pack(anchor='w', padx=22)
+        self.custom_radio = self._radio(inner, "My trained model", wcfg.PROVIDER_CUSTOM)
+        self.custom_radio.pack(anchor='w')
+        self.custom_info = tk.Label(inner, text="", bg=C_CARD, fg=C_TXT2, font=('Segoe UI', 8),
+                                    anchor='w', justify=tk.LEFT, wraplength=580)
+        self.custom_info.pack(anchor='w', padx=22)
+
+        row = tk.Frame(inner, bg=C_CARD)
+        row.pack(fill=tk.X, padx=22, pady=(8, 0))
+        tk.Button(row, text="Browse custom model ...", command=self._browse_model, bg=C_ACCENT, fg=C_ON_ACCENT,
+                  font=('Segoe UI', 8, 'bold'), relief=tk.FLAT, cursor='hand2', activebackground=C_ACCENT,
+                  borderwidth=0).pack(side=tk.LEFT, ipadx=8, ipady=2)
+        self.clear_btn = tk.Button(row, text="Use the workspace's own model", command=self._clear_model, bg=C_CARD2,
+                                   fg=C_TXT1, font=('Segoe UI', 8), relief=tk.FLAT, cursor='hand2',
+                                   activebackground=C_CARD2, activeforeground=C_TXT1, borderwidth=0)
+        self.clear_btn.pack(side=tk.LEFT, padx=8, ipadx=8, ipady=2)
+
+        self.model_map_frame = tk.Frame(inner, bg=C_CARD)
+        self.model_map_frame.pack(fill=tk.X, padx=22, pady=(8, 0))
+        self._refresh_custom_card()
+
+    # ------------------------------------------------- browsed custom model
+    def _refresh_custom_card(self):
+        """Info line, radio state and the class-mapping table of the custom-model card."""
+        browsed = bool(self.model_path)
+        usable = (os.path.isfile(self.model_path) if browsed else custom_model_available())
+        self.custom_ok = usable
+        self.custom_radio.config(state=tk.NORMAL if usable else tk.DISABLED)
+        self.clear_btn.config(state=tk.NORMAL if browsed else tk.DISABLED)
+        if browsed and usable:
+            self.custom_info.config(fg=C_GREEN, text=f"Custom model: {self.model_path}")
+        elif browsed:
+            self.custom_info.config(fg=C_AMBER, text=f"The chosen model was not found: {self.model_path}")
+        elif usable:
+            self.custom_info.config(fg=C_TXT2, text="Uses the model you trained in this workspace (classes are "
+                                                   "matched by position in your class list).")
         else:
-            tk.Label(inner, text="Your model was not found in this workspace.",
-                     bg=C_CARD, fg=C_AMBER, font=('Segoe UI', 8)).pack(anchor='w', padx=22)
+            self.custom_info.config(fg=C_AMBER, text="Your model was not found in this workspace. "
+                                                    "Browse to choose any YOLO model (.pt).")
+        self._render_model_map()
+
+    def _render_model_map(self):
+        for child in self.model_map_frame.winfo_children():
+            child.destroy()
+        self.map_vars = {}
+        if not (self.model_path and self.model_names):
+            self._fit()
+            return
+        tk.Label(self.model_map_frame, text="MODEL CLASS  →  WORKSPACE CLASS", bg=C_CARD, fg=C_TXT2,
+                 font=('Segoe UI', 8, 'bold')).grid(row=0, column=0, columnspan=3, sticky='w', pady=(0, 4))
+        auto = providers.map_head_classes(self.model_names, self.cfg["custom_model"]["class_map"], self.classes)
+        for r, name in enumerate(self.model_names, 1):
+            tk.Label(self.model_map_frame, text=name, bg=C_CARD, fg=C_TXT1, font=('Segoe UI', 10), width=24,
+                     anchor='w').grid(row=r, column=0, pady=2, sticky='w')
+            tk.Label(self.model_map_frame, text="→", bg=C_CARD, fg=C_ACCENT,
+                     font=('Segoe UI', 11, 'bold')).grid(row=r, column=1, padx=8)
+            var = tk.StringVar(value=auto.get(name) or SKIP)
+            ttk.Combobox(self.model_map_frame, textvariable=var, values=[SKIP] + self.classes, state='readonly',
+                         font=('Segoe UI', 10), width=22, style='Jelibox.TCombobox').grid(row=r, column=2, pady=2,
+                                                                                         sticky='w')
+            self.map_vars[name] = var
+        self._fit()
+
+    def _fit(self):
+        if self.win.winfo_exists():
+            self.scroll.fit(self.win, 660)
+
+    def _browse_model(self):
+        start = model_folder if os.path.isdir(model_folder) else BASE_DIR
+        path = filedialog.askopenfilename(
+            parent=self.win, title="Choose a custom YOLO model", initialdir=start,
+            filetypes=[("YOLO model", "*.pt"), ("All files", "*.*")])
+        if not path:
+            return
+        self.win.config(cursor='watch')
+        self.win.update_idletasks()
+        try:
+            names = [n for n in providers.model_class_names(path) if n]
+        except providers.AssistantError as exc:
+            messagebox.showwarning("Label Assistant", str(exc), parent=self.win)
+            return
+        finally:
+            self.win.config(cursor='')
+        self.model_path, self.model_names = os.path.normpath(path), names
+        self.cfg["custom_model"]["class_map"] = {}               # a new model: map by name again
+        self.provider_var.set(wcfg.PROVIDER_CUSTOM)
+        self._refresh_custom_card()
+        self._apply_provider_state()
+
+    def _clear_model(self):
+        self.model_path, self.model_names = "", []
+        self.cfg["custom_model"]["class_map"] = {}
+        self._refresh_custom_card()
+        if self.provider_var.get() == wcfg.PROVIDER_CUSTOM and not self.custom_ok:
+            self.provider_var.set(wcfg.PROVIDER_YOLO_WORLD)
+        self._apply_provider_state()
 
     def _build_confidence(self, parent):
         row = tk.Frame(parent, bg=C_BASE)
@@ -282,7 +380,7 @@ class LabelAssistantDialog:
         self.empty_hint.config(
             text="" if self.rows else "No target class yet - click “Add target class”.")
         self.win.update_idletasks()
-        self.win.geometry(f"660x{self.win.winfo_reqheight()}")
+        self._fit()
 
     def _on_rows_resize(self, _):
         self.list_canvas.configure(scrollregion=self.list_canvas.bbox('all'))
@@ -290,6 +388,8 @@ class LabelAssistantDialog:
     def _on_wheel(self, event):
         if len(self.rows) > MAX_VISIBLE_ROWS:
             self.list_canvas.yview_scroll(int(-event.delta / 120), 'units')
+        else:
+            self.scroll.scroll_by(event.delta)
 
     # ----------------------------------------------------- radio -> state
     def _apply_provider_state(self):
@@ -323,6 +423,17 @@ class LabelAssistantDialog:
                     "Your settings will be saved, but pressing G will not annotate anything "
                     "until you add one. You can keep annotating manually in the meantime.",
                     parent=self.win)
+        class_map = {n: v.get() for n, v in self.map_vars.items() if v.get() != SKIP}
+        if provider == wcfg.PROVIDER_CUSTOM and self.model_path:
+            if not os.path.isfile(self.model_path):
+                messagebox.showwarning("Label Assistant", f"The chosen model was not found:\n{self.model_path}",
+                                       parent=self.win)
+                return
+            if self.model_names and not class_map:
+                messagebox.showwarning("Label Assistant", "Map at least one model class to a workspace class.",
+                                       parent=self.win)
+                return
+        self.cfg["custom_model"] = {"path": self.model_path, "class_map": class_map}
         # Keep whatever rows are valid even when the trained model is selected.
         self.cfg["provider"] = provider
         self.cfg["confidence"] = round(float(self.conf_var.get()), 2)
@@ -336,5 +447,15 @@ class LabelAssistantDialog:
 
 
 def open_label_assistant(parent):
-    dlg = LabelAssistantDialog(parent)
-    parent.wait_window(dlg.win)
+    """Open the settings window of the mode chosen on the front menu."""
+    from . import assistant_modes
+    mode = assistant_modes.get_mode()
+    if mode == assistant_modes.MODE_LOCATE:
+        from .ModeDialogs import open_locate_anything
+        open_locate_anything(parent)
+    elif mode == assistant_modes.MODE_HEAD:
+        from .ModeDialogs import open_custom_head
+        open_custom_head(parent)
+    else:
+        dlg = LabelAssistantDialog(parent)
+        parent.wait_window(dlg.win)

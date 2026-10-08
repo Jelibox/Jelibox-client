@@ -17,7 +17,17 @@ Layout:
           "target_classes": [              # prompt -> workspace class
             {"prompt": "white horse", "map_to": "horse"}
           ]
-        }
+        },
+        "locate_anything": {               # LocateAnything-3B (see LOCATE_DEFAULTS)
+          "target_classes": [{"prompt": "person", "map_to": "rider"}],
+          "generation_mode": "hybrid", "device": "auto", ...
+        },
+        "custom_head": {                   # frozen YOLO detector + trained head (see HEAD_DEFAULTS)
+          "head_path": "models/horse/heads/head_best.pt",
+          "detector_classes": [0],         # detector class ids whose boxes the head relabels
+          "class_map": {"sleeping": "rider"}
+        },
+        "batch": {"only_unlabeled": true}  # Auto-annotate all images
       }
     }
 
@@ -38,6 +48,9 @@ CONFIG_VERSION = 1
 
 PROVIDER_YOLO_WORLD = "yolo_world"
 PROVIDER_CUSTOM = "custom_model"
+PROVIDER_LOCATE = "locate_anything"
+PROVIDER_HEAD = "custom_head"
+PROVIDERS = (PROVIDER_YOLO_WORLD, PROVIDER_CUSTOM, PROVIDER_LOCATE, PROVIDER_HEAD)
 
 YOLO_WORLD_MODELS = [
     "yolov8s-world", "yolov8s-worldv2",
@@ -46,6 +59,35 @@ YOLO_WORLD_MODELS = [
     "yolov8x-world", "yolov8x-worldv2",
 ]
 
+LOCATE_GENERATION_MODES = ["hybrid", "fast", "slow"]
+LOCATE_DEVICES = ["auto", "cuda", "cpu"]
+
+LOCATE_DEFAULTS = {
+    "target_classes": [],
+    "generation_mode": "hybrid",    # MTP with AR fallback: best recall
+    "device": "auto",               # auto = CUDA when available, else CPU
+    "short_side": 1024,             # larger images are shrunk to this short side before inference
+    "max_new_tokens": 4096,
+    "passes": 1,                    # >1 = several sampled decodes merged by agreement (needs temperature > 0)
+    "min_votes": 1,
+    "temperature": 0.0,
+    "iou_dedup": 0.9,
+}
+
+CUSTOM_MODEL_DEFAULTS = {
+    "path": "",                     # a model chosen with "Browse custom model"; "" = models/<workspace>/modelAssistant.pt
+    "class_map": {},                # model class name -> workspace class (only used with a browsed model)
+}
+
+HEAD_DEFAULTS = {
+    "head_path": "",                # trained head checkpoint (head_best.pt)
+    "detector_weights": "",         # "" = the detector the head was trained on
+    "detector_classes": [0],        # detector class ids whose boxes get relabelled (COCO: 0 person, 39 bottle, ...)
+    "iou": 0.6,                     # NMS IoU of the detector
+    "min_head_conf": 0.0,           # drop boxes whose head probability is below this
+    "class_map": {},                # head class name -> workspace class
+}
+
 DEFAULT_ASSISTANT = {
     "provider": PROVIDER_YOLO_WORLD,
     "confidence": 0.3,
@@ -53,6 +95,10 @@ DEFAULT_ASSISTANT = {
         "model": YOLO_WORLD_MODELS[0],
         "target_classes": [],
     },
+    "locate_anything": copy.deepcopy(LOCATE_DEFAULTS),
+    "custom_model": copy.deepcopy(CUSTOM_MODEL_DEFAULTS),
+    "custom_head": copy.deepcopy(HEAD_DEFAULTS),
+    "batch": {"only_unlabeled": True},
 }
 
 
@@ -68,13 +114,84 @@ def exists(workspace_name):
     return os.path.exists(config_path(workspace_name)) or os.path.exists(_legacy_path(workspace_name))
 
 
+def _clean_targets(raw):
+    targets = []
+    for t in raw or []:
+        if isinstance(t, dict) and isinstance(t.get("prompt"), str):
+            targets.append({"prompt": t["prompt"],
+                            "map_to": t.get("map_to") if isinstance(t.get("map_to"), str) else ""})
+    return targets
+
+
+def _num(value, default, low, high, kind=float):
+    """value as `kind` when it is a number inside [low, high], otherwise the default."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not (low <= value <= high):
+        return default
+    return kind(value)
+
+
+def _normalize_locate(raw):
+    out = copy.deepcopy(LOCATE_DEFAULTS)
+    if not isinstance(raw, dict):
+        return out
+    out["target_classes"] = _clean_targets(raw.get("target_classes"))
+    if raw.get("generation_mode") in LOCATE_GENERATION_MODES:
+        out["generation_mode"] = raw["generation_mode"]
+    if raw.get("device") in LOCATE_DEVICES:
+        out["device"] = raw["device"]
+    out["short_side"] = _num(raw.get("short_side"), out["short_side"], 128, 4096, int)
+    out["max_new_tokens"] = _num(raw.get("max_new_tokens"), out["max_new_tokens"], 64, 16384, int)
+    out["passes"] = _num(raw.get("passes"), out["passes"], 1, 16, int)
+    out["min_votes"] = _num(raw.get("min_votes"), out["min_votes"], 1, 16, int)
+    out["temperature"] = _num(raw.get("temperature"), out["temperature"], 0.0, 2.0)
+    out["iou_dedup"] = _num(raw.get("iou_dedup"), out["iou_dedup"], 0.1, 1.0)
+    return out
+
+
+def _clean_class_map(raw):
+    return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(raw, dict) else {}
+
+
+def _normalize_custom_model(raw):
+    out = copy.deepcopy(CUSTOM_MODEL_DEFAULTS)
+    if isinstance(raw, dict):
+        if isinstance(raw.get("path"), str):
+            out["path"] = raw["path"].strip()
+        out["class_map"] = _clean_class_map(raw.get("class_map"))
+    return out
+
+
+def _normalize_head(raw):
+    out = copy.deepcopy(HEAD_DEFAULTS)
+    if not isinstance(raw, dict):
+        return out
+    for key in ("head_path", "detector_weights"):
+        if isinstance(raw.get(key), str):
+            out[key] = raw[key].strip()
+    ids = raw.get("detector_classes")
+    if isinstance(ids, list):
+        clean = [i for i in ids if isinstance(i, int) and not isinstance(i, bool) and i >= 0]
+        if clean:
+            out["detector_classes"] = sorted(set(clean))
+    out["iou"] = _num(raw.get("iou"), out["iou"], 0.05, 0.95)
+    out["min_head_conf"] = _num(raw.get("min_head_conf"), out["min_head_conf"], 0.0, 1.0)
+    out["class_map"] = _clean_class_map(raw.get("class_map"))
+    return out
+
+
 def _normalize(data):
     """Fill in anything missing / malformed so callers can rely on the schema."""
     assistant = copy.deepcopy(DEFAULT_ASSISTANT)
     raw_assistant = data.get("label_assistant")
     if isinstance(raw_assistant, dict):
-        if raw_assistant.get("provider") in (PROVIDER_YOLO_WORLD, PROVIDER_CUSTOM):
+        if raw_assistant.get("provider") in PROVIDERS:
             assistant["provider"] = raw_assistant["provider"]
+        assistant["locate_anything"] = _normalize_locate(raw_assistant.get("locate_anything"))
+        assistant["custom_model"] = _normalize_custom_model(raw_assistant.get("custom_model"))
+        assistant["custom_head"] = _normalize_head(raw_assistant.get("custom_head"))
+        raw_batch = raw_assistant.get("batch")
+        if isinstance(raw_batch, dict) and isinstance(raw_batch.get("only_unlabeled"), bool):
+            assistant["batch"]["only_unlabeled"] = raw_batch["only_unlabeled"]
         conf = raw_assistant.get("confidence")
         if isinstance(conf, (int, float)) and 0.0 < conf <= 1.0:
             assistant["confidence"] = float(conf)
@@ -82,12 +199,7 @@ def _normalize(data):
         if isinstance(raw_yw, dict):
             if raw_yw.get("model") in YOLO_WORLD_MODELS:
                 assistant["yolo_world"]["model"] = raw_yw["model"]
-            targets = []
-            for t in raw_yw.get("target_classes") or []:
-                if isinstance(t, dict) and isinstance(t.get("prompt"), str):
-                    targets.append({"prompt": t["prompt"],
-                                    "map_to": t.get("map_to") if isinstance(t.get("map_to"), str) else ""})
-            assistant["yolo_world"]["target_classes"] = targets
+            assistant["yolo_world"]["target_classes"] = _clean_targets(raw_yw.get("target_classes"))
 
     classes = data.get("classes")
     classes = [c for c in classes if isinstance(c, str)] if isinstance(classes, list) else []
@@ -143,14 +255,19 @@ def get_classes(workspace_name):
 
 
 def set_classes(workspace_name, classes):
-    """Replace the class list, keeping the assistant settings. YOLO-World
-    target classes that map to a class which no longer exists are removed.
+    """Replace the class list, keeping the assistant settings. YOLO-World and
+    LocateAnything target classes (and custom-head class mappings) that point
+    at a class which no longer exists are removed.
     Returns the list of removed target prompts."""
     data = load(workspace_name) or _normalize({})
     data["classes"] = list(classes)
-    yw = data["label_assistant"]["yolo_world"]
-    removed = [t["prompt"] for t in yw["target_classes"] if t["map_to"] not in data["classes"]]
-    yw["target_classes"] = [t for t in yw["target_classes"] if t["map_to"] in data["classes"]]
+    assistant = data["label_assistant"]
+    removed = []
+    for holder in (assistant["yolo_world"], assistant["locate_anything"]):
+        removed += [t["prompt"] for t in holder["target_classes"] if t["map_to"] not in data["classes"]]
+        holder["target_classes"] = [t for t in holder["target_classes"] if t["map_to"] in data["classes"]]
+    for holder in (assistant["custom_model"], assistant["custom_head"]):
+        holder["class_map"] = {k: v for k, v in holder["class_map"].items() if v in data["classes"]}
     save(workspace_name, data)
     return removed
 

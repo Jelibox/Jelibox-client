@@ -27,6 +27,7 @@ from .workspace_manager import (list_workspaces, instance_path, count_images, DA
 from .dataset_import import (scan_dataset_folder, detect_dataset_format, import_dataset,
                              yolo_classes_resolved, sanitize_filename_prefix)
 from . import collab
+from . import assistant_modes
 from . import relocate
 from . import workspace_manager
 from . import ServerSettingsDialog
@@ -51,6 +52,9 @@ class WorkspacePickerApp:
         self._build_header()
         self._build_body()
         self.refresh_workspaces()
+        self.mode_menu = None
+        if os.environ.get("JELIBOX_SKIP_MODE_MENU") != "1":     # set when the picker restarts itself (theme change)
+            self._show_mode_menu()
 
     # ----------------------------------------------------------
     #  Header (matches AnnotationGUI's header bar)
@@ -79,6 +83,10 @@ class WorkspacePickerApp:
                  font=('Segoe UI', 6, 'bold')).pack(anchor='w')
 
         tk.Frame(header, bg=C_BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, pady=10, padx=10)
+
+        self.mode_btn = self._btn(header, "", self._show_mode_menu, C_CARD2, C_ACCENT, bold=True)
+        self.mode_btn.pack(side=tk.LEFT, padx=(0, 6), pady=12, ipady=5, ipadx=10)
+        self._update_mode_button()
 
         self._btn(header, "⟳  Refresh", self.refresh_workspaces,
                   C_CARD2, C_TXT1).pack(side=tk.LEFT, padx=(0, 6), pady=12, ipady=5, ipadx=10)
@@ -109,6 +117,89 @@ class WorkspacePickerApp:
 
         tk.Frame(self.root, bg=C_BORDER, height=1).pack(fill=tk.X)
 
+    # ----------------------------------------------------------
+    #  Front menu: how should Jelibox annotate?
+    # ----------------------------------------------------------
+    def _update_mode_button(self):
+        self.mode_btn.config(text=f"🎛  Mode: {assistant_modes.title(assistant_modes.get_mode())}")
+
+    def _choose_mode(self, mode):
+        assistant_modes.set_mode(mode)
+        self._update_mode_button()
+        self._close_mode_menu()
+
+    def _close_mode_menu(self, event=None):
+        if self.mode_menu is not None:
+            self.mode_menu.destroy()
+            self.mode_menu = None
+            for key in ("1", "2", "3", "<Escape>"):
+                self.root.unbind(key)
+
+    def _show_mode_menu(self):
+        """Full-window menu with the three modes. The choice is app-wide and used by the annotation window."""
+        if self.mode_menu is not None:
+            return
+        current = assistant_modes.get_mode()
+        menu = self.mode_menu = tk.Frame(self.root, bg=C_BASE)
+        menu.place(x=0, y=0, relwidth=1, relheight=1)
+        menu.lift()
+
+        tk.Label(menu, text="1 / 2 / 3 to choose   -   Esc keeps the last used mode", bg=C_BASE, fg=C_TXT3,
+                 font=('Segoe UI', 8)).pack(side=tk.BOTTOM, pady=(0, 14))
+        top = tk.Frame(menu, bg=C_BASE)
+        top.pack(side=tk.TOP, pady=(34, 0))
+        try:
+            from PIL import Image, ImageTk
+            self.menu_logo = ImageTk.PhotoImage(Image.open("assets/jelibox.png").resize((72, 72)))
+            tk.Label(top, image=self.menu_logo, bg=C_BASE).pack()
+        except Exception:
+            pass
+        tk.Label(top, text="How should Jelibox annotate?", bg=C_BASE, fg=C_TXT1,
+                 font=('Segoe UI', 22, 'bold')).pack(pady=(10, 2))
+        tk.Label(top, text="Pick a mode. You can change it any time with the Mode button.", bg=C_BASE, fg=C_TXT2,
+                 font=('Segoe UI', 10)).pack()
+
+        cards = tk.Frame(menu, bg=C_BASE)
+        cards.pack(side=tk.TOP, fill=tk.X, padx=30, pady=(28, 0))
+        for col in range(len(assistant_modes.MODES)):
+            cards.columnconfigure(col, weight=1, uniform='card')
+
+        for col, (mode, title, summary, needs) in enumerate(assistant_modes.MODES):
+            active = mode == current
+            card = tk.Frame(cards, bg=C_CARD, cursor='hand2', highlightthickness=2,
+                            highlightbackground=C_ACCENT if active else C_BORDER)
+            card.grid(row=0, column=col, padx=10, sticky='nsew')
+            body = tk.Frame(card, bg=C_CARD)
+            body.pack(fill=tk.BOTH, expand=True, padx=18, pady=16)
+            tk.Label(body, text=f"{col + 1}", bg=C_CARD, fg=C_ACCENT, font=('Segoe UI', 11, 'bold')).pack(anchor='w')
+            tk.Label(body, text=title, bg=C_CARD, fg=C_TXT1, font=('Segoe UI', 16, 'bold')).pack(anchor='w', pady=(2, 6))
+            tk.Label(body, text=summary, bg=C_CARD, fg=C_TXT2, font=('Segoe UI', 10), wraplength=250,
+                     justify=tk.LEFT).pack(anchor='w')
+            tk.Label(body, text=needs, bg=C_CARD, fg=C_TXT3, font=('Segoe UI', 9), wraplength=250,
+                     justify=tk.LEFT).pack(anchor='w', pady=(10, 14))
+            tk.Button(body, text="Last used" if active else "Use this mode", command=lambda m=mode: self._choose_mode(m),
+                      bg=C_ACCENT if active else C_CARD2, fg=C_ON_ACCENT if active else C_TXT1,
+                      font=('Segoe UI', 9, 'bold'), relief=tk.FLAT, cursor='hand2', borderwidth=0,
+                      activebackground=C_ACCENT if active else C_CARD2).pack(anchor='w', ipadx=14, ipady=4)
+
+            def enter(_e, c=card):
+                c.config(highlightbackground=C_ACCENT)
+
+            def leave(_e, c=card, a=active):
+                c.config(highlightbackground=C_ACCENT if a else C_BORDER)
+
+            def click(_e, m=mode):
+                self._choose_mode(m)
+            for w in [card, body] + list(body.winfo_children()):
+                if not isinstance(w, tk.Button):
+                    w.bind("<Button-1>", click)
+            card.bind("<Enter>", enter)
+            card.bind("<Leave>", leave)
+
+        for n, (mode, *_rest) in enumerate(assistant_modes.MODES, 1):
+            self.root.bind(str(n), lambda e, m=mode: self._choose_mode(m))
+        self.root.bind("<Escape>", self._close_mode_menu)
+
     def _open_install_folder(self):
         """Show the folder Jelibox is installed in (datasets, models, exports... all live there)."""
         folder = os.path.abspath(workspace_manager.BASE_DIR)
@@ -130,7 +221,8 @@ class WorkspacePickerApp:
         """Switch theme and relaunch the picker so every widget picks up the new colors."""
         toggle_mode()
         try:
-            subprocess.Popen([self.python_exe, self.entry_script])
+            subprocess.Popen([self.python_exe, self.entry_script],
+                             env={**os.environ, "JELIBOX_SKIP_MODE_MENU": "1"})
         except OSError as e:
             messagebox.showerror("Theme", f"Theme saved, but Jelibox could not restart:\n{e}", parent=self.root)
             return

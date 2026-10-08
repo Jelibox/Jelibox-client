@@ -148,6 +148,18 @@ def save_yolo_label(img_name, orig_img, classList):
     print(f"[INFO] Saved YOLO label: {label_path} ({len(lines)} annotations)")
 
 
+def save_annotations(img_name, img_shape, bboxes, polygons, classList):
+    """Write one image's VOC XML and YOLO label from explicit lists, without touching the GUI state.
+    Used by Auto-annotate all, which labels images other than the one on screen."""
+    base = os.path.splitext(img_name)[0]
+    with open(os.path.join(vocdataset_folder, base + ".xml"), "w") as f:
+        f.write(prettify_xml(build_voc_xml(img_name, img_shape, bboxes, polygons)))
+    h, w = img_shape[:2]
+    lines = _yolo_lines_from_annotations(bboxes, polygons, classList, w, h)
+    with open(os.path.join(yolo_labels_folder, base + ".txt"), "w") as f:
+        f.write("\n".join(lines))
+
+
 def _read_voc_size(xml_path):
     """Read (height, width) from a VOC XML's <size> block, or None if missing/invalid."""
     try:

@@ -9,16 +9,19 @@
 #   3. not installed yet   -> installs the newest version fresh
 #      installed, older    -> updates it (your datasets, models and configs are never touched)
 #      installed, current  -> says so and stops
-#   4. runs jelibox_linux_installation.bash, which gives Jelibox its own private Python 3.12 (downloaded
-#      with uv into the Jelibox folder - no sudo, your own Python is not touched), creates the virtual
-#      environment, installs the dependencies and adds Jelibox to your application menu.
+#   4. runs jelibox_linux_installation.bash, which installs uv if it is missing (official installer, user level),
+#      gives Jelibox its own private Python 3.12 (downloaded by uv into the Jelibox folder - your own Python is
+#      not touched, nothing is put on PATH), creates the virtual environment, installs the dependencies and adds
+#      Jelibox to your application menu. sudo is asked for only if the system graphics libraries OpenCV needs
+#      (libGL, GLib) are missing.
 #
 # Optional environment variables (set them before the command):
 #   JELIBOX_VERSION     install a specific release, e.g.  v0.1.0   (default: newest release)
+#                       main = the latest development version (always re-installed)
 #   JELIBOX_HOME        install here without being asked     (default: you are asked; Enter = ~/jelibox)
 #   JELIBOX_NO_INSTALL  1 = only download and unpack, do not run the installer
 #   JELIBOX_FORCE       1 = reinstall even when this version is already installed
-#   JELIBOX_PYTHON      system = install Python 3.12 system-wide (needs sudo) instead of the private one
+#   JELIBOX_GPU         nvidia | cpu = which PyTorch to install without being asked (default: you are asked)
 #   JELIBOX_ARCHIVE     path to a local .tar.gz instead of downloading (offline installs, tests)
 
 # Everything lives in one function so bash has read the whole script before running any of it.
@@ -123,7 +126,10 @@ main() {
             fi
             [ -n "$version" ] || say "No release found yet - using the latest development version (main)."
         fi
-        if [ -n "$version" ]; then
+        if [ "$version" = "main" ]; then
+            url="https://github.com/$repo/archive/refs/heads/main.tar.gz"
+            say "Downloading Jelibox (main) ..."
+        elif [ -n "$version" ]; then
             url="https://github.com/$repo/archive/refs/tags/$version.tar.gz"
             say "Downloading Jelibox $version ..."
         else
@@ -137,7 +143,7 @@ main() {
     local target="${version:-main}"
     [ -z "${JELIBOX_ARCHIVE:-}" ] || target="${version:-local archive}"
     if [ "$existing" = "1" ]; then
-        if [ -n "$version" ] && [ "$installed" = "$version" ] && [ -f "$dest/.jelibox-ready" ] \
+        if [ -n "$version" ] && [ "$version" != "main" ] && [ "$installed" = "$version" ] && [ -f "$dest/.jelibox-ready" ] \
                 && [ "${JELIBOX_FORCE:-}" != "1" ]; then
             say "Jelibox $version is already installed and up to date ($dest)."
             say "Nothing to do. (JELIBOX_FORCE=1 reinstalls it anyway.)"
@@ -146,6 +152,49 @@ main() {
         say "Found Jelibox ${installed:-(unknown version)} in $dest - updating to $target."
     else
         say "Jelibox is not installed yet ($dest) - installing $target."
+    fi
+
+    # Discrete NVIDIA GPU or not? This decides which PyTorch is downloaded (CUDA build or the smaller CPU build).
+    # JELIBOX_GPU=nvidia|cpu skips the question; the installer script asks by itself if it is started without it.
+    if [ "${JELIBOX_NO_INSTALL:-}" != "1" ]; then
+        local gpu="${JELIBOX_GPU:-}"
+        gpu="$(printf '%s' "$gpu" | tr '[:upper:]' '[:lower:]')"
+        case "$gpu" in
+            ""|nvidia|cpu) ;;
+            *) fail "JELIBOX_GPU must be 'nvidia' or 'cpu' (got '$gpu')." ;;
+        esac
+        if [ -z "$gpu" ]; then
+            if [ "$(uname -m)" = "aarch64" ]; then
+                gpu="cpu"
+                say "ARM: the standard PyTorch build is used (no separate CUDA choice)."
+            else
+                local detected=0 reply=""
+                if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+                    detected=1
+                elif command -v lspci >/dev/null 2>&1 && lspci 2>/dev/null | grep -Ei 'vga|3d|display' | grep -qi nvidia; then
+                    detected=1
+                fi
+                if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+                    {
+                        printf '\n\033[1;36m[Jelibox]\033[0m Does this computer have a discrete NVIDIA graphics card (GeForce / RTX / GTX / Quadro)?\n'
+                        printf '          Yes = the CUDA build of PyTorch (about 2.5 GB, needs the NVIDIA driver). No = the much smaller CPU build.\n'
+                        printf '          AMD and Intel graphics cannot use CUDA - answer No for them.\n'
+                        printf '          Detected: %s\n' "$([ "$detected" = 1 ] && echo 'an NVIDIA GPU' || echo 'no NVIDIA GPU')"
+                        printf '          NVIDIA GPU? [Y/N, Enter = %s]: ' "$([ "$detected" = 1 ] && echo Y || echo N)"
+                    } > /dev/tty
+                    read -r reply < /dev/tty || reply=""
+                else
+                    say "No keyboard available - using what was detected."
+                fi
+                case "$reply" in
+                    [Yy]|[Yy][Ee][Ss]) gpu="nvidia" ;;
+                    [Nn]|[Nn][Oo])     gpu="cpu" ;;
+                    *) if [ "$detected" = 1 ]; then gpu="nvidia"; else gpu="cpu"; fi ;;
+                esac
+            fi
+        fi
+        export JELIBOX_GPU="$gpu"
+        say "PyTorch build: $([ "$gpu" = "nvidia" ] && echo 'NVIDIA GPU (CUDA)' || echo 'CPU only')"
     fi
 
     if [ -z "${JELIBOX_ARCHIVE:-}" ]; then
@@ -175,7 +224,7 @@ main() {
     [ -f "$installer" ] || fail "Installer script missing: $installer"
     chmod +x "$installer"
 
-    say "Setting up Python and the dependencies (no sudo needed unless the system Python is used)."
+    say "Setting up Python and the dependencies (sudo is only asked for if system graphics libraries are missing)."
     if [ -r /dev/tty ]; then
         bash "$installer" < /dev/tty      # keep the keyboard available for the sudo prompt
     else

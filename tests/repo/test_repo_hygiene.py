@@ -14,7 +14,8 @@ NEW_REPO_URL = "github.com/Jelibox/Jelibox-client"
 
 SKIP_DIRS = {"venv", ".git", "__pycache__", "datasetsInput", "datasetsOutput", "vocdataset", "YOLOdataset",
              "models", "configs", "export dataset", "export model", "jelibox", "boxify", "VC_redist",
-             "temp"}                        # git-ignored scratch space (plans, moved datasets), not repository content
+             "temp",                        # git-ignored scratch space (plans, moved datasets), not repository content
+             "TOBEADDED"}                   # third-party source staged for integration, kept as received
 BINARY = (".png", ".ico", ".exe", ".lnk", ".pt", ".jpg", ".jpeg", ".pyc")
 
 
@@ -64,7 +65,8 @@ class CodeHealthTests(unittest.TestCase):
     def test_gui_modules_do_not_hardcode_colors_outside_the_theme(self):
         offenders = []
         pat = re.compile(r"(bg|fg|background|foreground)\s*=\s*['\"]#[0-9a-fA-F]{6}['\"]")
-        for name in ("AnnotationGUI.py", "WorkspacePicker.py", "LabelAssistantDialog.py", "ScreenGuard.py"):
+        for name in ("AnnotationGUI.py", "WorkspacePicker.py", "LabelAssistantDialog.py", "ScreenGuard.py",
+                     "ModeDialogs.py", "AutoAnnotateDialog.py"):
             for i, line in enumerate(read(os.path.join(REPO, "utils", name)).splitlines(), 1):
                 if pat.search(line):
                     offenders.append(f"{name}:{i}: {line.strip()[:90]}")

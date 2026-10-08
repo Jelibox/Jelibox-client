@@ -22,11 +22,14 @@ from .augmentation import Augmenter, write_image
 from .augment_geometry import yolo_label_text, voc_xml_write, coco_annotation
 from .file_handler import load_annotation_local
 from .polygon_manager import polygon_manager
-from .inferenceObjectDetection import inference_current
+from .inferenceObjectDetection import inference_current, predict_current, apply_predictions, is_heavy
+from . import assistant_modes
+from .AutoAnnotateDialog import run_blocking, open_auto_annotate, confirm_download_if_needed
 from .image_manager import (repeat_last_annotations, delete_current_image, 
                           save_and_backup_bboxes)
 from .TrainingConfigDialog import TrainingConfigDialog
 from .LabelAssistantDialog import open_label_assistant
+from .HeadTrainDialog import open_head_training
 from . import export as export_module
 import threading
 import webbrowser
@@ -169,6 +172,7 @@ class AnnotationGUI:
         self.root.bind('s', lambda e: self.change_class_selected())
         self.root.bind('t', lambda e: self.start_training())
         self.root.bind('g', lambda e: self.run_inference())
+        self.root.bind('G', lambda e: self.run_auto_annotate_all())
         self.root.bind('e', lambda e: self.repeat_annotations())
         self.root.bind('b', lambda e: self.toggle_force_new_bbox())
         self.root.bind('<Delete>', lambda e: self.delete_image())
@@ -266,8 +270,8 @@ class AnnotationGUI:
         name_stack.pack(side=tk.LEFT, padx=(5, 0))
         tk.Label(name_stack, text="Jelibox", bg=C_PANEL, fg=C_TXT1,
                  font=('Segoe UI', 12, 'bold')).pack(anchor='w')
-        tk.Label(name_stack, text=workspaceName.upper(), bg=C_PANEL, fg=C_TXT3,
-                 font=('Segoe UI', 6, 'bold')).pack(anchor='w')
+        tk.Label(name_stack, text=f"{workspaceName.upper()}  ·  {assistant_modes.title(assistant_modes.get_mode()).upper()}",
+                 bg=C_PANEL, fg=C_TXT3, font=('Segoe UI', 6, 'bold')).pack(anchor='w')
 
         # vertical separator
         tk.Frame(header, bg=C_BORDER, width=1).pack(side=tk.LEFT,
@@ -314,6 +318,7 @@ class AnnotationGUI:
             ("↷  Redo",    self.redo,                    'secondary'),
             ("🔄  Repeat", self.repeat_annotations,     'secondary'),
             ("🤖  Infer",  self.run_inference,           'primary'),
+            ("🗂  Annotate all", self.run_auto_annotate_all, 'secondary'),
             ("🗑  Delete", self.delete_image,            'danger'),
             ("🎥  Stream", self.launch_stream,           'secondary'),
             ("⬡  Mode",    self.toggle_annotation_mode,  'secondary'),
@@ -3151,6 +3156,10 @@ class AnnotationGUI:
                 state.training_running = False
                 state.training_process = None
 
+        if assistant_modes.get_mode() == assistant_modes.MODE_HEAD:
+            self._train_head()
+            return
+
         annotationMode = state.annotation_mode
         model_type = "seg" if annotationMode == "polygon" else "detect"
         model_type_display = ("🔷 SEGMENTATION" if annotationMode == "polygon"
@@ -3250,6 +3259,12 @@ class AnnotationGUI:
 
         state.training_running = False
 
+    def _train_head(self):
+        """Custom head mode: Train fits a head on the frozen detector (not a whole YOLO model)."""
+        image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
+        folders = sorted({os.path.dirname(r['source']) for r in self._find_workspace_images(image_exts)})
+        open_head_training(self.root, folders or [input_folder], yolo_labels_folder, model_folder)
+
     # ----------------------------------------------------------
     #  Inference & misc actions
     # ----------------------------------------------------------
@@ -3258,7 +3273,10 @@ class AnnotationGUI:
         # and is written out when you leave the image.
         before = self._snapshot()
         print("[GUI] Running inference...")
-        ok, message = inference_current(self.images, state.current_index)
+        if is_heavy():
+            ok, message = self._run_heavy_inference()
+        else:
+            ok, message = inference_current(self.images, state.current_index)
         if (len(state.bboxes), len(state.polygons)) != (len(before[0]), len(before[1])):
             self.undo_stack.append(before)
             del self.undo_stack[:-self.HISTORY_LIMIT]
@@ -3269,6 +3287,38 @@ class AnnotationGUI:
         if not ok:
             messagebox.showwarning("Label Assistant", message, parent=self.root)
         print(f"[GUI] Inference finished: {message}")
+
+    def _run_heavy_inference(self):
+        """LocateAnything / custom head on the current image. The model may need minutes to load (and, the first
+        time, to download), so the work runs behind a progress window instead of freezing the GUI."""
+        if not confirm_download_if_needed(self.root):
+            return True, "Cancelled."
+        index = state.current_index
+        result, error = run_blocking(
+            self.root, "Label Assistant",
+            lambda status, progress, cancel: predict_current(self.images, index, status=status),
+            "Preparing the model ...")
+        if error is not None:
+            return False, str(error)
+        preds, is_polygon = result
+        return True, apply_predictions(preds, is_polygon)
+
+    def run_auto_annotate_all(self):
+        """Run the Label Assistant over every image of this dataset folder."""
+        def before_start():
+            # what is on screen must be on disk first - the batch reads and writes the files
+            xml_path = os.path.join(vocdataset_folder, os.path.splitext(self.images[state.current_index])[0] + '.xml')
+            if state.bboxes or state.polygons or os.path.exists(xml_path):
+                self.save_current()
+
+        def after_done():
+            # the current image may have been annotated on disk: show what is there now
+            self.reset_history()
+            self.load_current_image()
+            self.update_display()
+            self.update_info()
+
+        open_auto_annotate(self.root, self.images, before_start=before_start, after_done=after_done)
 
     def toggle_theme(self):
         """Switch theme and relaunch the window so every widget picks up the new colors."""

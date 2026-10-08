@@ -198,15 +198,16 @@
                     <h3>Windows</h3>
                     <p>Open <b>PowerShell</b> and paste:</p>
                     <pre>irm https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.ps1 | iex</pre>
-                    <p>Windows asks for administrator permission once, for the Python and dependency step.</p>
+                    <p>Jelibox gets its own Python (via uv) inside its folder; yours is never touched. Windows asks for administrator permission only if the Visual C++ runtime is missing.</p>
                 </div>
                 <div class="install-card">
                     <h3>Linux</h3>
                     <p>Open a terminal and paste:</p>
                     <pre>curl -fsSL https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.sh | bash</pre>
-                    <p>It asks for your <code>sudo</code> password to install Python and Tkinter.</p>
+                    <p>Jelibox gets its own Python (via uv) inside its folder; yours is never touched. It asks for your <code>sudo</code> password only if the OpenCV system libraries (libGL, GLib) are missing.</p>
                 </div>
             </div>
+            <p class="install-note">The installer asks whether this computer has a discrete NVIDIA graphics card and installs the CUDA or the smaller CPU-only PyTorch accordingly.</p>
             <p class="install-note">Prefer to read it first? <a href="https://github.com/Jelibox/Jelibox-client/blob/main/install.ps1" target="_blank" rel="noopener noreferrer">install.ps1</a> and <a href="https://github.com/Jelibox/Jelibox-client/blob/main/install.sh" target="_blank" rel="noopener noreferrer">install.sh</a> are short and open source.</p>
             <details class="manual">
                 <summary>Install manually with git instead</summary>
@@ -227,17 +228,16 @@
                             <pre>./jelibox_linux_installation.bash</pre>
                         </li>
                     </ol>
-                    <p>The installer asks for your <code>sudo</code> password at the beginning, installs Python with Tkinter and venv support, creates the <code>jelibox/</code> virtual environment, installs dependencies, and creates a desktop launcher.</p>
+                    <p>The installer needs <code>sudo</code> only if the OpenCV system libraries are missing. It installs uv if needed, downloads Jelibox's private Python, creates the <code>jelibox/</code> virtual environment, installs dependencies, and creates a desktop launcher.</p>
                 </div>
                 <div class="install-card">
                     <h3>Windows</h3>
                     <ol>
-                        <li>Open <code>VC_redist/</code> and install the package matching your system architecture.</li>
-                        <li>Right-click <code>jelibox_windows_installation.bat</code> and choose <strong>Run as administrator</strong>.</li>
+                        <li>Double-click <code>jelibox_windows_installation.bat</code>. Do not run it as administrator: it asks Windows for permission itself, only to install the Visual C++ runtime, and only when it is missing.</li>
                         <li>Follow the installer prompts.</li>
                         <li>Open the generated <code>Jelibox.lnk</code> shortcut.</li>
                     </ol>
-                    <p>The Windows installer checks for an NVIDIA GPU through <code>nvidia-smi</code> and uses Windows device information as a fallback. GPU detection does not guarantee that the installed PyTorch package has CUDA enabled.</p>
+                    <p>The installer detects an NVIDIA GPU only to suggest an answer, then asks whether this computer has a discrete NVIDIA GPU and installs the matching PyTorch build. GPU detection does not guarantee that the installed PyTorch package has CUDA enabled.</p>
                 </div>
             </div>
             </details>

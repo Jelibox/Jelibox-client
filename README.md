@@ -16,7 +16,8 @@ Jelibox is designed for individuals and teams that need a private, offline-first
 - A VS Code-style workspace picker for switching between datasets
 - Bounding box annotation for object detection
 - Polygon annotation for image segmentation
-- AI-assisted annotation with an Ultralytics YOLO model
+- Three annotation modes chosen on a front menu: **YOLO-World**, **LocateAnything** (NVIDIA LocateAnything-3B) and **Custom head** (a detector plus a head you trained) - see [Modes](#modes)
+- AI-assisted annotation on the current image (`G`) or on **every image of the dataset at once** (`Shift+G`, Auto-annotate all)
 - Model training from the annotation workspace, reading images straight from `datasetsInput/` (no duplicate copies)
 - NVIDIA CUDA and CPU workflows, depending on the installed PyTorch build
 - Class management, visibility toggles, image search, zoom, and multi-selection
@@ -25,22 +26,41 @@ Jelibox is designed for individuals and teams that need a private, offline-first
 - Dataset export for YOLO and Pascal VOC XML
 - Live camera or video inference through Streamlit
 
+## Modes
+
+When Jelibox starts it asks how it should annotate. The choice is remembered, shown in the **Mode** button of the workspace picker and in the annotation window's header, and changed any time with that button. In every mode, **Label Assistant** opens that mode's settings, `G` annotates the current image and `Shift+G` (or **Annotate all**) annotates every image of the dataset folder. New annotations are always *merged* into what is already on an image: an existing annotation wins over an overlapping prediction, and running it twice never stacks duplicates. **Auto-annotate all** has a Stop button, can skip images that are already labelled (default) and writes the Pascal VOC XML and the YOLO label of every image it annotates.
+
+| Mode | What it does | What it needs |
+| --- | --- | --- |
+| **YOLO-World** | The original Jelibox. Zero-shot: describe what to look for ("white horse") and map each phrase to one of your classes, or use your own model: the one you trained in the workspace, or **any Ultralytics model** (e.g. a fine-tuned YOLOv8m) chosen with **Browse custom model**. | Nothing extra. Runs on CPU. |
+| **LocateAnything** | [nvidia/LocateAnything-3B](https://huggingface.co/nvidia/LocateAnything-3B) through HF Transformers. List categories (English or Chinese), map them to your classes, and it labels the whole folder in one pass. Settings: decoding (`hybrid` best recall / `fast` / `slow`), device, image size, passes. | About 7.2 GB download on first use (Jelibox asks first), about 9 GB of free RAM and, on a GPU, 8 GB of VRAM. 64-bit Windows or x86-64 Linux. |
+| **Custom head** | A frozen YOLO detector finds boxes of the class(es) you choose (COCO `person`, `bottle`, ...), a head you trained gives every box one of **your** classes: sleeping / working, or Coca-Cola / Fanta / Sprite. | A head checkpoint (`head_best.pt`) and the ultralytics version below. |
+
+**Your own YOLO model (YOLO-World mode).** In Label Assistant choose *My trained model* and click **Browse custom model** to pick any Ultralytics `.pt` (detect or segment). Jelibox reads the model's class names and maps each one to a workspace class: same-name classes map by themselves, you choose the rest, and unmapped classes are skipped - so the model's class order does not have to match your workspace. The file stays where it is. Without Browse, the model you trained in the workspace (`models/<workspace>/modelAssistant.pt`) is used and its classes are matched by position in your class list, as before.
+
+**LocateAnything details.** The model is downloaded to `models/_huggingface/` (inside the Jelibox folder; set `HF_HOME` to use your own cache), is loaded only when you first use it, and its code is pinned to a fixed, reviewed commit because loading it runs Python from its repository. The 3B model is never loaded at start-up and never in the other modes. Jelibox checks free memory before loading and refuses with a message instead of freezing the computer.
+
+**Custom head details.** Pick the checkpoint with **Browse head** in Label Assistant (put it in `models/<workspace>/` or browse to it). **Browse custom model** next to *Detector weights* chooses your own fine-tuned detector instead of the stock one; its class names then replace the COCO names in *Detect these classes*. A detector chosen this way must be the one the head was trained on (same architecture and layers), because the head reads its features. It carries its class names, the detector it was trained on (downloaded to `models/_detectors/` if missing), the neck layers it reads and the image size. Choose which detector classes to relabel (names or numbers: `person`, `bottle, cup`, `0, 39`) and map each head class to a workspace class (same-name classes map by themselves; unmapped ones are skipped). Needs `ultralytics>=8.4.68`. The checkpoint is read with `torch.load(weights_only=True)`, so a file that would run code is refused. The head training script it was ported from is in [`TOBEADDED/custom_dual_heads`](TOBEADDED/custom_dual_heads/README.md); its label format (`class cx cy w h`, one row per box) is exactly Jelibox's YOLO label format.
+
+**Training your own head (Train button).** In this mode **Train** trains a head instead of a whole YOLO model. Label the boxes of the thing the detector finds (a person, a bottle) with your own classes (sleeping / working, Coca-Cola / Fanta), then press Train: choose the detector (a stock name such as `yolov8m.pt`, or **Browse custom model**), the image size, epochs and batch. The defaults are 384×640 (height × width, keeps a 16:9 picture's proportions, e.g. standing vs sitting), 50 epochs, batch 16, class weights on. The *taps* (the detector's neck layers the head reads) are filled in from the detector name: `15, 18, 21` for yolov8 / yolov9, `16, 19, 22` for yolo11 / yolo26 - check them for any other model. The last 20 % of the images (by file name) are held out to validate: the split is by position, not random, because video frames are near-duplicates and a random split would flatter the score. Training runs in its own process behind a progress window (loss, validation accuracy, macro-F1, time left, Stop). The detector is never changed (its weights are checked before and after). When it ends, the best head is saved as `models/<workspace>/head_best.pt` (an older one is kept as `head_best.prev.pt`) and selected in Label Assistant, so `G` and Annotate all use it right away. The run's job file, log (`train.log`) and last head live in `models/<workspace>/head_run/`. On a computer without an NVIDIA GPU it runs on the CPU, which takes minutes per epoch. The Label Assistant and Train windows scroll when they are taller than the screen (Save / Start stay visible).
+
+**One environment for all three modes.** [`requirements.txt`](requirements.txt) holds every package except PyTorch, with only the limits that matter: `ultralytics>=8.4.68`, `transformers==4.57.6` (must stay below 5) and `huggingface_hub>=0.34.0,<1.0` (the range transformers 4.57.6 accepts), plus `peft`, `lmdb` and `decord`, which the model's own code imports. PyTorch is not pinned: both the CUDA 12.1 build (torch 2.5.1) and the current CPU build were checked with these packages. No separate environment is needed.
+
 ## Requirements
 
 ### Linux
 
 - Debian/Ubuntu/Mint, Fedora/RHEL/CentOS, or Arch/Manjaro
-- Nothing to install first: Jelibox downloads its own private Python 3.12 (with Tkinter) into its folder, no `sudo` needed
-- With `JELIBOX_PYTHON=system` it uses a system Python 3.12 instead (Tkinter and virtual-environment support required)
-- Internet access during installation
-- System graphics library for OpenCV (`libgl1` / `mesa-libGL` / `mesa`) - already present on normal desktops
+- Nothing to install first: Jelibox installs [uv](https://docs.astral.sh/uv/) if it is missing and uses it to download its own private Python 3.12 (with Tkinter) into its folder. Your own Python is never touched and nothing is put on your `PATH` for it
+- `curl` or `wget` (to download uv) and internet access during installation
+- System graphics libraries for OpenCV (`libgl1` + `libglib2.0-0` / `mesa-libGL` + `glib2` / `mesa` + `glib2`) - already present on normal desktops. **Only if they are missing, the installer asks for your `sudo` password to install them** (nothing else needs `sudo`)
 - An NVIDIA driver and `nvidia-smi` for the CUDA PyTorch path
 
 ### Windows
 
 - 64-bit Windows is recommended
-- Nothing to install first: Jelibox downloads its own private Python 3.12 into its folder (your own Python is never touched)
-- Microsoft Visual C++ Redistributable from [`VC_redist/`](VC_redist/)
+- Nothing to install first: Jelibox installs [uv](https://docs.astral.sh/uv/) if it is missing and uses it to download its own private Python 3.12 into its folder. Your own Python is never touched, never registered with Windows and nothing is put on your `PATH` for it
+- Microsoft Visual C++ Redistributable (included in [`VC_redist/`](VC_redist/)). **Only if it is missing, Windows asks for administrator permission** to install it - just that one installer is elevated, everything else runs as your normal user
 - Internet access during installation
 
 The application can run on CPU. NVIDIA GPU support requires a compatible NVIDIA driver and a PyTorch build with CUDA support.
@@ -66,14 +86,17 @@ curl -fsSL https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install
 What happens:
 
 - The installer first asks where to install. Press **Enter** for the default - a `Jelibox` folder in your user folder, next to Downloads/Documents/Pictures (`%USERPROFILE%\Jelibox` on Windows, `~/jelibox` on Linux) - press **B** to pick a folder in a window (Linux needs `zenity` or `kdialog` for that), or type a path. A `Jelibox` folder is created inside the folder you choose. An existing install in the old default location (`%LOCALAPPDATA%\Jelibox` / `~/.local/share/jelibox`) is found and updated in place without asking.
-- The normal installer then runs: it gives Jelibox its **own private Python 3.12** (fetched with [uv](https://docs.astral.sh/uv/) into the install folder), creates a virtual environment, installs the dependencies and adds shortcuts. Nothing is installed system-wide: **no admin rights on Windows (unless the Visual C++ runtime is missing), no `sudo` on Linux, no PATH changes**, and the Python you already use is left alone.
-- **Prefer your system Python?** Set `JELIBOX_PYTHON=system` first (`$env:JELIBOX_PYTHON="system"` in PowerShell, `JELIBOX_PYTHON=system curl ... | bash` on Linux). The installer also falls back to it by itself if the private one cannot be set up.
+- The normal installer then runs, in this order: it makes sure **uv** is installed (if not, it runs uv's official installer: `irm https://astral.sh/uv/install.ps1 | iex` on Windows, `curl -LsSf https://astral.sh/uv/install.sh | sh` on Linux), lets uv download Jelibox's **own private Python 3.12** into the install folder (`.python/`), creates the virtual environment (`venv/` on Windows, `jelibox/` on Linux) from it, installs the dependencies and adds shortcuts.
+- **GPU question:** before downloading anything the installer asks whether this computer has a **discrete NVIDIA graphics card**. It suggests the answer it detected; press **Enter** to accept, or answer `Y` / `N`. *Yes* installs the CUDA build of PyTorch (about 2.5 GB, needs the NVIDIA driver); *No* installs the much smaller CPU-only build (no CUDA packages). AMD and Intel graphics cannot use CUDA, so answer *No* for them. To skip the question set `JELIBOX_GPU=nvidia` or `JELIBOX_GPU=cpu` first. Windows on ARM and Linux ARM are not asked (no CUDA build). To change your mind later, run the installer again (`JELIBOX_FORCE=1` if it says you are up to date) and answer differently.
+- **What touches your system:** only uv, installed for your user (`~/.local/bin` or `%USERPROFILE%\.local\bin`; uv's installer adds that folder to your `PATH`, and only that folder - it is not Python). Jelibox's Python is never installed system-wide, never added to `PATH`, never registered with Windows (`py -3.12` does not see it) and is only used by Jelibox, which runs it by its full path. The Python you already use is left alone.
+- **Administrator rights:** Windows needs none, except to install the Visual C++ runtime when it is missing (just that installer asks for permission). Linux needs no `sudo`, except to install the OpenCV system libraries (`libGL`, GLib) when they are missing.
+- **No uv access?** If the installer cannot download uv, install it yourself from <https://docs.astral.sh/uv/> (or set `JELIBOX_UV` to an existing `uv` executable) and run the installer again.
 - **Updating:** run the same command again. It reports what it found (`Found Jelibox v0.1.0 ... updating to v0.2.0`), updates in place, and never touches your datasets, models or configs. If you are already on the newest version it says so and stops (`JELIBOX_FORCE=1` reinstalls anyway). A folder that is a `git` checkout is left alone - use `git pull` there.
 - **Find the install folder:** click **Open Folder** in the workspace picker toolbar (next to Import Dataset).
 - **Move it somewhere else:** click **Move Jelibox** in the workspace picker and choose a folder. Jelibox creates `<folder>/Jelibox`, builds a fresh virtual environment there (same package versions, needs internet), moves your datasets, models and configs over, and deletes the old venv and folder. If anything fails before the files are moved, the old install is left untouched.
-- **A specific version:** set `JELIBOX_VERSION` first, for example `$env:JELIBOX_VERSION="v0.1.0"` (PowerShell) or `JELIBOX_VERSION=v0.1.0 curl ... | bash`. Other options: `JELIBOX_HOME` (install location), `JELIBOX_NO_INSTALL=1` (download and unpack only) and `JELIBOX_FORCE=1` (reinstall even if current). If `uv` is already on your machine it is reused; otherwise a checksum-verified copy is downloaded into `.uv` inside the install folder.
+- **A specific version:** set `JELIBOX_VERSION` first, for example `$env:JELIBOX_VERSION="v0.1.0"` (PowerShell) or `JELIBOX_VERSION=v0.1.0 curl ... | bash`. Use `main` for the latest development version (changes not in a release yet). Other options: `JELIBOX_GPU` (`nvidia` or `cpu`, skips the GPU question), `JELIBOX_HOME` (install location), `JELIBOX_NO_INSTALL=1` (download and unpack only) and `JELIBOX_FORCE=1` (reinstall even if current). If `uv` is already on your machine it is reused.
 - **Want to read it before running it?** That is a good habit. The scripts are short: [`install.ps1`](install.ps1) and [`install.sh`](install.sh).
-- **Uninstall:** delete the install folder above, plus the Jelibox shortcuts (Desktop / application menu). The private Python lives inside that folder, so nothing else is left behind.
+- **Uninstall:** delete the install folder above, plus the Jelibox shortcuts (Desktop / application menu). The private Python lives inside that folder. The only thing left is uv, which you can keep for your own projects or remove as described at <https://docs.astral.sh/uv/>.
 
 ### Manual install (with git)
 
@@ -98,32 +121,31 @@ chmod +x jelibox_linux_installation.bash
 ./jelibox_linux_installation.bash
 ```
 
-The installer asks for your `sudo` password at the beginning, installs Python with Tkinter and venv support, creates the `jelibox/` virtual environment, installs dependencies, and creates a desktop launcher.
+The installer needs no `sudo` unless the OpenCV system libraries are missing (it then asks for your password at that step). It installs uv if needed, downloads Jelibox's private Python into `.python/`, creates the `jelibox/` virtual environment, installs dependencies, and creates a desktop launcher.
 
 #### Windows
 
-1. Open [`VC_redist/`](VC_redist/) and install the package matching your system architecture.
-2. Right-click [`jelibox_windows_installation.bat`](jelibox_windows_installation.bat) and choose **Run as administrator**.
-3. Follow the installer prompts.
-4. Open the generated `Jelibox.lnk` shortcut.
+1. Double-click [`jelibox_windows_installation.bat`](jelibox_windows_installation.bat). Do not run it as administrator: it asks Windows for permission itself, only to install the Visual C++ runtime, and only when it is missing.
+2. Follow the installer prompts.
+3. Open the generated `Jelibox.lnk` shortcut.
 
-The Windows installer checks for an NVIDIA GPU through `nvidia-smi` and uses Windows device information as a fallback. GPU detection does not guarantee that the installed PyTorch package has CUDA enabled.
+The Windows installer detects an NVIDIA GPU through `nvidia-smi` (with Windows device information as a fallback) only to suggest an answer; it then asks you whether this computer has a discrete NVIDIA GPU and installs the matching PyTorch build. GPU detection does not guarantee that the installed PyTorch package has CUDA enabled. The Linux installer asks the same question.
 
 ## Running Jelibox Manually
 
 ### Linux
 
 ```bash
-source jelibox/bin/activate
-python -u utils/Annotator.py
+jelibox/bin/python -u utils/Annotator.py
 ```
 
 ### Windows
 
 ```bat
-venv\Scripts\activate
-python utils\Annotator.py
+venv\Scripts\python utils\Annotator.py
 ```
+
+Use the environment's `python` by its path as shown (the shortcuts do the same) instead of activating it, so your own Python stays the one on `PATH`. The `python` commands in the troubleshooting section below mean this interpreter.
 
 Running `Annotator.py` with no arguments opens the **workspace picker** - a VS
 Code-style "no folder opened" screen that lists every workspace found in
@@ -142,7 +164,8 @@ switch datasets without restarting the app.
 | `Delete` | Delete the current image |
 | `M` | Toggle bounding box and polygon mode |
 | `B` | Force a new bounding box |
-| `G` | Run inference on the current image |
+| `G` | Run the Label Assistant on the current image |
+| `Shift+G` | Auto-annotate all images of the dataset |
 | `T` | Open the training workflow |
 | `S` | Change the selected annotation class |
 | `R` | Delete the selected annotation |
@@ -160,8 +183,11 @@ never copied - every format reads them straight from `datasetsInput/`:
 datasetsInput/<workspace>-<index>/   Input images for annotation (read-only source)
 vocdataset/<workspace>/              Pascal VOC XML annotations
 YOLOdataset/<workspace>/labels/      YOLO .txt labels (keyed by image filename)
-models/<workspace>/                  Trained YOLO models
-configs/<workspace>.txt              Workspace class configuration
+models/<workspace>/                  Trained YOLO models (and your head checkpoints)
+models/<workspace>/head_run/         Head training job, log and last head
+models/_huggingface/                 LocateAnything-3B download (shared by all workspaces)
+models/_detectors/                   Detector weights fetched for custom head models
+configs/<workspace>.json             Workspace classes and Label Assistant settings for every mode
 export dataset/<workspace>/          Exported datasets
 export model/<workspace>/            Exported model files
 ```
@@ -185,7 +211,7 @@ datasetsInput/cat-2/
 vocdataset/cat/
 YOLOdataset/cat/
 models/cat/
-configs/cat.txt
+configs/cat.json
 ```
 
 ## Annotation Formats

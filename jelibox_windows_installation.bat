@@ -6,20 +6,19 @@ cd /d "%~dp0"
 
 :: =========================================================
 :: ADMINISTRATOR RIGHTS
-:: A normal install needs none: Python lives inside this folder. Windows is only asked for permission
-:: when a step really needs it (the Visual C++ runtime, or the system-wide Python fallback).
+:: This installer does NOT run as administrator. Python, PyTorch and everything else live inside this
+:: folder. The one step that needs administrator permission is installing the Microsoft Visual C++
+:: runtime (PyTorch needs it), and only when it is missing: then just that installer is started
+:: elevated and Windows shows its permission prompt.
 :: =========================================================
-set "SELF=%~f0"
+set "VCREDIST=%~dp0VC_redist\VC_redist.x64.exe"
+set "VENV_PY=%~dp0venv\Scripts\python.exe"
 
 set FAILED=0
 set TORCH_STATUS=SUCCESS
 set CLIP_STATUS=SUCCESS
 set GPU_TYPE=CPU
 set ARCH=x64
-
-set PYTHON_VERSION=3.12.6
-set PYTHON_FOLDER=Python312
-set PYTHON_INSTALLER=%TEMP%\python_installer.exe
 
 :: The one-line installer (install.ps1) drops this marker so nobody has to answer Y/N.
 set ASSUME_YES=0
@@ -84,7 +83,6 @@ if not errorlevel 1 (
         nvidia-smi --query-gpu=name --format=csv,noheader,nounits 2>nul
     ) else (
         echo [!] nvidia-smi is installed but no usable NVIDIA GPU was reported.
-        echo [*] CPU mode will be used.
     )
 ) else (
     :: Fallback for systems where the NVIDIA utility is unavailable or not on PATH.
@@ -94,8 +92,54 @@ if not errorlevel 1 (
         echo [OK] NVIDIA GPU detected through Windows device information.
     ) else (
         echo [!] NVIDIA GPU not detected.
-        echo [*] CPU mode will be used.
     )
+)
+
+:: =========================================================
+:: 1a. DISCRETE NVIDIA GPU OR NOT?
+:: Decides which PyTorch is downloaded: the CUDA build or the much smaller CPU build. install.ps1 asks this
+:: question itself and passes the answer in JELIBOX_GPU (nvidia or cpu); started on its own, this asks it.
+:: The detection above is only the suggestion. Windows on ARM has no CUDA PyTorch, so nothing is asked there.
+:: =========================================================
+if "%ARCH%"=="ARM" (
+    set GPU_TYPE=CPU
+    goto GPU_DONE
+)
+if defined JELIBOX_GPU goto GPU_PRESET
+echo.
+if "%GPU_TYPE%"=="NVIDIA" (
+    echo [*] Detected: an NVIDIA GPU.
+) else (
+    echo [*] Detected: no NVIDIA GPU.
+)
+echo     Yes = the CUDA build of PyTorch, about 2.5 GB, needs the NVIDIA driver.
+echo     No  = the much smaller CPU build. AMD and Intel graphics cannot use CUDA, answer No for them.
+choice /c YN /m "Does this computer have a discrete NVIDIA graphics card"
+if errorlevel 2 (
+    set GPU_TYPE=CPU
+) else (
+    set GPU_TYPE=NVIDIA
+)
+goto GPU_DONE
+
+:GPU_PRESET
+if /i "%JELIBOX_GPU%"=="nvidia" (
+    set GPU_TYPE=NVIDIA
+) else if /i "%JELIBOX_GPU%"=="cpu" (
+    set GPU_TYPE=CPU
+) else (
+    echo [ERROR] JELIBOX_GPU must be nvidia or cpu, not "%JELIBOX_GPU%".
+    set FAILED=1
+    goto END
+)
+
+:GPU_DONE
+if "%GPU_TYPE%"=="NVIDIA" (
+    echo [OK] PyTorch build: NVIDIA GPU ^(CUDA^).
+    where nvidia-smi >nul 2>&1
+    if errorlevel 1 echo [WARNING] nvidia-smi was not found. PyTorch needs the NVIDIA driver to use the GPU: https://www.nvidia.com/drivers
+) else (
+    echo [OK] PyTorch build: CPU only.
 )
 
 :: =========================================================
@@ -104,15 +148,16 @@ if not errorlevel 1 (
 if "%ARCH%"=="x64" (
     reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Installed 2>nul | find "0x1" >nul
     if errorlevel 1 (
-        if exist "%~dp0VC_redist\VC_redist.x64.exe" (
-            echo [*] The Microsoft Visual C++ runtime is missing and needs administrator permission to install.
-            call :REQUIRE_ADMIN
+        if exist "%VCREDIST%" (
+            echo [*] The Microsoft Visual C++ runtime ^(needed by PyTorch^) is missing.
+            echo [*] Installing it needs administrator permission - Windows will ask you to approve it.
+            call :INSTALL_VCREDIST
             if errorlevel 1 (
                 set FAILED=1
                 goto END
             )
-            echo [*] Installing Microsoft Visual C++ runtime...
-            "%~dp0VC_redist\VC_redist.x64.exe" /install /quiet /norestart
+        ) else (
+            echo [WARNING] The Visual C++ runtime is missing and VC_redist\VC_redist.x64.exe was not found.
         )
     ) else (
         echo [OK] Visual C++ runtime already installed.
@@ -121,85 +166,30 @@ if "%ARCH%"=="x64" (
 
 :: =========================================================
 :: 2. PYTHON
-:: By default Jelibox gets its own private Python 3.12, downloaded with uv into this folder: nothing is
-:: installed system-wide and the Python you already have is left alone. Set JELIBOX_PYTHON=system to
-:: use the old behaviour (a system-wide Python from python.org), which is also the fallback.
+:: Jelibox gets its own Python 3.12, downloaded by uv into this folder. It is never installed system-wide,
+:: never added to PATH and never registered with Windows, so the Python you already have is left alone.
+:: uv itself is installed (official installer) only if it is not there yet. No administrator rights needed.
 :: =========================================================
 echo.
-echo [2/6] Preparing Python 3.12...
+echo [2/6] Preparing Jelibox's private Python 3.12...
 
-if /i "%JELIBOX_PYTHON%"=="system" goto PYTHON_SYSTEM
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\setup_python.ps1" -Root "%~dp0."
-if %ERRORLEVEL% EQU 0 goto PYTHON_READY
-echo [!] The private Python could not be set up - falling back to the system Python.
-
-:PYTHON_SYSTEM
-py -3.12 --version >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo [!] Python 3.12 not found.
-    echo [*] Installing it system-wide needs administrator permission.
-    call :REQUIRE_ADMIN
-    if errorlevel 1 (
-        set FAILED=1
-        goto END
-    )
-    echo [*] Downloading Python %PYTHON_VERSION% installer...
-    
-    powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/%PYTHON_VERSION%/python-%PYTHON_VERSION%-amd64.exe' -OutFile '%PYTHON_INSTALLER%'"
-    
-    if not exist "%PYTHON_INSTALLER%" (
-        echo [ERROR] Failed to download Python installer.
-        set FAILED=1
-        goto END
-    )
-
-    echo [*] Installing Python silently...
-    start /wait "" "%PYTHON_INSTALLER%" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0 Include_launcher=1 Include_tcltk=1
-
-    if !ERRORLEVEL! NEQ 0 (
-        echo [ERROR] Python installation failed.
-        set FAILED=1
-        goto END
-    )
-    echo [OK] Python installed successfully.
-)
-
-set "PATH=%PATH%;C:\Program Files\%PYTHON_FOLDER%;C:\Program Files\%PYTHON_FOLDER%\Scripts"
-
-py -3.12 --version >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] Python still not detected.
+if errorlevel 1 (
+    echo [ERROR] Could not set up Jelibox's private Python. Check your internet connection and try again.
     set FAILED=1
     goto END
 )
-echo [OK] Python detected.
 
-if not exist "%~dp0venv\" (
-    echo [*] Creating virtual environment...
-    py -3.12 -m venv "%~dp0venv"
-    if !ERRORLEVEL! NEQ 0 (
-        echo [ERROR] Failed to create virtual environment.
-        set FAILED=1
-        goto END
-    )
-)
-
-:PYTHON_READY
 :: =========================================================
 :: 3. VIRTUAL ENVIRONMENT
+:: The environment is never "activated": every command below calls its python.exe directly, so nothing
+:: here can change which Python the rest of your system finds on PATH.
 :: =========================================================
 echo.
-echo [3/6] Preparing virtual environment...
+echo [3/6] Checking virtual environment...
 
-if not exist "%~dp0venv\Scripts\activate.bat" (
+if not exist "%VENV_PY%" (
     echo [ERROR] Virtual environment is corrupted.
-    set FAILED=1
-    goto END
-)
-
-call "%~dp0venv\Scripts\activate.bat"
-if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] Failed to activate virtual environment.
     set FAILED=1
     goto END
 )
@@ -210,7 +200,7 @@ echo [OK] Virtual environment ready.
 :: =========================================================
 echo.
 echo [4/6] Updating package manager...
-python -m pip install --upgrade pip setuptools wheel --retries 5 --timeout 30
+"%VENV_PY%" -m pip install --upgrade pip setuptools wheel --retries 5 --timeout 30
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Failed to update pip.
     set FAILED=1
@@ -228,12 +218,12 @@ if "%GPU_TYPE%"=="NVIDIA" goto TORCH_NVIDIA
 
 :: Default CPU fallback
 echo [*] Installing PyTorch (CPU version)...
-python -m pip install torch torchvision torchaudio --retries 5 --timeout 60
+"%VENV_PY%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --retries 5 --timeout 60
 goto CHECK_TORCH
 
 :TORCH_NVIDIA
 echo [*] Installing PyTorch with CUDA 12.1 support...
-python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --retries 5 --timeout 60
+"%VENV_PY%" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --retries 5 --timeout 60
 goto CHECK_TORCH
 
 :TORCH_ARM
@@ -254,8 +244,10 @@ if errorlevel 1 (
 :: 6. INSTALL DEPENDENCIES
 :: =========================================================
 echo.
+:: requirements.txt holds everything for all three modes (YOLO-World, LocateAnything, custom head models),
+:: including the version limits that keep them compatible: ultralytics>=8.4.68, transformers==4.57.6.
 echo [6/6] Installing Jelibox dependencies...
-python -m pip install ultralytics pyinstaller streamlit yt-dlp --retries 5 --timeout 30
+"%VENV_PY%" -m pip install -r "%~dp0requirements.txt" --retries 5 --timeout 30
 
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Dependency installation failed.
@@ -267,7 +259,7 @@ echo [OK] Dependencies installed successfully.
 :: CLIP powers the YOLO-World Label Assistant. Installed from a zip archive so
 :: git is not required. Non-fatal: without it only YOLO-World is unavailable.
 echo [*] Installing CLIP (required by YOLO-World)...
-python -m pip install ftfy regex tqdm https://github.com/ultralytics/CLIP/archive/refs/heads/main.zip --retries 5 --timeout 60
+"%VENV_PY%" -m pip install ftfy regex tqdm https://github.com/ultralytics/CLIP/archive/refs/heads/main.zip --retries 5 --timeout 60
 if %ERRORLEVEL% NEQ 0 (
     echo [WARNING] CLIP installation failed. YOLO-World Label Assistant will be unavailable.
     set CLIP_STATUS=FAILED
@@ -375,21 +367,23 @@ pause
 exit
 
 :: =========================================================
-:: REQUIRE_ADMIN - continue when already elevated, otherwise restart this installer elevated.
-:: Returns 1 when Windows permission was refused. When the restart works this window closes
-:: and the elevated copy takes over (it skips the Y/N question: /yes).
+:: INSTALL_VCREDIST - run only the Visual C++ runtime installer elevated (Windows shows its permission
+:: prompt) and wait for it. The rest of this installer keeps running as the normal user.
+:: Returns 0 on success, 1 when it failed or permission was refused.
+:: 1638 = a newer runtime is already installed, 3010 = installed, a restart is recommended.
 :: =========================================================
-:REQUIRE_ADMIN
-net session >nul 2>&1
-if not errorlevel 1 exit /b 0
-echo [*] Windows will ask you to approve administrator permission...
-if "%ASSUME_YES%"=="1" (
-    powershell -NoProfile -Command "Start-Process -FilePath '%SELF%' -ArgumentList '/yes' -WorkingDirectory '%CD%' -Verb RunAs"
+:INSTALL_VCREDIST
+powershell -NoProfile -Command "try { $p = Start-Process -FilePath $env:VCREDIST -ArgumentList '/install','/quiet','/norestart' -Verb RunAs -Wait -PassThru; exit $p.ExitCode } catch { exit 1223 }"
+set "VC_RC=!ERRORLEVEL!"
+if "!VC_RC!"=="0" exit /b 0
+if "!VC_RC!"=="1638" exit /b 0
+if "!VC_RC!"=="3010" (
+    echo [NOTICE] The Visual C++ runtime was installed. Restart Windows if Jelibox reports a missing DLL.
+    exit /b 0
+)
+if "!VC_RC!"=="1223" (
+    echo [ERROR] Administrator permission was not granted, so the Visual C++ runtime was not installed.
 ) else (
-    powershell -NoProfile -Command "Start-Process -FilePath '%SELF%' -WorkingDirectory '%CD%' -Verb RunAs"
+    echo [ERROR] The Visual C++ runtime installer failed ^(code !VC_RC!^).
 )
-if errorlevel 1 (
-    echo [ERROR] Administrator permission was not granted.
-    exit /b 1
-)
-exit
+exit /b 1

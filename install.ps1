@@ -8,17 +8,19 @@
 #   3. not installed yet   -> installs the newest version fresh
 #      installed, older    -> updates it (your datasets, models and configs are never touched)
 #      installed, current  -> says so and stops
-#   4. starts jelibox_windows_installation.bat, which gives Jelibox its own private Python 3.12
-#      (downloaded with uv into the Jelibox folder - your own Python is not touched and nothing is
-#      installed system-wide), creates the virtual environment, installs the dependencies and creates
-#      the shortcuts. Windows only asks for administrator permission if the Visual C++ runtime is missing.
+#   4. starts jelibox_windows_installation.bat, which installs uv if it is missing (official installer, user level),
+#      gives Jelibox its own private Python 3.12 (downloaded by uv into the Jelibox folder - your own Python is not
+#      touched, nothing is put on PATH), creates the virtual environment, installs the dependencies and creates the
+#      shortcuts. No administrator rights are needed, except to install the Visual C++ runtime when it is missing:
+#      then only that installer is started elevated and Windows shows its permission prompt.
 #
 # Optional environment variables (set them before running the command):
 #   JELIBOX_VERSION     install a specific release, e.g.  v0.1.0   (default: newest release)
+#                       main = the latest development version (always re-installed)
 #   JELIBOX_HOME        install here without being asked     (default: you are asked; Enter = %USERPROFILE%\Jelibox)
 #   JELIBOX_NO_INSTALL  1 = only download and unpack, do not run the installer
 #   JELIBOX_FORCE       1 = reinstall even when this version is already installed
-#   JELIBOX_PYTHON      system = use a system-wide Python from python.org instead of the private one
+#   JELIBOX_GPU         nvidia | cpu = which PyTorch to install without being asked (default: you are asked)
 #   JELIBOX_ARCHIVE     path to a local .zip instead of downloading (offline installs, tests)
 
 function Install-Jelibox {
@@ -118,7 +120,10 @@ function Install-Jelibox {
                     Say 'No release found yet - using the latest development version (main).'
                 }
             }
-            if ($version) {
+            if ($version -eq 'main') {
+                $url = "https://github.com/$repo/archive/refs/heads/main.zip"
+                Say 'Downloading Jelibox (main) ...'
+            } elseif ($version) {
                 $url = "https://github.com/$repo/archive/refs/tags/$version.zip"
                 Say "Downloading Jelibox $version ..."
             } else {
@@ -131,7 +136,7 @@ function Install-Jelibox {
         # Fresh install, update, or nothing to do?
         $target = if ($version) { $version } elseif ($archive) { 'local archive' } else { 'main' }
         if ($existing) {
-            if ($version -and ($installed -eq $version) -and (Test-Path -LiteralPath (Join-Path $dest '.jelibox-ready')) -and ($env:JELIBOX_FORCE -ne '1')) {
+            if ($version -and ($version -ne 'main') -and ($installed -eq $version) -and (Test-Path -LiteralPath (Join-Path $dest '.jelibox-ready')) -and ($env:JELIBOX_FORCE -ne '1')) {
                 Say "Jelibox $version is already installed and up to date ($dest)."
                 Say 'Nothing to do. (JELIBOX_FORCE=1 reinstalls it anyway.)'
                 return
@@ -140,6 +145,42 @@ function Install-Jelibox {
             Say "Found Jelibox $was in $dest - updating to $target."
         } else {
             Say "Jelibox is not installed yet ($dest) - installing $target."
+        }
+
+        # Discrete NVIDIA GPU or not? This decides which PyTorch is downloaded (CUDA build or the smaller CPU build).
+        # JELIBOX_GPU=nvidia|cpu skips the question; the installer script asks by itself if it is started without it.
+        if ($env:JELIBOX_NO_INSTALL -ne '1') {
+            $gpu = "$env:JELIBOX_GPU".Trim().ToLower()
+            if ($gpu -and $gpu -ne 'nvidia' -and $gpu -ne 'cpu') { Fail "JELIBOX_GPU must be 'nvidia' or 'cpu' (got '$gpu')." }
+            if (-not $gpu) {
+                $detected = $false
+                try {
+                    if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) { & nvidia-smi -L *> $null; if ($LASTEXITCODE -eq 0) { $detected = $true } }
+                    if (-not $detected) { $detected = [bool](Get-CimInstance Win32_VideoController -ErrorAction Stop | Where-Object { $_.Name -match 'NVIDIA' }) }
+                } catch { }
+                $isArm = ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') -or ($env:PROCESSOR_ARCHITEW6432 -eq 'ARM64')
+                if ($isArm) {
+                    $gpu = 'cpu'
+                    Say 'Windows on ARM: the CPU setup is used (no CUDA PyTorch for ARM).'
+                } else {
+                    $answer = ''
+                    try {
+                        Write-Host ''
+                        Write-Host '[Jelibox] Does this computer have a discrete NVIDIA graphics card (GeForce / RTX / GTX / Quadro)?' -ForegroundColor Cyan
+                        Write-Host '          Yes = the CUDA build of PyTorch (about 2.5 GB, needs the NVIDIA driver). No = the much smaller CPU build.'
+                        Write-Host '          AMD and Intel graphics cannot use CUDA - answer No for them.'
+                        Write-Host ("          Detected: " + $(if ($detected) { 'an NVIDIA GPU' } else { 'no NVIDIA GPU' }))
+                        $default = if ($detected) { 'Y' } else { 'N' }
+                        $answer = Read-Host "          NVIDIA GPU? [Y/N, Enter = $default]"
+                    } catch {
+                        Say 'No keyboard available - using what was detected.'
+                    }
+                    $answer = "$answer".Trim()
+                    $gpu = if ($answer -match '^(y|yes)$') { 'nvidia' } elseif ($answer -match '^(n|no)$') { 'cpu' } elseif ($detected) { 'nvidia' } else { 'cpu' }
+                }
+            }
+            $env:JELIBOX_GPU = $gpu
+            Say ("PyTorch build: " + $(if ($gpu -eq 'nvidia') { 'NVIDIA GPU (CUDA)' } else { 'CPU only' }))
         }
 
         if (-not $archive) {
@@ -168,7 +209,7 @@ function Install-Jelibox {
         if (-not (Test-Path $bat)) { Fail "Installer script missing: $bat" }
         New-Item -ItemType File -Force -Path (Join-Path $dest '.install-yes') | Out-Null    # skip the Y/N question
 
-        Say 'Setting up Python and the dependencies. Windows asks for permission only if something system-wide is missing.'
+        Say 'Setting up Python and the dependencies. Windows asks for permission only if the Visual C++ runtime is missing.'
         Say 'It opens in its own window and shows its progress there.'
         Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "`"$bat`"" -WorkingDirectory $dest
         Say "When it says JELIBOX IS READY, open the Jelibox shortcut on your Desktop."

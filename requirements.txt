@@ -1,0 +1,21 @@
+# Everything Jelibox needs except PyTorch (torch, torchvision, torchaudio).
+# The installers pick the CUDA or the CPU build of PyTorch first, then run:  python -m pip install -r requirements.txt
+# One environment serves all three modes (YOLO-World, LocateAnything, custom dual-head models), so only the
+# constraints below that really matter are pinned; everything else is resolved freely by pip.
+
+# --- YOLO-World, custom-trained dual-head models, training ------------------------------------------------------
+ultralytics>=8.4.68           # custom dual-head models need 8.4.68 or newer (it also brings opencv, numpy, scipy, ...)
+streamlit
+yt-dlp
+pyinstaller
+
+# --- LocateAnything-3B (nvidia/LocateAnything-3B, HF Transformers + trust_remote_code) --------------------------
+transformers==4.57.6          # must stay below 5; 4.57.6 is the version the model was published against
+huggingface_hub>=0.34.0,<1.0  # the range transformers 4.57.6 accepts (the model's own requirements pin 0.36.2)
+accelerate
+safetensors
+peft                          # imported by the model's remote code
+lmdb                          # imported by the model's processor
+decord; sys_platform == "win32" or (sys_platform == "linux" and platform_machine == "x86_64")   # imported by the processor, wheels exist for these only
+requests
+packaging

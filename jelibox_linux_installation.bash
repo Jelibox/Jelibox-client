@@ -16,122 +16,25 @@ sleep 1
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 APP_PATH="$SCRIPT_DIR"
 PYTHON_VERSION_PREFIX="3.12"
-PYTHON_BIN="python3.12"
 VENV_DIR="$APP_PATH/jelibox"
-
-# ──────────────────────────────────────────
-# SYSTEM-WIDE PYTHON (fallback)
-# Only used when JELIBOX_PYTHON=system is set, or when the private Python below could not be set up.
-# ──────────────────────────────────────────
-use_system_python() {
-    # Ask for the sudo password before changing the system.
-    echo "[*] Sudo access is required to install system packages."
-    sudo -v || {
-        echo "[ERROR] Sudo authentication failed."
-        exit 1
-    }
-
-    # DETECT OS
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS=$ID
-    else
-        echo "[ERROR] Unsupported OS"
-        exit 1
-    fi
-
-    echo "[*] Detecting OS: $OS"
-
-    # DEBIAN / UBUNTU / MINT
-    if [[ "$OS" == "ubuntu" || "$OS" == "debian" || "$OS" == "linuxmint" ]]; then
-        echo "[*] Installing Python $PYTHON_VERSION_PREFIX and Tkinter packages..."
-        sudo apt update
-        sudo apt install -y software-properties-common
-
-        if [[ "$OS" == "ubuntu" || "$OS" == "linuxmint" ]]; then
-            sudo add-apt-repository -y ppa:deadsnakes/ppa
-            sudo apt update
-        fi
-
-        sudo apt install -y \
-            python3.12 \
-            python3.12-venv \
-            python3.12-dev \
-            python3.12-tk
-    fi
-
-    # ARCH / MANJARO
-    if [[ "$OS" == "arch" || "$OS" == "manjaro" ]]; then
-        echo "[*] Installing Python $PYTHON_VERSION_PREFIX, Tkinter, and virtual environment dependencies..."
-        # Force python312 so every machine matches; if it is missing from the official repo it may need the AUR (yay -S python312)
-        sudo pacman -S --noconfirm python312 tk mesa libcanberra || {
-            echo "[!] Failed to install python312 via pacman. Make sure python312 is available or use the AUR (for example: yay -S python312)"
-            exit 1
-        }
-    fi
-
-    # FEDORA / RHEL / CENTOS
-    if [[ "$OS" == "fedora" || "$OS" == "rhel" || "$OS" == "centos" ]]; then
-        echo "[*] Installing Python $PYTHON_VERSION_PREFIX and Tkinter packages..."
-        sudo dnf install -y \
-            python3.12 \
-            python3.12-devel \
-            python3.12-tkinter
-        sudo dnf install -y mesa-libGL libglvnd-glx
-    fi
-
-    if ! command -v "$PYTHON_BIN" &> /dev/null; then
-        echo "[ERROR] Python interpreter $PYTHON_BIN was not found."
-        exit 1
-    fi
-
-    PYTHON_ACTUAL_VERSION="$($PYTHON_BIN -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')"
-    echo "[OK] Python $PYTHON_ACTUAL_VERSION detected."
-
-    # Check that the Python version starts with "3.12"
-    if [[ "$PYTHON_ACTUAL_VERSION" != ${PYTHON_VERSION_PREFIX}.* ]]; then
-        echo "[ERROR] Jelibox requires Python $PYTHON_VERSION_PREFIX.x exactly."
-        echo "[ERROR] The detected interpreter is $PYTHON_ACTUAL_VERSION."
-        exit 1
-    fi
-
-    # CREATE VENV
-    echo "[*] Creating Virtual Environment with $PYTHON_BIN..."
-
-    $PYTHON_BIN -m venv "$VENV_DIR" || {
-        echo "[ERROR] Failed creating venv"
-        exit 1
-    }
-
-    if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-        echo "[ERROR] Virtual environment was not created correctly."
-        exit 1
-    fi
-}
+VENV_PY="$VENV_DIR/bin/python"
 
 # ──────────────────────────────────────────
 # PYTHON
-# By default Jelibox gets its own private Python 3.12 (downloaded with uv into this folder), so nothing
-# is installed system-wide, no sudo is needed and the Python you already have is left alone.
+# Jelibox gets its own Python 3.12, downloaded by uv into this folder (uv itself is installed with its
+# official installer if it is missing). Nothing is installed system-wide, no sudo is needed, Python is
+# never put on your PATH and the Python you already have is left alone.
 # ──────────────────────────────────────────
-USE_SYSTEM_PYTHON=0
-if [[ "${JELIBOX_PYTHON:-}" == "system" ]]; then
-    USE_SYSTEM_PYTHON=1
-else
-    echo "[*] Preparing Python $PYTHON_VERSION_PREFIX (private copy - no sudo needed)..."
-    if ! bash "$SCRIPT_DIR/tools/setup_python.sh" "$APP_PATH" "$(basename "$VENV_DIR")"; then
-        echo "[!] The private Python could not be set up - falling back to the system Python."
-        USE_SYSTEM_PYTHON=1
-    fi
-fi
-if [[ "$USE_SYSTEM_PYTHON" == "1" ]]; then
-    use_system_python
+echo "[*] Preparing Jelibox's private Python $PYTHON_VERSION_PREFIX (no sudo needed)..."
+if ! bash "$SCRIPT_DIR/tools/setup_python.sh" "$APP_PATH" "$(basename "$VENV_DIR")"; then
+    echo "[ERROR] Could not set up Jelibox's private Python. Check your internet connection and try again."
+    exit 1
 fi
 
-source "$VENV_DIR/bin/activate"
-
-python -c 'import tkinter' || {
-    echo "[ERROR] Tkinter is unavailable. Install the matching python3.12-tk / python3.12-tkinter package."
+# The environment is never "activated": every command below calls its python directly, so nothing here
+# can change which Python the rest of your system finds on PATH.
+"$VENV_PY" -c 'import tkinter' || {
+    echo "[ERROR] Tkinter is unavailable in Jelibox's Python."
     exit 1
 }
 
@@ -139,41 +42,113 @@ python -c 'import tkinter' || {
 # INSTALL PYTHON PACKAGES
 # ──────────────────────────────────────────
 echo "[*] Upgrading pip..."
-python -m pip install --upgrade pip setuptools wheel
-echo "[*] Installing Streamlit..."
-python -m pip install streamlit yt-dlp
-python -m pip install pycocotools
+"$VENV_PY" -m pip install --upgrade pip setuptools wheel
+"$VENV_PY" -m pip install pycocotools
 MACHINE_ARCH=$(uname -m)
 
-if [[ "$MACHINE_ARCH" == "aarch64" ]]; then
-    echo "[!] ARM detected"
-    pip install torch torchvision torchaudio
-
-else
-    if command -v nvidia-smi &> /dev/null; then
-        echo "[OK] NVIDIA GPU detected"
-        pip install torch torchvision torchaudio \
-            --index-url https://download.pytorch.org/whl/cu121
-    else
-        echo "[!] Installing CPU version"
-        pip install torch torchvision torchaudio
+# ──────────────────────────────────────────
+# DISCRETE NVIDIA GPU OR NOT?
+# Decides which PyTorch is downloaded: the CUDA build (with its NVIDIA libraries, several GB) or the much
+# smaller CPU build. install.sh asks this itself and passes the answer in JELIBOX_GPU (nvidia or cpu);
+# started on its own, this script asks. The detection is only the suggestion. On ARM nothing is asked.
+# ──────────────────────────────────────────
+GPU_TYPE="${JELIBOX_GPU:-}"
+GPU_TYPE="$(printf '%s' "$GPU_TYPE" | tr '[:upper:]' '[:lower:]')"
+case "$GPU_TYPE" in
+    ""|nvidia|cpu) ;;
+    *) echo "[ERROR] JELIBOX_GPU must be 'nvidia' or 'cpu', not '$GPU_TYPE'."; exit 1 ;;
+esac
+if [[ "$MACHINE_ARCH" != "aarch64" && -z "$GPU_TYPE" ]]; then
+    GPU_DETECTED=0
+    if command -v nvidia-smi &> /dev/null && nvidia-smi -L &> /dev/null; then
+        GPU_DETECTED=1
+    elif command -v lspci &> /dev/null && lspci 2>/dev/null | grep -Ei 'vga|3d|display' | grep -qi nvidia; then
+        GPU_DETECTED=1
     fi
+    GPU_REPLY=""
+    if [ -t 0 ]; then
+        echo ""
+        if [ "$GPU_DETECTED" = 1 ]; then echo "[*] Detected: an NVIDIA GPU."; else echo "[*] Detected: no NVIDIA GPU."; fi
+        echo "    Yes = the CUDA build of PyTorch (about 2.5 GB, needs the NVIDIA driver)."
+        echo "    No  = the much smaller CPU build. AMD and Intel graphics cannot use CUDA - answer No for them."
+        read -r -p "Does this computer have a discrete NVIDIA graphics card? [Y/N, Enter = $([ "$GPU_DETECTED" = 1 ] && echo Y || echo N)]: " GPU_REPLY || GPU_REPLY=""
+    else
+        echo "[*] No keyboard available - using what was detected."
+    fi
+    case "$GPU_REPLY" in
+        [Yy]|[Yy][Ee][Ss]) GPU_TYPE="nvidia" ;;
+        [Nn]|[Nn][Oo])     GPU_TYPE="cpu" ;;
+        *) if [ "$GPU_DETECTED" = 1 ]; then GPU_TYPE="nvidia"; else GPU_TYPE="cpu"; fi ;;
+    esac
 fi
 
+if [[ "$MACHINE_ARCH" == "aarch64" ]]; then
+    echo "[!] ARM detected - installing the standard PyTorch build"
+    "$VENV_PY" -m pip install torch torchvision torchaudio
+
+elif [[ "$GPU_TYPE" == "nvidia" ]]; then
+    echo "[OK] PyTorch build: NVIDIA GPU (CUDA)"
+    if ! command -v nvidia-smi &> /dev/null; then
+        echo "[WARNING] nvidia-smi was not found. PyTorch needs the NVIDIA driver to use the GPU."
+    fi
+    "$VENV_PY" -m pip install torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/cu121
+
+else
+    # The default Linux wheel on PyPI is the CUDA build and pulls in several GB of NVIDIA libraries - not wanted here.
+    echo "[OK] PyTorch build: CPU only"
+    "$VENV_PY" -m pip install torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/cpu
+fi
+
+# requirements.txt holds everything for all three modes (YOLO-World, LocateAnything, custom head models),
+# including the version limits that keep them compatible: ultralytics>=8.4.68, transformers==4.57.6.
 echo "[*] Installing application dependencies..."
-pip install ultralytics pyinstaller
+"$VENV_PY" -m pip install -r "$APP_PATH/requirements.txt"
 
 # CLIP powers the YOLO-World Label Assistant. Installed from a zip archive so
 # git is not required. Non-fatal: without it only YOLO-World is unavailable.
 echo "[*] Installing CLIP (required by YOLO-World)..."
-pip install ftfy regex tqdm https://github.com/ultralytics/CLIP/archive/refs/heads/main.zip ||     echo "[WARNING] CLIP installation failed. YOLO-World Label Assistant will be unavailable."
+"$VENV_PY" -m pip install ftfy regex tqdm https://github.com/ultralytics/CLIP/archive/refs/heads/main.zip ||     echo "[WARNING] CLIP installation failed. YOLO-World Label Assistant will be unavailable."
 
-# OpenCV needs the system graphics library (libGL). The private Python does not install system packages, so say so
-# instead of letting the app fail later with a confusing "libGL.so.1" error.
-python -c "import cv2" 2>/dev/null || {
-    echo "[WARNING] OpenCV could not load - it usually needs the system graphics library:"
-    echo "          Debian/Ubuntu: sudo apt install libgl1    Fedora: sudo dnf install mesa-libGL    Arch: sudo pacman -S mesa"
-}
+# ──────────────────────────────────────────
+# SYSTEM LIBRARIES (the only step that can need sudo)
+# OpenCV needs the system graphics library (libGL) and GLib. They are normally present on a desktop. When
+# they are missing this is the one thing the installer cannot do without administrator rights: it asks
+# for your sudo password (or tells you the exact command when sudo is not available).
+# ──────────────────────────────────────────
+if ! "$VENV_PY" -c "import cv2" 2>/dev/null; then
+    echo "[*] OpenCV could not load - a system graphics library is missing."
+    SYSTEM_PACKAGES=""
+    INSTALL_CMD=""
+    OS_ID=""
+    if [ -f /etc/os-release ]; then
+        OS_ID="$(. /etc/os-release && echo "${ID:-} ${ID_LIKE:-}")"
+    fi
+    case " $OS_ID " in
+        *" debian "*|*" ubuntu "*|*" linuxmint "*) SYSTEM_PACKAGES="libgl1 libglib2.0-0"; INSTALL_CMD="apt-get install -y" ;;
+        *" fedora "*|*" rhel "*|*" centos "*)      SYSTEM_PACKAGES="mesa-libGL glib2";     INSTALL_CMD="dnf install -y" ;;
+        *" arch "*|*" manjaro "*)                  SYSTEM_PACKAGES="mesa glib2";           INSTALL_CMD="pacman -S --noconfirm --needed" ;;
+    esac
+    if [ -z "$INSTALL_CMD" ]; then
+        echo "[WARNING] Unknown Linux distribution. Install your distribution's libGL and GLib packages, then start Jelibox."
+    else
+        SUDO=""
+        if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
+        if [ -n "$SUDO" ] && ! command -v sudo >/dev/null 2>&1; then
+            echo "[WARNING] sudo is not available. As an administrator run:  $INSTALL_CMD $SYSTEM_PACKAGES"
+        else
+            echo "[*] Installing $SYSTEM_PACKAGES needs administrator permission."
+            if [ -n "$SUDO" ]; then sudo -v || echo "[WARNING] Sudo authentication failed."; fi
+            if { [ -z "$SUDO" ] || sudo -n true 2>/dev/null; } && $SUDO $INSTALL_CMD $SYSTEM_PACKAGES; then
+                echo "[OK] System libraries installed."
+            else
+                echo "[WARNING] Could not install them. As an administrator run:  $INSTALL_CMD $SYSTEM_PACKAGES"
+            fi
+        fi
+    fi
+    "$VENV_PY" -c "import cv2" 2>/dev/null || echo "[WARNING] OpenCV still cannot load - Jelibox will not start until that is fixed."
+fi
 
 # ──────────────────────────────────────────
 # CREATE DESKTOP ENTRY
@@ -184,8 +159,7 @@ DESKTOP_FILE="$APP_PATH/Jelibox.desktop"
 cat <<EOF > "$LAUNCHER_PATH"
 #!/bin/bash
 cd "$APP_PATH"
-source "$VENV_DIR/bin/activate"
-exec python -u "$APP_PATH/utils/Annotator.py"
+exec "$VENV_DIR/bin/python" -u "$APP_PATH/utils/Annotator.py"
 EOF
 
 chmod +x "$LAUNCHER_PATH"

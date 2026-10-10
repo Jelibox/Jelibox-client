@@ -28,7 +28,9 @@ DEFAULT_TAPS = (15, 18, 21)
 
 def taps_for(weights):
     """(taps, known): the neck layers to read for this detector, and whether the model family is one we know."""
-    name = os.path.basename(str(weights)).lower()
+    # a Windows path (C:\models\yolov9c.pt) must still be read on Linux, where os.path.basename
+    # does not treat the backslash as a separator
+    name = re.split(r"[\\/]", str(weights))[-1].lower()
     for prefix, taps in KNOWN_TAPS:
         if name.startswith(prefix):
             return taps, True

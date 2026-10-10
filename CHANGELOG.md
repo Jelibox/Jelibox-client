@@ -9,7 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Added
+## [0.4.1] - 2026-10-10
+
+### Added
 - **Small object limit** in the Analyze Dataset window: a box next to the resize controls sets the size under which an object counts as small (32 px by default, 1-1024). The warning strip, the charts, the Resize table and **Remove these objects** all follow it, and the number is remembered for next time.
 
 ## [0.4.0] - 2026-10-10
@@ -93,7 +95,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Jelibox/Jelibox-client/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Jelibox/Jelibox-client/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Jelibox/Jelibox-client/compare/v0.1.0...v0.2.0

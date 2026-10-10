@@ -24,6 +24,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install the light dependencies the repo/unit checks need
-        run: python -m pip install pillow
+        run: python -m pip install pillow numpy opencv-python-headless
       - name: Repo + unit checks
         run: python tests/run.py --only repo,unit

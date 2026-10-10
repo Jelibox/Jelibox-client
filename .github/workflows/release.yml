@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install pillow
+      - run: python -m pip install pillow numpy opencv-python-headless
       - name: Tag must match utils.__version__
         run: python tools/release.py --check-tag "$GITHUB_REF_NAME"
       - name: Repo + unit checks

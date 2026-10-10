@@ -39,6 +39,13 @@ class ReleaseProcessTests(unittest.TestCase):
         self.assertIn("gh release create", wf)
         self.assertIn("contents: write", wf)
 
+    def test_both_workflows_install_what_the_unit_tests_import(self):
+        # several unit test modules import numpy / cv2 at the top; without them the whole unit group fails to load
+        for name in ("ci.yml", "release.yml"):
+            wf = read(".github", "workflows", name)
+            for package in ("pillow", "numpy", "opencv-python-headless"):
+                self.assertIn(package, wf, f"{name} must pip install {package}")
+
     def test_ci_workflow_runs_the_test_runner_on_prs(self):
         wf = read(".github", "workflows", "ci.yml")
         self.assertIn("pull_request", wf)

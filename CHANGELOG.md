@@ -9,7 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Changed
+## [0.4.3] - 2026-10-10
+
+### Changed
 - Change annotate.jpg
 
 ## [0.4.2] - 2026-10-10
@@ -103,7 +105,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Jelibox/Jelibox-client/compare/v0.3.0...v0.4.0

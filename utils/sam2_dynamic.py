@@ -12,9 +12,17 @@ How it works, and the one rule this module keeps:
   * The memory bank is never appended to blindly: it is rebuilt from the store each time (one entry per
     stored image), and encoded entries are cached per image so only new or edited images are re-encoded.
 
-Limits worth knowing: a reference image gives SAM 2 one box per class (the largest one), and the model is
-told about at most one object per class per image - several similar objects are found when SAM 2 segments
-them together (they come out as separate pieces of one mask).
+What a reference tells SAM 2: for every class, ONE mask that covers ALL the objects of that class in the image.
+Polygons are filled exactly. A box is first turned into the object's silhouette by SAM 2 itself (its normal
+one-image mode, box prompt), because a plain rectangle also teaches the background and the trouser hem inside it
+as "part of the object" - measured: loose boxes then gave sloppy or merged results. Marking every object matters:
+SAM 2 remembers whatever is not marked in a reference as "not the object", so an unmarked second worker would be
+skipped later.
+
+Modes follow the Mode button: in polygon mode the references are the polygons and the output is polygons;
+in box mode the references are the boxes (a polygon counts through its bounding box) and the output is boxes.
+One object slot per class: when a class appears several times, SAM 2 segments them as pieces of one mask and
+each separate piece becomes its own annotation.
 
 Dependency-free on purpose until a predictor is built: torch and ultralytics are imported lazily.
 """
@@ -82,7 +90,8 @@ def _key(path):
 
 
 class ReferenceStore:
-    """{image: [(class name, (x1, y1, x2, y2)), ...]} - one record per image, newest last."""
+    """{image: [(class name, 'box', (x1, y1, x2, y2)) | (class name, 'poly', [(x, y), ...]), ...]}
+    One record per image, newest last."""
 
     def __init__(self):
         self._records = OrderedDict()           # key -> (path, items)
@@ -109,27 +118,38 @@ class ReferenceStore:
         items = []
         for box in bboxes:
             x1, y1, x2, y2, cls = box[:5]
-            items.append((cls, (float(x1), float(y1), float(x2), float(y2))))
+            items.append((cls, "box", (float(x1), float(y1), float(x2), float(y2))))
         for poly in polygons:
             points, cls = poly[0], poly[1]
             if len(points) >= 3:
-                items.append((cls, tuple(float(v) for v in poly_rect(points))))
-        items = [(c, r) for c, r in items if r[2] - r[0] >= MIN_SIDE and r[3] - r[1] >= MIN_SIDE]
+                items.append((cls, "poly", [(float(x), float(y)) for x, y in points]))
+        items = [it for it in items if _big_enough(it)]
         key = _key(path)
         self._records.pop(key, None)            # re-inserting puts it last: the newest reference
         if items:
             self._records[key] = (path, items)
         return len(items)
 
-    def select(self, limit, classes, exclude=None):
+    def select(self, limit, classes, exclude=None, polygon=False):
         """The newest `limit` stored images as [(path, items)], keeping only annotations of `classes`.
+        polygon=True keeps polygons only; otherwise boxes (a polygon then counts through its bounding box).
         `exclude` (the image about to be annotated) is never its own reference."""
         skip = _key(exclude) if exclude else None
         picked = []
         for key, (path, items) in reversed(self._records.items()):
             if key == skip:
                 continue
-            kept = [(c, r) for c, r in items if c in classes]
+            kept = []
+            for cls, kind, geometry in items:
+                if cls not in classes:
+                    continue
+                if polygon:
+                    if kind == "poly":
+                        kept.append((cls, kind, geometry))
+                elif kind == "box":
+                    kept.append((cls, kind, geometry))
+                else:
+                    kept.append((cls, "box", tuple(float(v) for v in poly_rect(geometry))))
             if kept:
                 picked.append((path, kept))
             if len(picked) >= limit:
@@ -160,18 +180,51 @@ class ReferenceStore:
         return added
 
 
-def reference_prompts(items, classes):
-    """(boxes, obj_ids) for one reference image: the largest box of every class, obj id = the class's position
-    in the workspace class list (SAM 2 keeps one object slot per class)."""
-    best = {}
-    for cls, rect in items:
+def _big_enough(item):
+    _cls, kind, geometry = item
+    x1, y1, x2, y2 = geometry if kind == "box" else poly_rect(geometry)
+    return x2 - x1 >= MIN_SIDE and y2 - y1 >= MIN_SIDE
+
+
+def items_signature(items, classes):
+    """Hashable summary of what a reference image says (used to know when its memory entry is out of date)."""
+    return tuple(sorted((classes.index(c), kind, tuple(round(v) for v in (g if kind == "box" else
+                                                                           [n for p in g for n in p])))
+                        for c, kind, g in items if c in classes))
+
+
+def reference_masks(items, classes, shape, refine=None):
+    """(masks, obj_ids) for one reference image of the given (height, width): for every class ONE mask holding
+    all its objects. Polygons are filled exactly. Boxes become silhouettes when `refine(boxes)` (-> one boolean mask
+    per box, or None) is given and answers; any box it cannot refine is filled as a rectangle.
+    obj id = the class's position in the workspace class list (SAM 2 keeps one object slot per class).
+    (None, []) when nothing is usable."""
+    import cv2
+    import numpy as np
+    h, w = shape[:2]
+    per_class = {}
+    boxes_of = {}
+    for cls, kind, geometry in items:
         if cls not in classes:
             continue
-        area = (rect[2] - rect[0]) * (rect[3] - rect[1])
-        if cls not in best or area > best[cls][0]:
-            best[cls] = (area, rect)
-    ids = sorted(classes.index(c) for c in best)
-    return [list(best[classes[i]][1]) for i in ids], ids
+        mask = per_class.setdefault(cls, np.zeros((h, w), np.uint8))
+        if kind == "poly":
+            cv2.fillPoly(mask, [np.round(np.array(geometry)).astype(np.int32)], 1)
+        else:
+            boxes_of.setdefault(cls, []).append(geometry)
+    for cls, boxes in boxes_of.items():
+        silhouettes = refine(boxes) if refine else None
+        for i, (x1, y1, x2, y2) in enumerate(boxes):
+            sil = silhouettes[i] if silhouettes is not None and i < len(silhouettes) else None
+            if sil is not None and sil.shape == (h, w) and sil.any():
+                per_class[cls] |= sil.astype(np.uint8)
+            else:
+                per_class[cls][max(int(round(y1)), 0):max(int(round(y2)), 0),
+                               max(int(round(x1)), 0):max(int(round(x2)), 0)] = 1
+    ids = sorted(classes.index(c) for c in per_class if per_class[c].any())
+    if not ids:
+        return None, []
+    return np.stack([per_class[classes[i]] for i in ids]), ids
 
 
 # ----------------------------------------------------------------------
@@ -221,11 +274,13 @@ class Sam2Engine:
 
     def __init__(self):
         self.predictor = None
+        self.refiner = None                     # SAM 2 in its normal one-image mode: boxes -> silhouettes
         self.key = None
-        self.entries = OrderedDict()            # (path, file stamp, boxes, ids) -> (memory entry, object slots)
+        self.entries = OrderedDict()            # (path, file stamp, annotations) -> (memory entry, object slots)
 
     def release(self):
         self.predictor = None
+        self.refiner = None
         self.key = None
         self.entries.clear()
         gc.collect()
@@ -261,14 +316,32 @@ class Sam2Engine:
         self.predictor = SAM2DynamicInteractivePredictor(overrides=overrides, max_obj_num=slots)
         self.key = key
 
-    def _entry_for(self, path, boxes, ids, status):
-        """The encoded memory entry of one reference image (cached while the image and its boxes are unchanged)."""
+    def _boxes_refiner(self, image):
+        """refine(boxes) -> one boolean silhouette per box, using the standard Ultralytics SAM 2 box prompt.
+        None (rectangles are used instead) when that is not possible."""
+        def refine(boxes):
+            try:
+                if self.refiner is None:
+                    from ultralytics import SAM
+                    self.refiner = SAM(self.key[0])
+                result = self.refiner(image, bboxes=[[float(v) for v in b] for b in boxes], verbose=False)[0]
+                if result.masks is None or len(result.masks.data) != len(boxes):
+                    return None
+                return [m > 0 for m in result.masks.data.cpu().numpy()]
+            except Exception as exc:
+                print(f"[SAM2] Could not refine the reference boxes, using rectangles: {exc}")
+                return None
+        return refine
+
+    def _entry_for(self, path, items, classes, status):
+        """The encoded memory entry of one reference image (cached while the image and its annotations are
+        unchanged). None when the image cannot be read or has nothing usable."""
         try:
             stat = os.stat(path)
             stamp = (stat.st_mtime_ns, stat.st_size)
         except OSError:
             return None
-        sig = (_key(path), stamp, tuple(tuple(b) for b in boxes), tuple(ids))
+        sig = (_key(path), stamp, items_signature(items, classes))
         cached = self.entries.get(sig)
         if cached is not None:
             self.entries.move_to_end(sig)
@@ -276,12 +349,15 @@ class Sam2Engine:
         image = _read_bgr(path)
         if image is None:
             return None
+        masks, ids = reference_masks(items, classes, image.shape, self._boxes_refiner(image))
+        if masks is None:
+            return None
         if status:
             status(f"Learning from {os.path.basename(path)} ...")
         p = self.predictor
         p.memory_bank.clear()                   # so memory_bank[-1] below is exactly this image's entry
         p.obj_idx_set.clear()
-        p(source=image, bboxes=boxes, obj_ids=ids, update_memory=True)
+        p(source=image, masks=masks, obj_ids=ids, update_memory=True)
         cached = (p.memory_bank[-1], set(p.obj_idx_set))
         self.entries[sig] = cached
         return cached
@@ -292,10 +368,7 @@ class Sam2Engine:
         p = self.predictor
         wanted, slots = [], set()
         for path, items in references:
-            boxes, ids = reference_prompts(items, classes)
-            if not boxes:
-                continue
-            entry = self._entry_for(path, boxes, ids, status)
+            entry = self._entry_for(path, items, classes, status)
             if entry is not None:
                 wanted.append(entry)
         if not wanted:

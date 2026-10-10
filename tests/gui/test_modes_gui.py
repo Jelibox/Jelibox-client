@@ -985,8 +985,8 @@ class MainWindowModeTests(unittest.TestCase):
         self._leave_image(0, [[10, 10, 90, 90, "cat"]])                  # back to image 1
         self._leave_image(1, [[20, 20, 100, 100, "dog"]])                # and to image 2 again
         self.assertEqual(len(sd.store), 2)
-        self.assertEqual(sd.store.items_for(a), [("cat", (10.0, 10.0, 90.0, 90.0))])
-        self.assertEqual(sd.store.items_for(b), [("dog", (20.0, 20.0, 100.0, 100.0))])
+        self.assertEqual(sd.store.items_for(a), [("cat", "box", (10.0, 10.0, 90.0, 90.0))])
+        self.assertEqual(sd.store.items_for(b), [("dog", "box", (20.0, 20.0, 100.0, 100.0))])
 
     def test_what_you_change_replaces_what_was_remembered(self):
         from utils import sam2_dynamic as sd
@@ -995,7 +995,7 @@ class MainWindowModeTests(unittest.TestCase):
         a = self._leave_image(0, [[10, 10, 90, 90, "cat"], [100, 100, 190, 190, "dog"]])
         self.assertEqual(len(sd.store.items_for(a)), 2)
         self._leave_image(0, [[10, 10, 90, 90, "cat"]])                  # you deleted the dog
-        self.assertEqual(sd.store.items_for(a), [("cat", (10.0, 10.0, 90.0, 90.0))])
+        self.assertEqual(sd.store.items_for(a), [("cat", "box", (10.0, 10.0, 90.0, 90.0))])
 
     def test_annotations_the_assistant_made_are_not_learned_until_you_have_touched_them(self):
         from utils import sam2_dynamic as sd

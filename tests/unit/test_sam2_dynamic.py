@@ -42,24 +42,27 @@ class ReferenceStoreTests(unittest.TestCase):
         for name, boxes in (("1.png", boxes_1), ("2.png", boxes_2), ("1.png", boxes_1), ("2.png", boxes_2)):
             self.store.remember(name, boxes, [])
         self.assertEqual(len(self.store), 2)
-        self.assertEqual(self.store.items_for("1.png"), [("helmet", (10.0, 10.0, 90.0, 90.0))])
+        self.assertEqual(self.store.items_for("1.png"), [("helmet", "box", (10.0, 10.0, 90.0, 90.0))])
 
     def test_leaving_an_image_again_replaces_its_annotations_instead_of_adding_to_them(self):
         self.store.remember("1.png", [[10, 10, 90, 90, "helmet"], [10, 100, 90, 190, "body"]], [])
         self.store.remember("1.png", [[12, 12, 92, 92, "helmet"]], [])             # you deleted the body
-        self.assertEqual(self.store.items_for("1.png"), [("helmet", (12.0, 12.0, 92.0, 92.0))])
+        self.assertEqual(self.store.items_for("1.png"), [("helmet", "box", (12.0, 12.0, 92.0, 92.0))])
 
     def test_an_image_left_without_annotations_is_dropped(self):
         self.store.remember("1.png", [[10, 10, 90, 90, "helmet"]], [])
         self.assertEqual(self.store.remember("1.png", [], []), 0)
         self.assertEqual(len(self.store), 0)
 
-    def test_polygons_count_through_their_bounding_box(self):
-        self.store.remember("1.png", [], [[[(10, 10), (50, 10), (50, 40), (10, 40)], "shoes"]])
-        self.assertEqual(self.store.items_for("1.png"), [("shoes", (10.0, 10.0, 50.0, 40.0))])
+    def test_polygons_are_kept_as_polygons(self):
+        square = [(10, 10), (50, 10), (50, 40), (10, 40)]
+        self.store.remember("1.png", [], [[square, "shoes"]])
+        self.assertEqual(self.store.items_for("1.png"),
+                         [("shoes", "poly", [(10.0, 10.0), (50.0, 10.0), (50.0, 40.0), (10.0, 40.0)])])
 
     def test_specks_are_not_references(self):
         self.assertEqual(self.store.remember("1.png", [[10, 10, 14, 14, "helmet"]], []), 0)
+        self.assertEqual(self.store.remember("2.png", [], [[[(0, 0), (3, 0), (3, 3)], "helmet"]]), 0)
         self.assertEqual(len(self.store), 0)
 
     def test_the_newest_images_are_chosen_and_the_one_being_annotated_never_is(self):
@@ -73,8 +76,22 @@ class ReferenceStoreTests(unittest.TestCase):
 
     def test_annotations_of_classes_that_no_longer_exist_are_ignored(self):
         self.store.remember("1.png", [[10, 10, 90, 90, "helmet"], [10, 10, 90, 90, "gone"]], [])
-        self.assertEqual(self.store.select(5, CLASSES), [("1.png", [("helmet", (10.0, 10.0, 90.0, 90.0))])])
+        self.assertEqual(self.store.select(5, CLASSES), [("1.png", [("helmet", "box", (10.0, 10.0, 90.0, 90.0))])])
         self.assertEqual(self.store.select(5, ["gone2"]), [])
+
+    def test_polygon_mode_learns_from_polygons_only(self):
+        square = [(10, 10), (50, 10), (50, 40), (10, 40)]
+        self.store.remember("boxes.png", [[10, 10, 90, 90, "helmet"]], [])
+        self.store.remember("mixed.png", [[10, 10, 90, 90, "body"]], [[square, "helmet"]])
+        picked = dict(self.store.select(5, CLASSES, polygon=True))
+        self.assertEqual(list(picked), ["mixed.png"])                               # the boxes-only image is skipped
+        self.assertEqual([i[:2] for i in picked["mixed.png"]], [("helmet", "poly")])  # and its box is not used
+
+    def test_box_mode_learns_from_boxes_and_from_the_bounding_box_of_polygons(self):
+        square = [(10, 10), (50, 10), (50, 40), (10, 40)]
+        self.store.remember("poly.png", [], [[square, "helmet"]])
+        (path, items), = self.store.select(5, CLASSES, polygon=False)
+        self.assertEqual(items, [("helmet", "box", (10.0, 10.0, 50.0, 40.0))])
 
     def test_forget_and_clear(self):
         self.store.remember("1.png", [[10, 10, 90, 90, "helmet"]], [])
@@ -102,15 +119,80 @@ class ReferenceStoreTests(unittest.TestCase):
         self.assertEqual(len(self.store), 2)
 
 
-class PromptTests(unittest.TestCase):
-    def test_one_box_per_class_the_largest_and_ids_follow_the_class_list(self):
-        items = [("body", (0, 0, 10, 10)), ("body", (0, 0, 50, 50)), ("helmet", (5, 5, 25, 25)), ("alien", (0, 0, 9, 9))]
-        boxes, ids = sd.reference_prompts(items, CLASSES)
-        self.assertEqual(ids, [0, 1])
-        self.assertEqual(boxes, [[5, 5, 25, 25], [0, 0, 50, 50]])
+class ReferenceMaskTests(unittest.TestCase):
+    SHAPE = (200, 300)
 
-    def test_nothing_to_prompt_with(self):
-        self.assertEqual(sd.reference_prompts([("alien", (0, 0, 9, 9))], CLASSES), ([], []))
+    def test_one_mask_per_class_covers_all_the_objects_of_that_class(self):
+        items = [("helmet", "box", (10, 10, 50, 50)), ("helmet", "box", (150, 100, 200, 160)), ("body", "box", (5, 60, 40, 190))]
+        masks, ids = sd.reference_masks(items, CLASSES, self.SHAPE)
+        self.assertEqual(ids, [0, 1])
+        self.assertEqual(masks.shape, (2, 200, 300))
+        helmet = masks[0]
+        self.assertTrue(helmet[30, 30] and helmet[130, 175], "both helmets are marked as the object")
+        self.assertFalse(helmet[80, 100], "the space between them is not")
+        self.assertTrue(masks[1][100, 20])
+
+    def test_polygons_are_filled_exactly_not_as_their_bounding_box(self):
+        triangle = [(100, 20), (180, 180), (20, 180)]
+        masks, ids = sd.reference_masks([("helmet", "poly", triangle)], CLASSES, self.SHAPE)
+        self.assertEqual(ids, [0])
+        self.assertTrue(masks[0][150, 100])                    # inside the triangle
+        self.assertFalse(masks[0][40, 30])                     # inside its bounding box, outside the triangle
+
+    def test_ids_follow_the_class_list_and_unknown_or_empty_classes_are_skipped(self):
+        items = [("shoes", "box", (10, 10, 50, 50)), ("alien", "box", (10, 10, 50, 50)), ("body", "box", (900, 900, 950, 950))]
+        masks, ids = sd.reference_masks(items, CLASSES, self.SHAPE)
+        self.assertEqual(ids, [2])                             # 'body' lies outside the image: nothing to mark
+        self.assertEqual(masks.shape[0], 1)
+
+    def test_nothing_usable(self):
+        self.assertEqual(sd.reference_masks([("alien", "box", (0, 0, 50, 50))], CLASSES, self.SHAPE), (None, []))
+
+    def silhouette(self, box):
+        """A round 'object' inside its box - what SAM 2 would return instead of the whole rectangle."""
+        import cv2
+        mask = np.zeros(self.SHAPE, bool)
+        x1, y1, x2, y2 = (int(v) for v in box)
+        cv2.ellipse(mask.view(np.uint8), ((x1 + x2) // 2, (y1 + y2) // 2), ((x2 - x1) // 2, (y2 - y1) // 2), 0, 0, 360, 1, -1)
+        return mask
+
+    def test_boxes_become_silhouettes_when_a_refiner_answers_so_the_background_is_not_taught(self):
+        seen = []
+
+        def refine(boxes):
+            seen.append(list(boxes))
+            return [self.silhouette(b) for b in boxes]
+
+        items = [("helmet", "box", (10, 10, 90, 90)), ("helmet", "box", (150, 100, 250, 190))]
+        masks, ids = sd.reference_masks(items, CLASSES, self.SHAPE, refine)
+        self.assertEqual(seen, [[(10, 10, 90, 90), (150, 100, 250, 190)]])        # asked once, for all the boxes of the class
+        self.assertTrue(masks[0][50, 50] and masks[0][145, 200])                  # the objects
+        self.assertFalse(masks[0][11, 11], "the rectangle's corner is background, not object")
+        self.assertFalse(masks[0][145, 120])                                      # nothing between the two
+
+    def test_a_box_the_refiner_cannot_handle_stays_a_rectangle(self):
+        items = [("helmet", "box", (10, 10, 90, 90)), ("helmet", "box", (150, 100, 250, 190))]
+        for answer in (None, [self.silhouette((10, 10, 90, 90))], [np.zeros(self.SHAPE, bool)] * 2,
+                       [np.ones((5, 5), bool)] * 2):
+            masks, _ = sd.reference_masks(items, CLASSES, self.SHAPE, lambda boxes, a=answer: a)
+            self.assertTrue(masks[0][145, 200], "the second box is at least a rectangle")
+            self.assertTrue(masks[0][50, 50], "so is the first")
+
+    def test_polygons_are_never_sent_to_the_refiner(self):
+        calls = []
+        triangle = [(100, 20), (180, 180), (20, 180)]
+        masks, _ = sd.reference_masks([("helmet", "poly", triangle)], CLASSES, self.SHAPE,
+                                      lambda boxes: calls.append(boxes) or [])
+        self.assertEqual(calls, [])
+        self.assertTrue(masks[0][150, 100])
+
+    def test_the_signature_changes_when_an_annotation_does(self):
+        a = [("helmet", "box", (10, 10, 50, 50))]
+        self.assertEqual(sd.items_signature(a, CLASSES), sd.items_signature(list(a), CLASSES))
+        self.assertNotEqual(sd.items_signature(a, CLASSES), sd.items_signature([("helmet", "box", (12, 10, 50, 50))], CLASSES))
+        self.assertNotEqual(sd.items_signature(a, CLASSES), sd.items_signature(a + [("body", "box", (1, 1, 30, 30))], CLASSES))
+        poly = [("helmet", "poly", [(10, 10), (50, 10), (50, 50)])]
+        self.assertNotEqual(sd.items_signature(a, CLASSES), sd.items_signature(poly, CLASSES))
 
 
 class MaskToAnnotationTests(unittest.TestCase):
@@ -160,11 +242,13 @@ class FakePredictor:
         self.memory_bank = []
         self.obj_idx_set = set()
         self.encoded = []               # image values, one per update_memory call
+        self.masks_seen = []            # the masks given with each of them
         self.next_results = None
 
-    def __call__(self, source=None, bboxes=None, obj_ids=None, update_memory=False):
+    def __call__(self, source=None, masks=None, obj_ids=None, update_memory=False):
         if update_memory:
             self.encoded.append(int(source[0, 0, 0]))
+            self.masks_seen.append(np.asarray(masks))
             self.memory_bank.append({"image": int(source[0, 0, 0]), "ids": list(obj_ids)})
             self.obj_idx_set.update(obj_ids)
             return []
@@ -182,10 +266,14 @@ class EngineTests(unittest.TestCase):
         patcher = mock.patch.object(sd.Sam2Engine, "_load", fake_load)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # no real SAM 2 here: boxes stay rectangles unless a test provides a refiner
+        no_refiner = mock.patch.object(sd.Sam2Engine, "_boxes_refiner", lambda engine, image: None)
+        no_refiner.start()
+        self.addCleanup(no_refiner.stop)
         self.images = {n: write_png(os.path.join(self.tmp, f"{n}.png"), value=n * 20) for n in (1, 2, 3)}
 
     def refs(self, *numbers, boxes=None):
-        boxes = boxes or [("helmet", (10, 10, 90, 90)), ("body", (10, 100, 90, 190))]
+        boxes = boxes or [("helmet", "box", (10, 10, 90, 90)), ("body", "box", (10, 100, 90, 190))]
         return [(self.images[n], boxes) for n in numbers]
 
     def build(self, *numbers, **kw):
@@ -212,10 +300,37 @@ class EngineTests(unittest.TestCase):
     def test_editing_one_image_re_encodes_only_that_one_and_replaces_its_entry(self):
         self.build(1, 2)
         self.engine.build("w.pt", 1024, CLASSES,
-                          [(self.images[1], [("helmet", (12, 12, 95, 95))]), (self.images[2], self.refs(2)[0][1])], 0.05, False)
+                          [(self.images[1], [("helmet", "box", (12, 12, 95, 95))]), (self.images[2], self.refs(2)[0][1])], 0.05, False)
         self.assertEqual(self.fake.encoded, [20, 40, 20])                          # image 1 again, image 2 not
         self.assertEqual(len(self.fake.memory_bank), 2)
         self.assertEqual(self.fake.obj_idx_set, {0, 1})                            # image 2 still teaches 'body'
+
+    def test_every_object_of_a_class_is_in_the_mask_the_predictor_is_given(self):
+        both = [("helmet", "box", (10, 10, 40, 40)), ("helmet", "box", (100, 60, 150, 110))]
+        self.engine.build("w.pt", 1024, CLASSES, [(self.images[1], both)], 0.05, False)
+        (masks,) = self.fake.masks_seen
+        self.assertEqual(masks.shape[0], 1)
+        self.assertTrue(masks[0][20, 20] and masks[0][80, 120])                    # image is 120 x 160 px
+
+    def test_the_predictor_is_given_silhouettes_not_rectangles_when_the_refiner_works(self):
+        import cv2
+
+        def refiner(engine, image):
+            def refine(boxes):
+                out = []
+                for x1, y1, x2, y2 in boxes:
+                    m = np.zeros(image.shape[:2], np.uint8)
+                    cv2.ellipse(m, (int((x1 + x2) // 2), int((y1 + y2) // 2)), (int((x2 - x1) // 2), int((y2 - y1) // 2)),
+                                0, 0, 360, 1, -1)
+                    out.append(m.astype(bool))
+                return out
+            return refine
+
+        with mock.patch.object(sd.Sam2Engine, "_boxes_refiner", refiner):
+            self.engine.build("w.pt", 1024, CLASSES, [(self.images[1], [("helmet", "box", (20, 20, 100, 100))])], 0.05, False)
+        (masks,) = self.fake.masks_seen
+        self.assertTrue(masks[0][60, 60])
+        self.assertFalse(masks[0][21, 21], "rectangle corner left out")
 
     def test_an_image_that_is_no_longer_a_reference_leaves_the_memory(self):
         self.build(1, 2, 3)
@@ -282,14 +397,37 @@ class ProviderTests(unittest.TestCase):
 
         def fake_build(weights, imgsz, classes, references, min_score, polygon, status=None):
             seen["refs"] = [p for p, _ in references]
+            seen["kinds"] = {i[1] for _, items in references for i in items}
             seen["args"] = (os.path.basename(weights), imgsz, min_score, polygon)
             return lambda bgr: ([], polygon)
 
         with mock.patch.object(sd, "predictor_problem", return_value=None), \
                 mock.patch.object(sd.engine, "build", side_effect=fake_build):
-            ap.sam2_predictor(self.settings, CLASSES, tempfile.mkdtemp(), polygon=True, exclude="b.png")
+            ap.sam2_predictor(self.settings, CLASSES, tempfile.mkdtemp(), polygon=False, exclude="b.png")
         self.assertEqual(seen["refs"], ["a.png"])
-        self.assertEqual(seen["args"], ("sam2.1_b.pt", 1024, 0.05, True))
+        self.assertEqual(seen["args"], ("sam2.1_b.pt", 1024, 0.05, False))
+
+    def test_polygon_mode_hands_over_polygons_and_box_mode_hands_over_boxes(self):
+        sd.store.remember("a.png", [[10, 10, 90, 90, "helmet"]], [[[(10, 10), (60, 10), (60, 60)], "body"]])
+        seen = []
+
+        def fake_build(weights, imgsz, classes, references, min_score, polygon, status=None):
+            seen.append({kind for _, items in references for _c, kind, _g in items})
+            return lambda bgr: ([], polygon)
+
+        with mock.patch.object(sd, "predictor_problem", return_value=None), \
+                mock.patch.object(sd.engine, "build", side_effect=fake_build):
+            ap.sam2_predictor(self.settings, CLASSES, tempfile.mkdtemp(), polygon=True)
+            ap.sam2_predictor(self.settings, CLASSES, tempfile.mkdtemp(), polygon=False)
+        self.assertEqual(seen, [{"poly"}, {"box"}])
+
+    def test_polygon_mode_with_only_boxes_so_far_says_how_to_continue(self):
+        sd.store.remember("a.png", [[10, 10, 90, 90, "helmet"]], [])
+        with mock.patch.object(sd, "predictor_problem", return_value=None):
+            with self.assertRaises(ap.AssistantError) as ctx:
+                ap.sam2_predictor(self.settings, CLASSES, tempfile.mkdtemp(), polygon=True)
+        self.assertIn("boxes only", str(ctx.exception))
+        self.assertIn("polygons", str(ctx.exception))
 
     def test_a_failure_while_loading_is_wrapped_and_frees_the_model(self):
         sd.store.remember("a.png", [[10, 10, 90, 90, "helmet"]], [])

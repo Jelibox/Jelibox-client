@@ -133,7 +133,11 @@ def sam2_predictor(settings, workspace_classes, base_dir, polygon=False, exclude
         raise AssistantError(problem)
     if not workspace_classes:
         raise AssistantError("This workspace has no classes yet. Add a class first.")
-    references = sd.store.select(settings["max_references"], list(workspace_classes), exclude)
+    references = sd.store.select(settings["max_references"], list(workspace_classes), exclude, polygon)
+    if not references and polygon and sd.store.select(1, list(workspace_classes), exclude, polygon=False):
+        raise AssistantError(
+            "SAM 2 Dynamic is in polygon mode, but the images you annotated have boxes only.\n\n"
+            "Draw polygons on one or two images and move on (A / D), or switch the Mode button to boxes.")
     if not references:
         raise AssistantError(
             "SAM 2 Dynamic learns from images you have annotated, and there are none yet.\n\n"

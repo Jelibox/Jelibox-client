@@ -9,6 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Changed
+- Screenshots in the README and on the website are now taken in a demo workspace (neutral workspace and image names).
+
 ## [0.4.3] - 2026-10-10
 
 ### Changed

@@ -9,6 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Changed
+- Change annotate.jpg
+
 ## [0.4.2] - 2026-10-10
 
 ### Changed

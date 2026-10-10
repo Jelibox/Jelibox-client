@@ -9,6 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Added
+- **Small object limit** in the Analyze Dataset window: a box next to the resize controls sets the size under which an object counts as small (32 px by default, 1-1024). The warning strip, the charts, the Resize table and **Remove these objects** all follow it, and the number is remembered for next time.
+
 ## [0.4.0] - 2026-10-10
 
 ### Changed

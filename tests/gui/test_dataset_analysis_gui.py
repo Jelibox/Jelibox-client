@@ -3,7 +3,12 @@ import gc
 import tkinter as tk
 import unittest
 
-from utils import dataset_analysis as da
+from tests.helpers import isolated_workspace
+
+ctx = isolated_workspace()
+
+from utils import app_settings                                  # noqa: E402
+from utils import dataset_analysis as da                        # noqa: E402
 
 try:
     import matplotlib  # noqa: F401
@@ -38,6 +43,8 @@ def labels(widget):
 @unittest.skipUnless(HAVE, "matplotlib not installed")
 class DashboardTests(unittest.TestCase):
     def setUp(self):
+        app_settings.set("small_limit", None)
+        self.addCleanup(app_settings.set, "small_limit", None)
         self.root = tk.Tk()
         self.addCleanup(gc.collect)             # Tk variables / images must not be collected on another thread
         self.addCleanup(self.root.destroy)
@@ -132,6 +139,68 @@ class DashboardTests(unittest.TestCase):
             w.remove_btn.invoke()
         self.assertIn("disk full", error.call_args[0][1])
         self.assertEqual([c for c in w.top.winfo_children() if isinstance(c, tk.Toplevel)], [])
+
+    def set_limit(self, w, value):
+        w.limit_var.set(str(value))
+        w._limit_changed()
+        w.top.update()
+
+    def test_the_limit_starts_at_32_and_can_be_lowered_by_the_user(self):
+        w = self.window([("car", 200, 100, 640, 640), ("bolt", 20, 24, 640, 640)])
+        self.assertEqual((w.limit, w.limit_var.get()), (32, "32"))
+        self.assertTrue(w.alert.winfo_ismapped())
+        self.assertIn("under 32 px", w.alert_text.cget("text"))
+        self.set_limit(w, 16)
+        self.assertEqual(w.limit, 16)
+        self.assertFalse(w.alert.winfo_ismapped(), "24 px is not small any more with a limit of 16")
+        self.set_limit(w, 30)
+        self.assertTrue(w.alert.winfo_ismapped())
+        self.assertIn("under 30 px", w.alert_text.cget("text"))
+
+    def test_the_limit_is_remembered_for_the_next_time(self):
+        w = self.window([("car", 200, 100, 640, 640)])
+        self.set_limit(w, 16)
+        self.assertEqual(app_settings.get("small_limit"), 16)
+        again = self.window([("car", 200, 100, 640, 640)])
+        self.assertEqual((again.limit, again.limit_var.get()), (16, "16"))
+
+    def test_the_limit_drives_the_table_the_chart_and_the_remove_message(self):
+        from unittest import mock
+        w = self.window([("bolt", 20, 10, 640, 640), ("bolt", 40, 30, 640, 640)])
+        self.set_limit(w, 16)
+        headings = [w.table.heading(c, "text") for c in w.table["columns"]]
+        self.assertIn("Objects < 16 px", headings)
+        self.assertEqual(da.small_summary(w.view, w.limit)["count"], 1)          # only the 10 px side
+        with mock.patch("utils.DatasetAnalysisDialog.messagebox.askyesno", return_value=False) as ask:
+            w.remove_btn.invoke()
+        self.assertIn("1 object(s)", ask.call_args[0][1])
+        self.assertIn("under 16 px", ask.call_args[0][1])
+
+    def test_the_limit_applies_to_the_simulated_size_too(self):
+        w = self.window([("car", 60, 60, 1280, 1280)])
+        w.size_var.set("320")
+        w.simulate()                                      # 60 px -> 15 px
+        w.top.update()
+        self.assertTrue(w.alert.winfo_ismapped())
+        self.set_limit(w, 10)
+        self.assertFalse(w.alert.winfo_ismapped())
+
+    def test_a_bad_limit_is_refused_and_the_old_one_stays(self):
+        from unittest import mock
+        w = self.window([("bolt", 20, 10, 640, 640)])
+        for bad in ("abc", "0", "-5", "5000", ""):
+            w.limit_var.set(bad)
+            with mock.patch("utils.DatasetAnalysisDialog.messagebox.showwarning") as warn:
+                w._limit_changed()
+            warn.assert_called_once()
+            self.assertEqual((w.limit, w.limit_var.get()), (32, "32"))
+        self.assertIsNone(app_settings.get("small_limit"))
+
+    def test_a_corrupt_saved_limit_falls_back_to_32(self):
+        for bad in ("abc", 0, 99999, None):
+            app_settings.set("small_limit", bad)
+            w = self.window([("car", 200, 100, 640, 640)])
+            self.assertEqual(w.limit, 32)
 
     def test_a_bad_input_size_is_refused(self):
         from unittest import mock

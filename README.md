@@ -25,7 +25,7 @@ Jelibox is designed for individuals and teams that need a private, offline-first
 - Repeat annotations from the previous image
 - ZeroFill masking for removing sensitive image regions locally
 - Dataset export for YOLO and Pascal VOC XML
-- **Analyze Dataset**: select a workspace in the picker and open a dashboard of charts (objects per class, object sizes, image resolutions, small-object warning) - and simulate what the smallest objects become at a model input size such as 640 px, by calculation only. A progress bar shows while the annotations are read, and the small-object warning has a **Remove these objects** button that deletes those objects from the dataset (XML and YOLO labels) after a warning to back it up first
+- **Analyze Dataset**: select a workspace in the picker and open a dashboard of charts (objects per class, object sizes, image resolutions, small-object warning) - and simulate what the smallest objects become at a model input size such as 640 px, by calculation only. A progress bar shows while the annotations are read, and the small-object limit (32 px by default) can be set in the dashboard, and the warning has a **Remove these objects** button that deletes those objects from the dataset (XML and YOLO labels) after a warning to back it up first
 - Live camera or video inference through Streamlit
 
 ## Modes

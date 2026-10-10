@@ -8,12 +8,14 @@ import gc
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+from . import app_settings
 from . import dataset_analysis as da
 from .progress_popup import show_progress_popup
 from .theme import (C_BASE, C_PANEL, C_CARD, C_CARD2, C_BORDER, C_ACCENT, C_ACCENT_TINT, C_ON_ACCENT, C_AMBER,
                     C_RED, C_TXT1, C_TXT2, C_TXT3, MODE)
 
 TOOLBAR_BG = "#E8E4DA"
+LIMIT_RANGE = (1, 1024)
 PALETTE = ("#4A5BF0", "#1F9D74", "#E08A1E", "#C9353A", "#8E5BD9", "#2B9BC9", "#B8A12A", "#D4568F")
 
 
@@ -34,7 +36,7 @@ class DatasetAnalysisWindow:
         self.workspace = workspace
         self.data = data if data is not None else da.analyze_workspace(workspace)
         self.simulated = False
-        self.limit = da.SMALL_LIMIT
+        self.limit = self._saved_limit()
         self.figures = {}
         self.top = tk.Toplevel(parent)
         self.top.title(f"Analyze Dataset - {workspace}")
@@ -56,6 +58,15 @@ class DatasetAnalysisWindow:
             except tk.TclError:
                 pass
 
+    @staticmethod
+    def _saved_limit():
+        """The small-object limit the user chose last time (px); 32 until they change it."""
+        try:
+            value = int(app_settings.get("small_limit", da.SMALL_LIMIT))
+        except (TypeError, ValueError):
+            return da.SMALL_LIMIT
+        return value if LIMIT_RANGE[0] <= value <= LIMIT_RANGE[1] else da.SMALL_LIMIT
+
     # ----------------------------------------------------------
     def _build(self):
         header = tk.Frame(self.top, bg=C_PANEL)
@@ -68,6 +79,16 @@ class DatasetAnalysisWindow:
 
         bar = tk.Frame(self.top, bg=C_BASE)
         bar.pack(fill=tk.X, padx=14, pady=(10, 4))
+        # the small-object limit sits on the right and is packed first so it stays visible in a narrow window
+        self.limit_var = tk.StringVar(value=str(self.limit))
+        tk.Label(bar, text="px", bg=C_BASE, fg=C_TXT2, font=("Segoe UI", 9)).pack(side=tk.RIGHT)
+        self.limit_box = tk.Spinbox(bar, from_=LIMIT_RANGE[0], to=LIMIT_RANGE[1], width=5,
+                                    textvariable=self.limit_var, command=self._limit_changed)
+        self.limit_box.pack(side=tk.RIGHT, padx=(6, 3))
+        tk.Label(bar, text="Small object limit", bg=C_BASE, fg=C_TXT1,
+                 font=("Segoe UI", 9, "bold")).pack(side=tk.RIGHT, padx=(12, 0))
+        self.limit_box.bind("<Return>", lambda e: self._limit_changed())
+        self.limit_box.bind("<FocusOut>", lambda e: self._limit_changed())
         tk.Label(bar, text="Resize simulation", bg=C_BASE, fg=C_TXT1, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
         tk.Label(bar, text="input size", bg=C_BASE, fg=C_TXT2, font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(12, 4))
         combo = ttk.Combobox(bar, textvariable=self.size_var, width=7, values=[str(s) for s in da.COMPARE_SIZES])
@@ -123,6 +144,24 @@ class DatasetAnalysisWindow:
         if not 16 <= size <= 8192:
             raise ValueError("The input size must be between 16 and 8192 px.")
         return size
+
+    def _limit_changed(self):
+        """Apply the number typed in the Small object limit box (every chart, the warning and Remove follow it)."""
+        text = self.limit_var.get().strip()
+        try:
+            value = int(text)
+            if not LIMIT_RANGE[0] <= value <= LIMIT_RANGE[1]:
+                raise ValueError
+        except ValueError:
+            self.limit_var.set(str(self.limit))
+            messagebox.showwarning("Small object limit", f"Enter a whole number of pixels between {LIMIT_RANGE[0]} "
+                                   f"and {LIMIT_RANGE[1]}.", parent=self.top)
+            return
+        self.limit_var.set(str(value))
+        if value != self.limit:
+            self.limit = value
+            app_settings.set("small_limit", value)
+            self.refresh()
 
     def simulate(self):
         try:

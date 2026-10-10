@@ -45,9 +45,14 @@ def buttons(root):
     return [w for w in walk(root) if isinstance(w, tk.Button)]
 
 
+def label_of(button):
+    """The button's text, or its full label when a narrow header has shrunk it to an icon."""
+    return getattr(button, "_jb", {}).get("full") or button.cget("text")
+
+
 def find_button(root, text):
     for b in buttons(root):
-        if re.search(rf"(?<![A-Za-z]){re.escape(text)}(?![A-Za-z])", b.cget("text")):
+        if re.search(rf"(?<![A-Za-z]){re.escape(text)}(?![A-Za-z])", label_of(b)):
             return b
     raise AssertionError(f"no button '{text}' among {[b.cget('text') for b in buttons(root)]}")
 
@@ -101,6 +106,7 @@ class MainWindowTests(unittest.TestCase):
     def setUp(self):
         config.state.bboxes, config.state.polygons = [], []
         self.dialogs.calls.clear()
+        self.gui.infer_scope.set("single")
 
     # ------------------------------------------------------------------ layout
     def test_window_title_and_branding(self):
@@ -147,13 +153,121 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(config.state.show_bbox_text)
         self.assertEqual(self.dialogs.calls, [], "label text toggle must not show any notification")
 
+    # ------------------------------------------------------- Infer window and G
+    def _open_infer_dialog(self):
+        opened = []
+        real = tk.Toplevel
+        with mock.patch.object(tk, "Toplevel", side_effect=lambda *a, **k: opened.append(real(*a, **k)) or opened[-1]):
+            find_button(self.root, "Infer").invoke()
+        pump(self.root, 0.2)
+        self.addCleanup(lambda: opened[0].winfo_exists() and opened[0].destroy())
+        return opened[0]
+
+    def test_annotate_all_button_is_gone_and_infer_sits_with_the_configuration_buttons(self):
+        self.assertFalse([b for b in buttons(self.root) if "Annotate all" in label_of(b)])
+        x = lambda t: find_button(self.root, t).winfo_rootx()
+        self.assertGreater(x("Infer"), x("ZeroFill: OFF"))             # no longer among the quick actions
+        self.assertLess(x("Infer"), x("Label Assistant"))
+        self.assertLess(x("Label Assistant"), x("Train"))
+        self.assertEqual(find_button(self.root, "Infer").cget("bg"), theme.C_ACCENT)
+
+    def test_infer_opens_a_window_with_single_image_selected_and_runs_nothing_yet(self):
+        with mock.patch.object(self.gui, "run_inference") as one, mock.patch.object(self.gui, "run_auto_annotate_all") as many:
+            dlg = self._open_infer_dialog()
+        one.assert_not_called()
+        many.assert_not_called()
+        radios = {w.cget("text"): w for w in walk(dlg) if isinstance(w, tk.Radiobutton)}
+        self.assertEqual(set(radios), {"Single image", "Full dataset"})
+        self.assertEqual(self.gui.infer_scope.get(), "single")
+        labels = " ".join(str(w.cget("text")) for w in walk(dlg) if isinstance(w, tk.Label))
+        self.assertIn("Press G", labels)
+
+    def test_g_runs_whatever_the_infer_window_was_set_to(self):
+        self.root.focus_force()
+        pump(self.root, 0.1)
+        with mock.patch.object(self.gui, "run_inference") as one, mock.patch.object(self.gui, "run_auto_annotate_all") as many:
+            self.root.event_generate("<KeyPress>", keysym="g")
+            pump(self.root, 0.2)
+            self.assertEqual((one.call_count, many.call_count), (1, 0))      # default: single image
+            dlg = self._open_infer_dialog()
+            next(w for w in walk(dlg) if isinstance(w, tk.Radiobutton) and w.cget("text") == "Full dataset").invoke()
+            dlg.destroy()
+            self.root.focus_force()
+            pump(self.root, 0.1)
+            self.root.event_generate("<KeyPress>", keysym="G")
+            pump(self.root, 0.2)
+            self.assertEqual((one.call_count, many.call_count), (1, 1))      # now the whole dataset
+            self.gui.infer_scope.set("single")
+            self.gui.run_label_assist()
+            self.assertEqual((one.call_count, many.call_count), (2, 1))
+
+    def test_run_now_in_the_infer_window_uses_the_selected_choice(self):
+        for choice, expect in (("Single image", (1, 0)), ("Full dataset", (0, 1))):
+            with mock.patch.object(self.gui, "run_inference") as one, mock.patch.object(self.gui, "run_auto_annotate_all") as many:
+                dlg = self._open_infer_dialog()
+                next(w for w in walk(dlg) if isinstance(w, tk.Radiobutton) and w.cget("text") == choice).invoke()
+                next(w for w in walk(dlg) if isinstance(w, tk.Button) and w.cget("text") == "Run now").invoke()
+                pump(self.root, 0.1)
+                self.assertEqual((one.call_count, many.call_count), expect, choice)
+                self.assertFalse(dlg.winfo_exists())
+
+    def test_closing_the_infer_window_keeps_the_choice_for_g(self):
+        dlg = self._open_infer_dialog()
+        next(w for w in walk(dlg) if isinstance(w, tk.Radiobutton) and w.cget("text") == "Full dataset").invoke()
+        next(w for w in walk(dlg) if isinstance(w, tk.Button) and w.cget("text") == "Close").invoke()
+        self.assertEqual(self.gui.infer_scope.get(), "all")
+
+    # ------------------------------------------- the header must fit a 12-inch screen
+    def test_header_shrinks_step_by_step_instead_of_clipping(self):
+        g = self.gui
+        scale = self.root.tk.call("tk", "scaling") / 1.3333                  # 1.25 on a 125% display
+        needs = g._header_needs
+        self.assertEqual(len(needs), len(g.HEADER_LEVELS))
+        self.assertEqual(needs, sorted(needs, reverse=True), "every level asks for less than the one before")
+        twelve_inch = int(1280 * scale)                                      # about 1280 logical px
+        with mock.patch.object(self.root, "winfo_width", return_value=twelve_inch):
+            g._fit_header_now()
+        self.assertLessEqual(needs[g.header_level], twelve_inch)
+        self.assertLess(g.header_level, len(g.HEADER_LEVELS) - 1, "a 12-inch screen keeps the button labels")
+        for name in ("Label Assistant", "Export Dataset", "Infer"):
+            self.assertIn(name, label_of(find_button(self.root, name)))
+            self.assertEqual(find_button(self.root, name).cget("text"), label_of(find_button(self.root, name)))
+        with mock.patch.object(self.root, "winfo_width", return_value=20000):
+            g._fit_header_now()
+        self.assertEqual(g.header_level, 0)
+
+    def test_a_very_narrow_window_shows_icons_with_the_full_label_kept(self):
+        g = self.gui
+        with mock.patch.object(self.root, "winfo_width", return_value=int(min(g._header_needs)) + 50):
+            g._fit_header_now()
+        self.assertEqual(g.header_level, len(g.HEADER_LEVELS) - 1)
+        train = find_button(self.root, "Train")
+        self.assertEqual(train.cget("text"), "\U0001F393")
+        self.assertEqual(train._jb["full"], "\U0001F393  Train")
+        zero = g.mask_btn
+        zero.invoke()
+        self.assertEqual(zero.cget("text"), "\u2B1B")                          # still just the icon while ON
+        self.assertIn("ON", label_of(zero))
+        zero.invoke()
+        self.assertIn("OFF", label_of(zero))
+        with mock.patch.object(self.root, "winfo_width", return_value=20000):
+            g._fit_header_now()
+        self.assertEqual(train.cget("text"), "\U0001F393  Train")
+        self.assertEqual(zero.cget("text"), "\u2B1B ZeroFill: OFF")
+
+    def test_visibility_check_boxes_are_lined_up_on_the_left(self):
+        boxes = [w for w in walk(self.gui.visibility_frame) if isinstance(w, tk.Checkbutton)]
+        self.assertTrue(boxes)
+        for box in boxes:
+            self.assertEqual(str(box.cget("anchor")), "w")
+
     def test_zerofill_button_toggles_state_and_look(self):
         btn = self.gui.mask_btn
         btn.invoke()
-        self.assertIn("ON", btn.cget("text"))
+        self.assertIn("ON", label_of(btn))
         self.assertEqual(btn.cget("bg"), theme.C_ACCENT)
         btn.invoke()
-        self.assertIn("OFF", btn.cget("text"))
+        self.assertIn("OFF", label_of(btn))
         self.assertEqual(btn.cget("bg"), theme.C_CARD2)
 
     def test_mode_button_switches_bbox_and_polygon(self):

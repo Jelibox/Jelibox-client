@@ -40,7 +40,7 @@ def ultralytics_problem():
     except ValueError:
         return None
     if found < MIN_ULTRALYTICS:
-        return (f"Custom head models need ultralytics {'.'.join(map(str, MIN_ULTRALYTICS))} or newer "
+        return (f"The Custom Model mode needs ultralytics {'.'.join(map(str, MIN_ULTRALYTICS))} or newer "
                 f"(found {ultralytics.__version__}). Run the Jelibox installer again to update it.")
     return None
 

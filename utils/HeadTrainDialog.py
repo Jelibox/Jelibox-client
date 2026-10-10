@@ -145,7 +145,7 @@ def _fmt_time(seconds):
 
 # ------------------------------------------------------------------ the window
 class HeadTrainDialog(_Dialog):
-    TITLE = "TRAIN HEAD"
+    TITLE = "TRAIN CUSTOM MODEL"
     WIDTH = 700
     SAVE_TEXT = "Start training"
 
@@ -162,7 +162,7 @@ class HeadTrainDialog(_Dialog):
         self.error = None
         self.pairs = head_data.labelled_pairs(self.images_folders, self.labels_folder)
         super().__init__(parent)
-        self.win.title("Train head")
+        self.win.title("Train custom model")
         self.win.bind('<Escape>', lambda e: self._close())
         self.win.protocol("WM_DELETE_WINDOW", self._close)
 
@@ -326,15 +326,15 @@ class HeadTrainDialog(_Dialog):
             if not 5 <= share <= 50:
                 raise ValueError("The validation share must be between 5 and 50 %.")
         except (ValueError, tk.TclError) as exc:
-            messagebox.showwarning("Train head", str(exc) if isinstance(exc, ValueError) else "Check the numbers.",
+            messagebox.showwarning("Train custom model", str(exc) if isinstance(exc, ValueError) else "Check the numbers.",
                                    parent=self.win)
             return
         if len(self.pairs) < head_data.MIN_LABELLED:
-            messagebox.showwarning("Train head", f"Only {len(self.pairs)} images have labels. At least "
+            messagebox.showwarning("Train custom model", f"Only {len(self.pairs)} images have labels. At least "
                                                  f"{head_data.MIN_LABELLED} are needed.", parent=self.win)
             return
         if os.path.exists(os.path.join(self.model_folder, HEAD_FILE)) and not messagebox.askyesno(
-                "Train head", f"This workspace already has a trained head ({HEAD_FILE}).\n\nTrain a new one? The "
+                "Train custom model", f"This workspace already has a trained head ({HEAD_FILE}).\n\nTrain a new one? The "
                               f"current head is kept as head_best.prev.pt.", parent=self.win):
             return
 
@@ -355,7 +355,7 @@ class HeadTrainDialog(_Dialog):
         try:
             self.proc = TrainProcess(self.command(job_path), BASE_DIR, os.path.join(self.run_dir, "train.log"))
         except OSError as exc:
-            messagebox.showerror("Train head", f"Could not start the training process:\n{exc}", parent=self.win)
+            messagebox.showerror("Train custom model", f"Could not start the training process:\n{exc}", parent=self.win)
             return
         self.running = True
         self.started_at = time.time()
@@ -506,7 +506,7 @@ class HeadTrainDialog(_Dialog):
 
     def _close(self):
         if self.running:
-            if not messagebox.askyesno("Train head", "Training is running. Stop it?\n\nThe best head so far is kept.",
+            if not messagebox.askyesno("Train custom model", "Training is running. Stop it?\n\nThe best head so far is kept.",
                                        parent=self.win):
                 return
             self._stop()

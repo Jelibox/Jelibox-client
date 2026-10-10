@@ -4,6 +4,7 @@ globals), so they can be used by the G key, by Auto-annotate all, and in tests.
 
   - locate_predictor : LocateAnything-3B through HF Transformers (utils/locate_anything.py)
   - head_predictor   : frozen YOLO detector + trained head (utils/custom_head.py)
+  - sam2_predictor   : SAM 2 Dynamic, learning from the annotated images (utils/sam2_dynamic.py)
 
 A predictor is a function  predict(bgr_image) -> (predictions, is_polygon)  where predictions is
 [{'rect': (x1, y1, x2, y2), 'conf': float, 'cls': workspace class name}]  (the same shape the YOLO providers
@@ -90,7 +91,7 @@ def head_predictor(settings, confidence, workspace_classes, base_dir, device="au
     try:
         from . import custom_head as ch
     except Exception as exc:
-        raise AssistantError(f"Custom head models need torch and ultralytics ({exc}).") from exc
+        raise AssistantError(f"The Custom Model mode needs torch and ultralytics ({exc}).") from exc
     problem = ch.ultralytics_problem()
     if problem:
         raise AssistantError(problem)
@@ -121,9 +122,40 @@ def head_predictor(settings, confidence, workspace_classes, base_dir, device="au
     return predict
 
 
+# ------------------------------------------------------------------ SAM 2 Dynamic
+def sam2_predictor(settings, workspace_classes, base_dir, polygon=False, exclude=None, status=None):
+    """settings: the 'sam2_dynamic' block of the workspace config. Learns from the images stored by
+    sam2_dynamic.store (the newest settings['max_references'], never `exclude`, the image about to be annotated),
+    and returns predict(bgr). polygon: give polygons (segmentation) instead of boxes."""
+    from . import sam2_dynamic as sd
+    problem = sd.predictor_problem()
+    if problem:
+        raise AssistantError(problem)
+    if not workspace_classes:
+        raise AssistantError("This workspace has no classes yet. Add a class first.")
+    references = sd.store.select(settings["max_references"], list(workspace_classes), exclude)
+    if not references:
+        raise AssistantError(
+            "SAM 2 Dynamic learns from images you have annotated, and there are none yet.\n\n"
+            "Draw the boxes (or polygons) on one or two images and move to the next image (A / D); "
+            "then press Infer on a new image.")
+    weights = sd.weights_path(base_dir, settings["model"])
+    try:
+        return sd.engine.build(weights, settings["imgsz"], list(workspace_classes), references,
+                               settings["min_score"], polygon, status)
+    except Exception as exc:
+        sd.engine.release()
+        raise AssistantError(f"SAM 2 could not be started:\n{exc}") from exc
+
+
 def release_all():
     """Forget the cached models so their memory can be freed."""
     _head_cache.clear()
+    try:
+        from . import sam2_dynamic as sd
+        sd.engine.release()
+    except Exception:
+        pass
     try:
         from . import locate_anything as la
         if la.engine.loaded:

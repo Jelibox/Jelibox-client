@@ -35,13 +35,13 @@ class InstallerPackageTests(unittest.TestCase):
 class DocumentationTests(unittest.TestCase):
     def test_readme_describes_the_modes_and_their_requirements(self):
         readme = read("README.md")
-        for needle in ("## Modes", "YOLO-World", "LocateAnything", "Custom head", "Shift+G", "transformers==4.57.6",
+        for needle in ("## Modes", "YOLO-World", "LocateAnything", "Custom Model", "SAM 2 Dynamic", "Infer window", "transformers==4.57.6",
                        "ultralytics>=8.4.68", "huggingface_hub>=0.34.0,<1.0", "models/_huggingface"):
             self.assertIn(needle, readme, needle)
 
     def test_changelog_lists_the_modes(self):
         unreleased = read("CHANGELOG.md").split("## [0.2.0]")[0]
-        for needle in ("LocateAnything", "Custom head", "Auto-annotate all"):
+        for needle in ("LocateAnything", "Custom Model", "SAM 2 Dynamic", "Auto-annotate all"):
             self.assertIn(needle, unreleased, needle)
 
     def test_locateanything_code_is_pinned_and_trusted_code_is_explained(self):

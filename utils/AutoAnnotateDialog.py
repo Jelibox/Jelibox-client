@@ -49,7 +49,10 @@ def _fmt_time(seconds):
 def confirm_download_if_needed(parent, mode=None):
     """LocateAnything downloads its 7 GB model from Hugging Face the first time. Jelibox works offline by
     default, so ask before anything leaves the machine. True = go ahead."""
-    if inf.current_provider(mode) != wcfg.PROVIDER_LOCATE:
+    provider = inf.current_provider(mode)
+    if provider == wcfg.PROVIDER_SAM2:
+        return _confirm_sam2_download(parent)
+    if provider != wcfg.PROVIDER_LOCATE:
         return True
     from . import locate_anything as la
     problem = la.check_requirements()
@@ -64,6 +67,20 @@ def confirm_download_if_needed(parent, mode=None):
         f"Jelibox will download it from huggingface.co (about {la.DOWNLOAD_GB} GB) into\n{la.HF_HOME}\n\n"
         f"and run the model's own code from that repository (pinned to a fixed version). "
         f"This happens once. Download now?", parent=parent)
+
+
+def _confirm_sam2_download(parent):
+    """SAM 2 weights are fetched from GitHub once (75-224 MB). Ask before anything leaves the machine."""
+    from . import sam2_dynamic as sd
+    from .config import BASE_DIR
+    cfg = wcfg.get_assistant(workspaceName)["sam2_dynamic"]
+    if os.path.isfile(sd.weights_path(BASE_DIR, cfg["model"])):
+        return True
+    return messagebox.askyesno(
+        "SAM 2 Dynamic - first use",
+        f"The SAM 2 model ({cfg['model']}, about {sd.model_size_mb(cfg['model'])} MB) is not on this computer yet.\n\n"
+        f"Jelibox will download it once from github.com (Ultralytics' model files) into\n"
+        f"{os.path.dirname(sd.weights_path(BASE_DIR, cfg['model']))}\n\nDownload now?", parent=parent)
 
 
 def run_blocking(parent, title, work, first_line="Working ..."):
@@ -134,7 +151,8 @@ class AutoAnnotateDialog:
     def _build(self):
         provider = inf.current_provider(self.mode)
         names = {wcfg.PROVIDER_YOLO_WORLD: "YOLO-World", wcfg.PROVIDER_CUSTOM: "your trained model",
-                 wcfg.PROVIDER_LOCATE: "LocateAnything-3B", wcfg.PROVIDER_HEAD: "your custom head model"}
+                 wcfg.PROVIDER_LOCATE: "LocateAnything-3B", wcfg.PROVIDER_HEAD: "your custom model",
+                 wcfg.PROVIDER_SAM2: "SAM 2 Dynamic"}
         tk.Label(self.win, text="AUTO-ANNOTATE ALL IMAGES", bg=C_BASE, fg=C_TXT1,
                  font=('Segoe UI', 12, 'bold')).pack(padx=22, pady=(18, 2), anchor='w')
         tk.Label(self.win, bg=C_BASE, fg=C_TXT2, font=('Segoe UI', 9), wraplength=476, justify=tk.LEFT,

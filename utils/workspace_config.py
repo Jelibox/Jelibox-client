@@ -27,6 +27,9 @@ Layout:
           "detector_classes": [0],         # detector class ids whose boxes the head relabels
           "class_map": {"sleeping": "rider"}
         },
+        "sam2_dynamic": {                  # SAM 2 that learns from annotated images (see SAM2_DEFAULTS)
+          "model": "sam2.1_b.pt", "imgsz": 1024, "max_references": 6, "min_score": 0.05
+        },
         "batch": {"only_unlabeled": true}  # Auto-annotate all images
       }
     }
@@ -50,7 +53,8 @@ PROVIDER_YOLO_WORLD = "yolo_world"
 PROVIDER_CUSTOM = "custom_model"
 PROVIDER_LOCATE = "locate_anything"
 PROVIDER_HEAD = "custom_head"
-PROVIDERS = (PROVIDER_YOLO_WORLD, PROVIDER_CUSTOM, PROVIDER_LOCATE, PROVIDER_HEAD)
+PROVIDER_SAM2 = "sam2_dynamic"
+PROVIDERS = (PROVIDER_YOLO_WORLD, PROVIDER_CUSTOM, PROVIDER_LOCATE, PROVIDER_HEAD, PROVIDER_SAM2)
 
 YOLO_WORLD_MODELS = [
     "yolov8s-world", "yolov8s-worldv2",
@@ -88,6 +92,16 @@ HEAD_DEFAULTS = {
     "class_map": {},                # head class name -> workspace class
 }
 
+SAM2_MODELS = ["sam2.1_t.pt", "sam2.1_s.pt", "sam2.1_b.pt", "sam2.1_l.pt"]
+SAM2_IMAGE_SIZES = [512, 768, 1024]
+
+SAM2_DEFAULTS = {
+    "model": "sam2.1_b.pt",         # downloaded once into models/_sam2/
+    "imgsz": 1024,                  # SAM 2 is trained at 1024; smaller is faster on a CPU and a bit less exact
+    "max_references": 6,            # how many of the newest annotated images SAM 2 learns from at once
+    "min_score": 0.05,              # drop objects SAM 2 is less sure about (its scores run low: 0.2 is a good find)
+}
+
 DEFAULT_ASSISTANT = {
     "provider": PROVIDER_YOLO_WORLD,
     "confidence": 0.3,
@@ -98,6 +112,7 @@ DEFAULT_ASSISTANT = {
     "locate_anything": copy.deepcopy(LOCATE_DEFAULTS),
     "custom_model": copy.deepcopy(CUSTOM_MODEL_DEFAULTS),
     "custom_head": copy.deepcopy(HEAD_DEFAULTS),
+    "sam2_dynamic": copy.deepcopy(SAM2_DEFAULTS),
     "batch": {"only_unlabeled": True},
 }
 
@@ -179,6 +194,19 @@ def _normalize_head(raw):
     return out
 
 
+def _normalize_sam2(raw):
+    out = copy.deepcopy(SAM2_DEFAULTS)
+    if not isinstance(raw, dict):
+        return out
+    if raw.get("model") in SAM2_MODELS:
+        out["model"] = raw["model"]
+    if raw.get("imgsz") in SAM2_IMAGE_SIZES:
+        out["imgsz"] = raw["imgsz"]
+    out["max_references"] = _num(raw.get("max_references"), out["max_references"], 1, 20, int)
+    out["min_score"] = _num(raw.get("min_score"), out["min_score"], 0.0, 0.5)
+    return out
+
+
 def _normalize(data):
     """Fill in anything missing / malformed so callers can rely on the schema."""
     assistant = copy.deepcopy(DEFAULT_ASSISTANT)
@@ -189,6 +217,7 @@ def _normalize(data):
         assistant["locate_anything"] = _normalize_locate(raw_assistant.get("locate_anything"))
         assistant["custom_model"] = _normalize_custom_model(raw_assistant.get("custom_model"))
         assistant["custom_head"] = _normalize_head(raw_assistant.get("custom_head"))
+        assistant["sam2_dynamic"] = _normalize_sam2(raw_assistant.get("sam2_dynamic"))
         raw_batch = raw_assistant.get("batch")
         if isinstance(raw_batch, dict) and isinstance(raw_batch.get("only_unlabeled"), bool):
             assistant["batch"]["only_unlabeled"] = raw_batch["only_unlabeled"]

@@ -32,9 +32,9 @@ class ModeSettingTests(unittest.TestCase):
         app_settings.set("mode", "garbage")                      # a hand-edited file must not break the app
         self.assertEqual(am.get_mode(), am.MODE_YOLO_WORLD)
 
-    def test_there_are_exactly_three_modes_with_titles(self):
+    def test_there_are_exactly_four_modes_with_titles(self):
         ids = [m[0] for m in am.MODES]
-        self.assertEqual(ids, [am.MODE_YOLO_WORLD, am.MODE_LOCATE, am.MODE_HEAD])
+        self.assertEqual(ids, [am.MODE_YOLO_WORLD, am.MODE_LOCATE, am.MODE_HEAD, am.MODE_SAM2])
         for mode in ids:
             self.assertTrue(am.title(mode))
         self.assertEqual(am.title("unknown"), am.title(am.DEFAULT_MODE))
@@ -42,6 +42,7 @@ class ModeSettingTests(unittest.TestCase):
     def test_provider_follows_the_mode(self):
         self.assertEqual(am.provider_for(am.MODE_LOCATE, wc.PROVIDER_YOLO_WORLD), wc.PROVIDER_LOCATE)
         self.assertEqual(am.provider_for(am.MODE_HEAD, wc.PROVIDER_CUSTOM), wc.PROVIDER_HEAD)
+        self.assertEqual(am.provider_for(am.MODE_SAM2, wc.PROVIDER_CUSTOM), wc.PROVIDER_SAM2)
         # the first mode keeps the old choice between YOLO-World and "my trained model"
         self.assertEqual(am.provider_for(am.MODE_YOLO_WORLD, wc.PROVIDER_CUSTOM), wc.PROVIDER_CUSTOM)
         self.assertEqual(am.provider_for(am.MODE_YOLO_WORLD, wc.PROVIDER_LOCATE), wc.PROVIDER_YOLO_WORLD)

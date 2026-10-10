@@ -456,6 +456,9 @@ def open_label_assistant(parent):
     elif mode == assistant_modes.MODE_HEAD:
         from .ModeDialogs import open_custom_head
         open_custom_head(parent)
+    elif mode == assistant_modes.MODE_SAM2:
+        from .ModeDialogs import open_sam2_dynamic
+        open_sam2_dynamic(parent)
     else:
         dlg = LabelAssistantDialog(parent)
         parent.wait_window(dlg.win)

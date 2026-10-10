@@ -18,6 +18,7 @@ from .config import (CLASSLIST, state, input_folder, colorsPalette, vocdataset_f
                    model_folder, export_model_folder, export_dataset_folder, workspaceName)
 from . import config as _config_module
 from . import augmentation
+from . import sam2_dynamic
 from .augmentation import Augmenter, write_image
 from .augment_geometry import yolo_label_text, voc_xml_write, coco_annotation
 from .file_handler import load_annotation_local
@@ -107,6 +108,19 @@ class AnnotationGUI:
         self.zoom_step = 1.1  # Zoom increment per scroll
         self.canvas_container = None  # Store reference to container
         
+        # Header buttons shrink in steps when the window is narrow (see HEADER_LEVELS)
+        self._hbtns = []
+        self._header_needs = []
+        self._header_fit_job = None
+        self._header_applied = False
+        self.header_level = 0
+
+        # What Infer / G does: label the current image, or the whole dataset (chosen in the Infer window)
+        self.infer_scope = tk.StringVar(value='single')
+        # Images whose annotations came from the assistant and that you have not touched since: they are not
+        # used as references by SAM 2 Dynamic (it must learn from what you checked, not from its own guesses)
+        self._assist_unreviewed = set()
+
         # Setup UI
         self.create_widgets()
 
@@ -161,6 +175,110 @@ class AnnotationGUI:
         )
 
     # ----------------------------------------------------------
+    #  Header buttons that shrink to fit narrow windows (down to a 12-inch screen)
+    # ----------------------------------------------------------
+    # (inner padding, outer padding, which buttons show only their icon, show the Jelibox/workspace text)
+    HEADER_LEVELS = (
+        (8, 2, None, True),
+        (3, 1, None, True),
+        (3, 1, None, False),
+        (3, 1, 'secondary', False),
+        (3, 1, 'all', False),
+    )
+
+    def _hbtn(self, parent, full, icon, command, kind='secondary', font_size=8,
+              ipadx=8, padx=2, keep=False, tip=None):
+        """A header button that can fall back to its icon (with a tooltip) when the window is narrow.
+        keep=True keeps its text until the very last level (navigation, the main action)."""
+        btn = self._kbtn(parent, full, command, kind, font_size)
+        btn.pack(side=tk.LEFT, padx=padx, pady=12, ipady=5, ipadx=ipadx)
+        btn._jb = {'btn': btn, 'full': full, 'icon': icon, 'keep': keep, 'ipadx': ipadx, 'padx': padx}
+        self._hbtns.append(btn._jb)
+        self._tip(btn, tip or full.split('  ')[-1].strip())
+        return btn
+
+    def _set_hbtn_text(self, btn, full):
+        """Change a header button's label (e.g. ZeroFill ON/OFF) without losing the narrow-window fallback."""
+        btn._jb['full'] = full
+        self._show_hbtn_label(btn._jb, self.HEADER_LEVELS[self.header_level][2])
+
+    def _show_hbtn_label(self, b, icons):
+        icon_only = icons == 'all' or (icons == 'secondary' and not b['keep'])
+        b['btn'].config(text=b['icon'] if icon_only else b['full'])
+
+    def _tip(self, widget, text):
+        """Small hover label; only shown while the button has shrunk to its icon."""
+        tip = {'win': None, 'job': None}
+
+        def hide(_event=None):
+            if tip['job']:
+                widget.after_cancel(tip['job'])
+                tip['job'] = None
+            if tip['win']:
+                tip['win'].destroy()
+                tip['win'] = None
+
+        def show():
+            tip['job'] = None
+            if tip['win'] or widget.cget('text') == widget._jb['full']:
+                return
+            win = tk.Toplevel(widget)
+            win.wm_overrideredirect(True)
+            tk.Label(win, text=text, bg=C_CARD2, fg=C_TXT1, font=('Segoe UI', 8), padx=6, pady=2,
+                     relief=tk.SOLID, borderwidth=1).pack()
+            win.wm_geometry(f"+{widget.winfo_rootx()}+{widget.winfo_rooty() + widget.winfo_height() + 4}")
+            tip['win'] = win
+
+        widget.bind('<Enter>', lambda e: tip.update(job=widget.after(450, show)), add='+')
+        widget.bind('<Leave>', hide, add='+')
+        widget.bind('<ButtonPress>', hide, add='+')
+
+    def _apply_header_level(self, level):
+        ipadx, padx, icons, brand = self.HEADER_LEVELS[level]
+        for b in self._hbtns:
+            b['btn'].pack_configure(ipadx=b['ipadx'] if level == 0 else ipadx,
+                                    padx=b['padx'] if level == 0 else padx)
+            self._show_hbtn_label(b, icons)
+        if brand:
+            self.brand_text.pack(side=tk.LEFT, padx=(5, 0))
+        else:
+            self.brand_text.pack_forget()
+        self.header_level = level
+
+    def _header_need(self):
+        """Width the header's children ask for at the current level (the header itself does not propagate)."""
+        self.header.update_idletasks()
+        total = 0
+        for child in self.header.winfo_children():
+            padx = child.pack_info()['padx']
+            if not isinstance(padx, (tuple, list)):
+                padx = (padx, padx)
+            total += child.winfo_reqwidth() + sum(int(p) for p in padx)
+        return total
+
+    def _fit_header(self, _event=None):
+        """Pick the least-shrunk header level that fits the window width."""
+        if self._header_fit_job is not None:
+            self.root.after_cancel(self._header_fit_job)
+        self._header_fit_job = self.root.after_idle(self._fit_header_now)
+
+    def _fit_header_now(self):
+        self._header_fit_job = None
+        width = self.root.winfo_width()
+        if width < 200:
+            return                                   # not on screen yet
+        if not self._header_needs:
+            for level in range(len(self.HEADER_LEVELS)):
+                self._apply_header_level(level)
+                self._header_needs.append(self._header_need())
+            self.header_level = len(self.HEADER_LEVELS) - 1
+        level = next((i for i, need in enumerate(self._header_needs) if need <= width - 4),
+                     len(self.HEADER_LEVELS) - 1)
+        if level != self.header_level or not self._header_applied:
+            self._apply_header_level(level)
+            self._header_applied = True
+
+    # ----------------------------------------------------------
     #  Keyboard shortcuts
     # ----------------------------------------------------------
     def bind_shortcuts(self):
@@ -171,8 +289,8 @@ class AnnotationGUI:
         self.root.bind('r', lambda e: self.delete_selected_bbox())
         self.root.bind('s', lambda e: self.change_class_selected())
         self.root.bind('t', lambda e: self.start_training())
-        self.root.bind('g', lambda e: self.run_inference())
-        self.root.bind('G', lambda e: self.run_auto_annotate_all())
+        self.root.bind('g', lambda e: self.run_label_assist())
+        self.root.bind('G', lambda e: self.run_label_assist())
         self.root.bind('e', lambda e: self.repeat_annotations())
         self.root.bind('b', lambda e: self.toggle_force_new_bbox())
         self.root.bind('<Delete>', lambda e: self.delete_image())
@@ -254,6 +372,7 @@ class AnnotationGUI:
         header = tk.Frame(self.root, bg=C_PANEL, height=54)
         header.pack(side=tk.TOP, fill=tk.X)
         header.pack_propagate(False)
+        self.header = header
 
         # — Brand —
         logo_img = Image.open("assets/jelibox.png")
@@ -268,6 +387,7 @@ class AnnotationGUI:
         tk.Label(brand, image=self.logo, bg=C_PANEL).pack(side=tk.LEFT, pady=10)
         name_stack = tk.Frame(brand, bg=C_PANEL)
         name_stack.pack(side=tk.LEFT, padx=(5, 0))
+        self.brand_text = name_stack            # hidden first when the window gets narrow
         tk.Label(name_stack, text="Jelibox", bg=C_PANEL, fg=C_TXT1,
                  font=('Segoe UI', 12, 'bold')).pack(anchor='w')
         tk.Label(name_stack, text=f"{workspaceName.upper()}  ·  {assistant_modes.title(assistant_modes.get_mode()).upper()}",
@@ -277,19 +397,12 @@ class AnnotationGUI:
         tk.Frame(header, bg=C_BORDER, width=1).pack(side=tk.LEFT,
                                                       fill=tk.Y, pady=10, padx=10)
 
-        # vertical separator
-        tk.Frame(header, bg=C_BORDER, width=1).pack(side=tk.LEFT,
-                                                      fill=tk.Y, pady=10, padx=8)
-
         # — Navigation —
         nav = tk.Frame(header, bg=C_PANEL)
         nav.pack(side=tk.LEFT)
 
-        self._kbtn(nav, "◀  Prev", self.prev_image, 'secondary', font_size=9).pack(
-            side=tk.LEFT, padx=(0, 2), pady=12, ipady=5, ipadx=10)
-
-        self._kbtn(nav, "Next  ▶", self.next_image, 'secondary', font_size=9).pack(
-            side=tk.LEFT, padx=(2, 0), pady=12, ipady=5, ipadx=10)
+        self._hbtn(nav, "◀  Prev", "◀", self.prev_image, font_size=9, ipadx=10, padx=(0, 2), keep=True, tip="Previous image")
+        self._hbtn(nav, "Next  ▶", "▶", self.next_image, font_size=9, ipadx=10, padx=(2, 0), keep=True, tip="Next image")
 
         tk.Frame(header, bg=C_BORDER, width=1).pack(side=tk.LEFT,
                                                       fill=tk.Y, pady=10, padx=10)
@@ -300,41 +413,39 @@ class AnnotationGUI:
         config_group.pack(side=tk.RIGHT, padx=(0, 10))
 
         config_defs = [
-            ("🧠  Label Assistant", self.show_label_assistant),
-            ("🎓  Train",           self.start_training),
-            ("⬆  Export Model",     self.show_export_dialog),
-            ("⬆  Export Dataset",   self.show_export_dataset_dialog),
+            ("🤖  Infer",           "🤖",  self.show_infer_dialog,        'primary',   True,  "Infer - label with the Label Assistant"),
+            ("🧠  Label Assistant", "🧠",  self.show_label_assistant,     'secondary', False, "Label Assistant"),
+            ("🎓  Train",           "🎓",  self.start_training,           'secondary', False, "Train"),
+            ("⬆  Export Model",     "⬆M", self.show_export_dialog,       'secondary', False, "Export Model"),
+            ("⬆  Export Dataset",   "⬆D", self.show_export_dataset_dialog, 'secondary', False, "Export Dataset"),
         ]
-        for label, cmd in config_defs:
-            self._kbtn(config_group, label, cmd, 'secondary').pack(
-                side=tk.LEFT, padx=2, pady=12, ipady=5, ipadx=8)
+        for label, icon, cmd, kind, keep, tip in config_defs:
+            self._hbtn(config_group, label, icon, cmd, kind, keep=keep, tip=tip)
 
         # Quick-action group (one click, no dialog) - next to PREV / NEXT
         tools = tk.Frame(header, bg=C_PANEL)
         tools.pack(side=tk.LEFT)
 
         quick_defs = [
-            ("↶  Undo",    self.undo,                    'secondary'),
-            ("↷  Redo",    self.redo,                    'secondary'),
-            ("🔄  Repeat", self.repeat_annotations,     'secondary'),
-            ("🤖  Infer",  self.run_inference,           'primary'),
-            ("🗂  Annotate all", self.run_auto_annotate_all, 'secondary'),
-            ("🗑  Delete", self.delete_image,            'danger'),
-            ("🎥  Stream", self.launch_stream,           'secondary'),
-            ("⬡  Mode",    self.toggle_annotation_mode,  'secondary'),
+            ("↶  Undo",    "↶", self.undo,                    'secondary', "Undo (Ctrl+Z)"),
+            ("↷  Redo",    "↷", self.redo,                    'secondary', "Redo (Ctrl+Y)"),
+            ("🔄  Repeat", "🔄", self.repeat_annotations,     'secondary', "Repeat the previous image's annotations"),
+            ("🗑  Delete", "🗑", self.delete_image,            'danger',    "Delete this image"),
+            ("🎥  Stream", "🎥", self.launch_stream,           'secondary', "Stream"),
+            ("⬡  Mode",    "⬡", self.toggle_annotation_mode,  'secondary', "Switch between box and polygon"),
         ]
-        for label, cmd, kind in quick_defs:
-            self._kbtn(tools, label, cmd, kind).pack(
-                side=tk.LEFT, padx=2, pady=12, ipady=5, ipadx=8)
+        for label, icon, cmd, kind, tip in quick_defs:
+            self._hbtn(tools, label, icon, cmd, kind, tip=tip)
 
-        self.mask_btn = self._kbtn(tools, "⬛ ZeroFill: OFF", self.toggle_mask_mode, 'secondary')
-        self.mask_btn.pack(side=tk.LEFT, padx=2, pady=12, ipady=5, ipadx=8)
+        self.mask_btn = self._hbtn(tools, "⬛ ZeroFill: OFF", "⬛", self.toggle_mask_mode, tip="ZeroFill - black out an area")
 
         # Filler block: stretches to take whatever space is left between the
         # quick actions and the configuration group, so the header stays full
         # no matter how many buttons either group gets.
         tk.Frame(header, bg=C_CARD).pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
                                          padx=(10, 10), pady=12)
+
+        self.root.bind('<Configure>', lambda e: self._fit_header() if e.widget is self.root else None, add='+')
 
         # Hairline under header
         tk.Frame(self.root, bg=C_BORDER, height=1).pack(fill=tk.X)
@@ -622,7 +733,7 @@ class AnnotationGUI:
                 row, text=cls, variable=var,
                 bg=C_PANEL, fg=C_TXT1,
                 selectcolor=C_CARD2,
-                font=('Segoe UI', 9),
+                font=('Segoe UI', 9), anchor='w',
                 command=self.update_display,
                 activebackground=C_PANEL, activeforeground=C_TXT1
             )
@@ -2781,7 +2892,8 @@ class AnnotationGUI:
     def toggle_mask_mode(self):
         self.mask_mode = not self.mask_mode
         if self.mask_mode:
-            self.mask_btn.config(text="⬛ ZeroFill: ON", bg=C_ACCENT, fg=C_ON_ACCENT,
+            self._set_hbtn_text(self.mask_btn, "⬛ ZeroFill: ON")
+            self.mask_btn.config(bg=C_ACCENT, fg=C_ON_ACCENT,
                                  activebackground=C_ACCENT, activeforeground=C_ON_ACCENT)
             self.mask_polygon_points = []
             print("[MASKING] ON — Click to draw polygon, double-click to finish")
@@ -2793,7 +2905,8 @@ class AnnotationGUI:
                                 "written to the image when you switch images (Ctrl+Z to undo)\n"
                                 "Press ZeroFill again to cancel")
         else:
-            self.mask_btn.config(text="⬛ ZeroFill: OFF", bg=C_CARD2, fg=C_TXT1,
+            self._set_hbtn_text(self.mask_btn, "⬛ ZeroFill: OFF")
+            self.mask_btn.config(bg=C_CARD2, fg=C_TXT1,
                                  activebackground=C_BORDER, activeforeground=C_TXT1)
             self.mask_polygon_points = []
             print("[MASKING] OFF")
@@ -2890,6 +3003,7 @@ class AnnotationGUI:
 
     def push_undo(self):
         """Record the state *before* an edit. Call this right before mutating."""
+        self._assist_unreviewed.discard(self.images[state.current_index])      # you are editing: it is yours now
         self.undo_stack.append(self._snapshot())
         del self.undo_stack[:-self.HISTORY_LIMIT]
         self.redo_stack.clear()
@@ -3030,6 +3144,9 @@ class AnnotationGUI:
             self.canvas_offset_y = (canvas_h - state.orig_height) // 2
         
         save_and_backup_bboxes(img_name, state.orig_shape, CLASSLIST)
+        if img_name not in self._assist_unreviewed:
+            # SAM 2 Dynamic reference: one record per image, replaced whole each time you leave it
+            sam2_dynamic.store.remember(os.path.join(input_folder, img_name), state.bboxes, state.polygons)
         
         # Restore zoom level setelah save selesai
         if saved_zoom != 1.0:
@@ -3160,6 +3277,14 @@ class AnnotationGUI:
             self._train_head()
             return
 
+        if assistant_modes.get_mode() == assistant_modes.MODE_SAM2:
+            messagebox.showinfo(
+                "SAM 2 Dynamic",
+                "SAM 2 Dynamic needs no training.\n\nIt learns from the images you annotate: draw your boxes, move to "
+                f"the next image, then press Infer.\n\nImages it is learning from right now: {len(sam2_dynamic.store)}.",
+                parent=self.root)
+            return
+
         annotationMode = state.annotation_mode
         model_type = "seg" if annotationMode == "polygon" else "detect"
         model_type_display = ("🔷 SEGMENTATION" if annotationMode == "polygon"
@@ -3278,6 +3403,7 @@ class AnnotationGUI:
         else:
             ok, message = inference_current(self.images, state.current_index)
         if (len(state.bboxes), len(state.polygons)) != (len(before[0]), len(before[1])):
+            self._assist_unreviewed.add(self.images[state.current_index])
             self.undo_stack.append(before)
             del self.undo_stack[:-self.HISTORY_LIMIT]
             self.redo_stack.clear()
@@ -3302,6 +3428,58 @@ class AnnotationGUI:
             return False, str(error)
         preds, is_polygon = result
         return True, apply_predictions(preds, is_polygon)
+
+    def run_label_assist(self):
+        """What the Infer button's window is set to: the whole dataset, or just the current image (default)."""
+        if self.infer_scope.get() == 'all':
+            self.run_auto_annotate_all()
+        else:
+            self.run_inference()
+
+    def show_infer_dialog(self):
+        """Infer: pick whether the Label Assistant works on the current image or the whole dataset."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Infer")
+        dialog.configure(bg=C_BASE)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        body = tk.Frame(dialog, bg=C_CARD, padx=16, pady=14)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(body, text="What should Infer label?", bg=C_CARD, fg=C_TXT1,
+                 font=('Segoe UI', 10, 'bold')).pack(anchor='w')
+        tk.Label(body, text=f"Label Assistant mode: {assistant_modes.title(assistant_modes.get_mode())}",
+                 bg=C_CARD, fg=C_TXT3, font=('Segoe UI', 8)).pack(anchor='w', pady=(0, 8))
+
+        choices = (
+            ('single', "Single image", "Label the image on screen. You can undo it with Ctrl+Z."),
+            ('all', "Full dataset", "Label every image of this dataset folder. A window shows the progress."),
+        )
+        for value, title, detail in choices:
+            tk.Radiobutton(body, text=title, variable=self.infer_scope, value=value, anchor='w',
+                           bg=C_CARD, fg=C_TXT1, selectcolor=C_CARD2, activebackground=C_CARD,
+                           activeforeground=C_TXT1, font=('Segoe UI', 10, 'bold')).pack(fill=tk.X, pady=(6, 0))
+            tk.Label(body, text=detail, bg=C_CARD, fg=C_TXT3, font=('Segoe UI', 8), anchor='w',
+                     justify='left', wraplength=380).pack(fill=tk.X, padx=(24, 0))
+
+        tk.Label(body, text="Press G to use the label assist feature with this choice.",
+                 bg=C_CARD, fg=C_TXT2, font=('Segoe UI', 9), anchor='w').pack(fill=tk.X, pady=(14, 0))
+
+        def run():
+            dialog.destroy()
+            self.run_label_assist()
+
+        btn_row = tk.Frame(body, bg=C_CARD)
+        btn_row.pack(fill=tk.X, pady=(12, 0))
+        tk.Button(btn_row, text='Run now', command=run, bg=C_ACCENT, fg=C_ON_ACCENT).pack(side=tk.RIGHT, padx=6)
+        tk.Button(btn_row, text='Close', command=dialog.destroy, bg=C_CARD2, fg=C_TXT1).pack(side=tk.RIGHT, padx=(0, 6))
+
+        dialog.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        y = self.root.winfo_rooty() + 120
+        dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
 
     def run_auto_annotate_all(self):
         """Run the Label Assistant over every image of this dataset folder."""
@@ -3600,6 +3778,7 @@ class AnnotationGUI:
             f"Delete image '{img_name}' and all annotations?\n\nThis cannot be undone!",
             parent=self.root
         ):
+            sam2_dynamic.store.forget(os.path.join(input_folder, img_name))
             result = delete_current_image(self.images, state.current_index)
             if result[0] is None:
                 messagebox.showinfo("Dataset Empty",

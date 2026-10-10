@@ -53,7 +53,9 @@ def walk(widget):
 
 def buttons(root, text=None):
     out = [w for w in walk(root) if isinstance(w, tk.Button)]
-    return [b for b in out if text is None or re.search(re.escape(text), b.cget("text"))]
+    # a narrow annotation header shows icons only; _jb['full'] keeps the real label
+    label = lambda b: getattr(b, "_jb", {}).get("full") or b.cget("text")
+    return [b for b in out if text is None or re.search(re.escape(text), label(b))]
 
 
 def label_texts(root):
@@ -129,13 +131,28 @@ class FrontMenuTests(ModeGuiBase):
         pump(self.root, 0.3)
         return app
 
-    def test_the_front_menu_offers_the_three_modes(self):
+    def test_the_front_menu_offers_the_four_modes(self):
         app = self.picker()
         self.assertIsNotNone(app.mode_menu)
         text = label_texts(app.mode_menu)
-        for title in ("YOLO-World", "LocateAnything", "Custom head"):
+        for title in ("YOLO-World", "LocateAnything", "Custom Model", "SAM 2 Dynamic"):
             self.assertIn(title, text)
-        self.assertEqual(len(buttons(app.mode_menu)), 3)
+        self.assertEqual(len(buttons(app.mode_menu)), 4)
+        self.assertIn("1 / 2 / 3 / 4", text)
+
+    def test_the_four_cards_fit_a_narrow_window(self):
+        app = self.picker()
+        self.root.update_idletasks()
+        cards = [b.master.master for b in buttons(app.mode_menu)]
+        right = max(c.winfo_rootx() - self.root.winfo_rootx() + c.winfo_width() for c in cards)
+        self.assertLessEqual(right, self.root.winfo_width())
+
+    def test_pressing_4_chooses_sam2_dynamic(self):
+        app = self.picker()
+        self.root.event_generate("<Key-4>")
+        pump(self.root, 0.2)
+        self.assertEqual(am.get_mode(), am.MODE_SAM2)
+        self.assertIsNone(app.mode_menu)
 
     def test_choosing_a_mode_saves_it_and_shows_the_workspaces(self):
         app = self.picker()
@@ -372,7 +389,7 @@ ev("done", best_f1=0.9, best_epoch=job["epochs"], epochs_run=job["epochs"], stop
 
 @unittest.skipUnless(HAVE_DISPLAY, "no display available")
 class HeadTrainDialogTests(ModeGuiBase):
-    """The Train button of the Custom head mode: setup window -> progress window -> head installed."""
+    """The Train button of the Custom Model mode: setup window -> progress window -> head installed."""
 
     def setUp(self):
         super().setUp()
@@ -658,7 +675,7 @@ class BrowseCustomModelTests(ModeGuiBase):
 
 @unittest.skipUnless(HAVE_DISPLAY, "no display available")
 class BrowseDetectorTests(ModeGuiBase):
-    """Custom head mode: the Browse custom model button next to the detector weights."""
+    """Custom Model mode: the Browse custom model button next to the detector weights."""
 
     def setUp(self):
         super().setUp()
@@ -840,6 +857,87 @@ class AutoAnnotateWindowTests(ModeGuiBase):
 
 
 @unittest.skipUnless(HAVE_DISPLAY, "no display available")
+class Sam2DynamicDialogTests(ModeGuiBase):
+    def setUp(self):
+        super().setUp()
+        from utils import sam2_dynamic as sd
+        self.sd = sd
+        sd.store.clear()
+
+    def tearDown(self):
+        self.sd.store.clear()
+        super().tearDown()
+
+    def open(self):
+        from utils.ModeDialogs import Sam2DynamicDialog
+        dlg = Sam2DynamicDialog(self.root)
+        pump(self.root, 0.2)
+        return dlg
+
+    def test_the_label_assistant_button_opens_it_in_sam2_mode(self):
+        from utils import LabelAssistantDialog as lad
+        am.set_mode(am.MODE_SAM2)
+        with mock.patch("utils.ModeDialogs.open_sam2_dynamic") as opener:
+            lad.open_label_assistant(self.root)
+        opener.assert_called_once()
+
+    def test_it_shows_the_saved_settings_and_what_has_been_learned(self):
+        a = wc.get_assistant(WORKSPACE)
+        a["sam2_dynamic"].update(model="sam2.1_t.pt", imgsz=512, max_references=4, min_score=0.1)
+        wc.set_assistant(WORKSPACE, a)
+        self.sd.store.remember("x.png", [[10, 10, 90, 90, "cat"]], [])
+        dlg = self.open()
+        self.assertIn("sam2.1_t.pt", dlg.model_var.get())
+        self.assertEqual((dlg.size_var.get(), dlg.refs_var.get(), round(dlg.score_var.get(), 2)), ("512", 4, 0.1))
+        self.assertIn("1 annotated image", dlg.ref_info.cget("text"))
+        dlg.win.destroy()
+
+    def test_saving_stores_the_choices_and_selects_the_provider(self):
+        dlg = self.open()
+        dlg.model_var.set(next(k for k in dlg.model_names if k.startswith("sam2.1_s.pt")))
+        dlg.size_var.set("768")
+        dlg.refs_var.set(9)
+        dlg.score_var.set(0.2)
+        dlg.save()
+        pump(self.root, 0.1)
+        a = wc.get_assistant(WORKSPACE)
+        self.assertEqual(a["sam2_dynamic"], {"model": "sam2.1_s.pt", "imgsz": 768, "max_references": 9, "min_score": 0.2})
+        self.assertEqual(a["provider"], wc.PROVIDER_SAM2)
+
+    def test_forget_all_empties_the_references(self):
+        self.sd.store.remember("x.png", [[10, 10, 90, 90, "cat"]], [])
+        dlg = self.open()
+        dlg._forget()
+        self.assertEqual(len(self.sd.store), 0)
+        self.assertIn("None yet", dlg.ref_info.cget("text"))
+        dlg.win.destroy()
+
+    def test_learning_from_labeled_images_adds_each_image_once(self):
+        os.makedirs(config.vocdataset_folder, exist_ok=True)
+        for leftover in os.listdir(config.vocdataset_folder):               # annotations other tests left behind
+            os.remove(os.path.join(config.vocdataset_folder, leftover))
+        for name in IMAGES[:2]:
+            with open(os.path.join(config.vocdataset_folder, os.path.splitext(name)[0] + ".xml"), "w") as f:
+                f.write("<annotation><size><width>320</width><height>240</height></size><object><name>cat</name>"
+                        "<bndbox><xmin>10</xmin><ymin>10</ymin><xmax>100</xmax><ymax>100</ymax></bndbox></object></annotation>")
+        dlg = self.open()
+        dlg._load_labeled()
+        self.assertEqual(len(self.sd.store), 2)
+        dlg._load_labeled()                                          # again: no duplicates
+        self.assertEqual(len(self.sd.store), 2)
+        self.assertIn("2 annotated image", dlg.ref_info.cget("text"))
+        dlg.win.destroy()
+
+    def test_with_no_labeled_images_it_says_so(self):
+        for name in os.listdir(config.vocdataset_folder) if os.path.isdir(config.vocdataset_folder) else []:
+            os.remove(os.path.join(config.vocdataset_folder, name))
+        dlg = self.open()
+        dlg._load_labeled()
+        self.assertIn("No labeled images", self.rec.of("showinfo")[-1][2])
+        dlg.win.destroy()
+
+
+@unittest.skipUnless(HAVE_DISPLAY, "no display available")
 class MainWindowModeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -859,13 +957,117 @@ class MainWindowModeTests(unittest.TestCase):
         self._mode = app_settings.get("mode")
         self.rec.calls.clear()
         config.state.bboxes, config.state.polygons = [], []
+        self.gui._assist_unreviewed.clear()
 
     def tearDown(self):
         app_settings.set("mode", self._mode)
 
-    def test_the_header_has_an_annotate_all_button_and_a_shortcut(self):
-        self.assertTrue(buttons(self.root, "Annotate all"))
+    def test_the_header_has_an_infer_button_instead_of_annotate_all_and_a_g_shortcut(self):
+        self.assertTrue(buttons(self.root, "Infer"))
+        self.assertFalse(buttons(self.root, "Annotate all"))
         self.assertIn("G", set(self.root.bind()))
+
+    # ------------------------------------------------------------ SAM 2 Dynamic references
+    def _leave_image(self, index, bboxes):
+        """Annotate image `index`, then move on - what a user does."""
+        config.state.current_index = index
+        self.gui.load_current_image()
+        config.state.bboxes = [list(b) for b in bboxes]
+        self.gui.save_current()
+        return os.path.join(config.input_folder, IMAGES[index])
+
+    def test_leaving_an_image_remembers_its_annotations_once_however_often_you_return(self):
+        from utils import sam2_dynamic as sd
+        sd.store.clear()
+        self.addCleanup(sd.store.clear)
+        a = self._leave_image(0, [[10, 10, 90, 90, "cat"]])
+        b = self._leave_image(1, [[20, 20, 100, 100, "dog"]])
+        self._leave_image(0, [[10, 10, 90, 90, "cat"]])                  # back to image 1
+        self._leave_image(1, [[20, 20, 100, 100, "dog"]])                # and to image 2 again
+        self.assertEqual(len(sd.store), 2)
+        self.assertEqual(sd.store.items_for(a), [("cat", (10.0, 10.0, 90.0, 90.0))])
+        self.assertEqual(sd.store.items_for(b), [("dog", (20.0, 20.0, 100.0, 100.0))])
+
+    def test_what_you_change_replaces_what_was_remembered(self):
+        from utils import sam2_dynamic as sd
+        sd.store.clear()
+        self.addCleanup(sd.store.clear)
+        a = self._leave_image(0, [[10, 10, 90, 90, "cat"], [100, 100, 190, 190, "dog"]])
+        self.assertEqual(len(sd.store.items_for(a)), 2)
+        self._leave_image(0, [[10, 10, 90, 90, "cat"]])                  # you deleted the dog
+        self.assertEqual(sd.store.items_for(a), [("cat", (10.0, 10.0, 90.0, 90.0))])
+
+    def test_annotations_the_assistant_made_are_not_learned_until_you_have_touched_them(self):
+        from utils import sam2_dynamic as sd
+        sd.store.clear()
+        self.addCleanup(sd.store.clear)
+        config.state.current_index = 2
+        self.gui.load_current_image()
+        config.state.bboxes, config.state.polygons = [], []                # a clean image
+        predict = lambda bgr: ([{"rect": (20, 20, 120, 120), "conf": 0.9, "cls": "cat"}], False)
+        from utils import inferenceObjectDetection as inf
+        with mock.patch.object(inf, "build_predictor", return_value=predict):
+            self.gui.run_inference()
+        self.assertEqual(len(config.state.bboxes), 1)
+        self.gui.save_current()                                          # left without a look
+        path = os.path.join(config.input_folder, IMAGES[2])
+        self.assertNotIn(path, sd.store)
+        self.gui.push_undo()                                             # you edit it...
+        self.gui.save_current()                                          # ...and now it counts
+        self.assertIn(path, sd.store)
+        self.gui._assist_unreviewed.clear()
+
+    def test_deleting_an_image_forgets_it(self):
+        from utils import sam2_dynamic as sd
+        sd.store.clear()
+        self.addCleanup(sd.store.clear)
+        path = self._leave_image(0, [[10, 10, 90, 90, "cat"]])
+        self.assertIn(path, sd.store)
+        with mock.patch("utils.AnnotationGUI.delete_current_image", return_value=(0, list(self.gui.images))):
+            self.gui.delete_image()
+        self.assertNotIn(path, sd.store)
+
+    def test_train_in_sam2_mode_explains_that_nothing_needs_training(self):
+        from utils import sam2_dynamic as sd
+        am.set_mode(am.MODE_SAM2)
+        with mock.patch("utils.AnnotationGUI.TrainingConfigDialog") as yolo, \
+                mock.patch("utils.AnnotationGUI.open_head_training") as head:
+            self.gui.start_training()
+        self.assertFalse(yolo.called or head.called)
+        self.assertIn("needs no training", self.rec.of("showinfo")[-1][2])
+
+    def test_infer_in_sam2_mode_runs_behind_a_progress_window_and_merges_the_result(self):
+        from utils import inferenceObjectDetection as inf
+        am.set_mode(am.MODE_SAM2)
+        predict = lambda bgr: ([{"rect": (20, 20, 120, 120), "conf": 0.2, "cls": "cat"}], False)
+        with mock.patch.object(inf, "sam2_predictor", return_value=predict), \
+                mock.patch("utils.AnnotationGUI.confirm_download_if_needed", return_value=True):
+            self.gui.run_inference()
+        self.assertEqual(config.state.bboxes, [[20, 20, 120, 120, "cat"]])
+        self.assertFalse(self.rec.of("showwarning"))
+
+    def test_infer_in_sam2_mode_with_nothing_learned_yet_explains_what_to_do(self):
+        from utils import sam2_dynamic as sd
+        sd.store.clear()
+        am.set_mode(am.MODE_SAM2)
+        with mock.patch.object(sd, "predictor_problem", return_value=None), \
+                mock.patch("utils.AnnotationGUI.confirm_download_if_needed", return_value=True):
+            self.gui.run_inference()
+        self.assertIn("annotated", self.rec.of("showwarning")[-1][2])
+        self.assertEqual(config.state.bboxes, [])
+
+    def test_infer_in_sam2_mode_passes_the_current_image_so_it_is_never_its_own_reference(self):
+        from utils import inferenceObjectDetection as inf
+        am.set_mode(am.MODE_SAM2)
+        config.state.current_index = 1
+        self.gui.load_current_image()
+        with mock.patch.object(inf, "sam2_predictor", return_value=lambda bgr: ([], False)) as build, \
+                mock.patch("utils.AnnotationGUI.confirm_download_if_needed", return_value=True):
+            self.gui.run_inference()
+        self.assertEqual(os.path.basename(build.call_args.kwargs["exclude"]), IMAGES[1])
+
+    def test_the_header_names_sam2_dynamic_in_its_mode(self):
+        self.assertEqual(am.title(am.MODE_SAM2), "SAM 2 Dynamic")
 
     def test_the_header_names_the_current_mode(self):
         self.assertIn("YOLO-WORLD", label_texts(self.root).upper())

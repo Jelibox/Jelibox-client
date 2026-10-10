@@ -136,7 +136,7 @@ class WorkspacePickerApp:
                 self.root.unbind(key)
 
     def _show_mode_menu(self):
-        """Full-window menu with the three modes. The choice is app-wide and used by the annotation window."""
+        """Full-window menu with the modes. The choice is app-wide and used by the annotation window."""
         if self.mode_menu is not None:
             return
         current = assistant_modes.get_mode()
@@ -144,10 +144,11 @@ class WorkspacePickerApp:
         menu.place(x=0, y=0, relwidth=1, relheight=1)
         menu.lift()
 
-        tk.Label(menu, text="1 / 2 / 3 to choose   -   Esc keeps the last used mode", bg=C_BASE, fg=C_TXT3,
+        keys = " / ".join(str(n) for n in range(1, len(assistant_modes.MODES) + 1))
+        tk.Label(menu, text=f"{keys} to choose   -   Esc keeps the last used mode", bg=C_BASE, fg=C_TXT3,
                  font=('Segoe UI', 8)).pack(side=tk.BOTTOM, pady=(0, 14))
         top = tk.Frame(menu, bg=C_BASE)
-        top.pack(side=tk.TOP, pady=(34, 0))
+        top.pack(side=tk.TOP, pady=(34 if len(assistant_modes.MODES) <= 3 else 16, 0))
         try:
             from PIL import Image, ImageTk
             self.menu_logo = ImageTk.PhotoImage(Image.open("assets/jelibox.png").resize((72, 72)))
@@ -160,23 +161,24 @@ class WorkspacePickerApp:
                  font=('Segoe UI', 10)).pack()
 
         cards = tk.Frame(menu, bg=C_BASE)
-        cards.pack(side=tk.TOP, fill=tk.X, padx=30, pady=(28, 0))
+        cards.pack(side=tk.TOP, fill=tk.X, padx=30, pady=(28 if len(assistant_modes.MODES) <= 3 else 14, 0))
         for col in range(len(assistant_modes.MODES)):
             cards.columnconfigure(col, weight=1, uniform='card')
+        wrap = 250 if len(assistant_modes.MODES) <= 3 else 195          # four cards must still fit a 1280 px window
 
         for col, (mode, title, summary, needs) in enumerate(assistant_modes.MODES):
             active = mode == current
             card = tk.Frame(cards, bg=C_CARD, cursor='hand2', highlightthickness=2,
                             highlightbackground=C_ACCENT if active else C_BORDER)
-            card.grid(row=0, column=col, padx=10, sticky='nsew')
+            card.grid(row=0, column=col, padx=8, sticky='nsew')
             body = tk.Frame(card, bg=C_CARD)
-            body.pack(fill=tk.BOTH, expand=True, padx=18, pady=16)
+            body.pack(fill=tk.BOTH, expand=True, padx=16, pady=16 if len(assistant_modes.MODES) <= 3 else 12)
             tk.Label(body, text=f"{col + 1}", bg=C_CARD, fg=C_ACCENT, font=('Segoe UI', 11, 'bold')).pack(anchor='w')
             tk.Label(body, text=title, bg=C_CARD, fg=C_TXT1, font=('Segoe UI', 16, 'bold')).pack(anchor='w', pady=(2, 6))
-            tk.Label(body, text=summary, bg=C_CARD, fg=C_TXT2, font=('Segoe UI', 10), wraplength=250,
+            tk.Label(body, text=summary, bg=C_CARD, fg=C_TXT2, font=('Segoe UI', 10), wraplength=wrap,
                      justify=tk.LEFT).pack(anchor='w')
-            tk.Label(body, text=needs, bg=C_CARD, fg=C_TXT3, font=('Segoe UI', 9), wraplength=250,
-                     justify=tk.LEFT).pack(anchor='w', pady=(10, 14))
+            tk.Label(body, text=needs, bg=C_CARD, fg=C_TXT3, font=('Segoe UI', 9), wraplength=wrap,
+                     justify=tk.LEFT).pack(anchor='w', pady=(8, 10))
             tk.Button(body, text="Last used" if active else "Use this mode", command=lambda m=mode: self._choose_mode(m),
                       bg=C_ACCENT if active else C_CARD2, fg=C_ON_ACCENT if active else C_TXT1,
                       font=('Segoe UI', 9, 'bold'), relief=tk.FLAT, cursor='hand2', borderwidth=0,

@@ -3,6 +3,7 @@ Label Assistant settings for the two newer modes.
 
   - LocateAnythingDialog : categories (what to look for -> which workspace class) and how the model runs
   - CustomHeadDialog     : which trained head to use, which detector classes it relabels, head class -> workspace class
+  - Sam2DynamicDialog    : which SAM 2 model, how many reference images it learns from, and what it has learned so far
 
 The first mode (YOLO-World) keeps its own window in LabelAssistantDialog.py. Settings are stored per workspace in
 configs/<workspace>.json (see workspace_config.py). Import this module only after config.load_workspace() has run.
@@ -304,7 +305,7 @@ class LocateAnythingDialog(_Dialog):
 
 # ====================================================================== Custom head
 class CustomHeadDialog(_Dialog):
-    TITLE = "LABEL ASSISTANT  -  CUSTOM HEAD"
+    TITLE = "LABEL ASSISTANT  -  CUSTOM MODEL"
     WIDTH = 720
 
     def build(self, body):
@@ -313,7 +314,7 @@ class CustomHeadDialog(_Dialog):
         self.map_vars = {}
         self.detector_names = list(COCO_NAMES)          # class names of the detector (COCO unless a model is browsed)
         self._names_for = ""                            # the weights text detector_names was read for
-        self.label(body, "A YOLO detector finds the boxes (person, bottle, ...). Your trained head gives each box "
+        self.label(body, "A YOLO detector finds the boxes (person, bottle, ...). The model you trained gives each box "
                          "one of your own classes.", pady=(0, 8))
 
         card = self.card(body)
@@ -494,6 +495,81 @@ class CustomHeadDialog(_Dialog):
         self.win.destroy()
 
 
+# ====================================================================== SAM 2 Dynamic
+class Sam2DynamicDialog(_Dialog):
+    TITLE = "LABEL ASSISTANT  -  SAM 2 DYNAMIC"
+    WIDTH = 700
+
+    def build(self, body):
+        from . import sam2_dynamic as sd
+        self.sd = sd
+        s = self.cfg["sam2_dynamic"]
+        self.label(body, "SAM 2 learns from the images you annotate. Every image you leave becomes a reference, "
+                         "and Infer then finds the same objects in the next image. There is nothing to train.", pady=(0, 8))
+
+        card = self.card(body)
+        self.label(card, "MODEL", size=8, bold=True)
+        self.model_names = {f"{m} - {sd.MODEL_INFO[m][1]} ({sd.MODEL_INFO[m][0]} MB)": m for m in sd.MODELS}
+        current = next((k for k, m in self.model_names.items() if m == s["model"]), next(iter(self.model_names)))
+        self.model_var = tk.StringVar(value=current)
+        self.combo(card, self.model_var, list(self.model_names), 46).pack(anchor='w', pady=(4, 0))
+        self.label(card, "Downloaded once (about the size shown) into models/_sam2. On a CPU use tiny or small.",
+                   size=8, fg=C_TXT3, pady=(4, 0))
+        row = tk.Frame(card, bg=C_CARD)
+        row.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(row, text="Image size", bg=C_CARD, fg=C_TXT2, font=('Segoe UI', 9), width=22, anchor='w').pack(side=tk.LEFT)
+        self.size_var = tk.StringVar(value=str(s["imgsz"]))
+        self.combo(row, self.size_var, [str(v) for v in wcfg.SAM2_IMAGE_SIZES], 8).pack(side=tk.LEFT)
+        self.label(row, "  smaller = faster, slightly less exact", size=8, fg=C_TXT3).pack(side=tk.LEFT)
+
+        card = self.card(body)
+        self.label(card, "WHAT IT LEARNS FROM", size=8, bold=True)
+        self.refs_var = tk.IntVar(value=s["max_references"])
+        self.slider(card, "Reference images", self.refs_var, 1, 20, 1, fmt="{:.0f}")
+        self.label(card, "SAM 2 uses the newest annotated images. More references can be steadier but are slower.",
+                   size=8, fg=C_TXT3, pady=(4, 0))
+        self.score_var = tk.DoubleVar(value=s["min_score"])
+        self.slider(card, "Minimum score", self.score_var, 0.0, 0.5, 0.01)
+        self.label(card, "SAM 2's scores run low (0.2 is a confident find). Raise this if it labels things that are not there.",
+                   size=8, fg=C_TXT3, pady=(4, 0))
+
+        card = self.card(body)
+        self.label(card, "REFERENCES THIS SESSION", size=8, bold=True)
+        self.ref_info = self.label(card, "", pady=(4, 0))
+        row = tk.Frame(card, bg=C_CARD)
+        row.pack(fill=tk.X, pady=(8, 0))
+        self.button(row, "Learn from my labeled images", self._load_labeled).pack(side=tk.LEFT, ipadx=8, ipady=3)
+        self.button(row, "Forget all", self._forget).pack(side=tk.LEFT, padx=8, ipadx=8, ipady=3)
+        self._show_refs()
+
+    def _show_refs(self):
+        count = len(self.sd.store)
+        self.ref_info.config(text=f"{count} annotated image(s) remembered. Each is kept once: going back to an image "
+                                  f"replaces what was remembered for it." if count else
+                             "None yet. Annotate an image and move on (A / D), or load the images you already labeled.")
+
+    def _load_labeled(self):
+        from .config import vocdataset_folder, datasets_root
+        records = self.sd.workspace_images(datasets_root, workspaceName)
+        added = self.sd.store.load_labeled(records, vocdataset_folder, int(self.refs_var.get()))
+        if not added:
+            messagebox.showinfo("SAM 2 Dynamic", "No labeled images were found in this workspace.", parent=self.win)
+        self._show_refs()
+
+    def _forget(self):
+        self.sd.store.clear()
+        self._show_refs()
+
+    def save(self):
+        s = self.cfg["sam2_dynamic"]
+        s.update(model=self.model_names.get(self.model_var.get(), s["model"]), imgsz=int(self.size_var.get()),
+                 max_references=int(self.refs_var.get()), min_score=round(float(self.score_var.get()), 2))
+        self.cfg["provider"] = wcfg.PROVIDER_SAM2
+        wcfg.set_assistant(workspaceName, self.cfg)
+        print(f"[Assistant] Saved SAM 2 Dynamic: {s['model']}, {s['imgsz']} px, {s['max_references']} references")
+        self.win.destroy()
+
+
 def open_locate_anything(parent):
     dlg = LocateAnythingDialog(parent)
     parent.wait_window(dlg.win)
@@ -501,4 +577,9 @@ def open_locate_anything(parent):
 
 def open_custom_head(parent):
     dlg = CustomHeadDialog(parent)
+    parent.wait_window(dlg.win)
+
+
+def open_sam2_dynamic(parent):
+    dlg = Sam2DynamicDialog(parent)
     parent.wait_window(dlg.win)

@@ -6,7 +6,8 @@ see workspace_config.py) say how that mode works. Providers:
   - yolo_world      : zero-shot YOLO-World, prompts translated to workspace classes   (YOLO-World mode)
   - custom_model    : the workspace's own trained model (models/<ws>/modelAssistant.pt) (YOLO-World mode)
   - locate_anything : LocateAnything-3B, categories translated to workspace classes   (LocateAnything mode)
-  - custom_head     : frozen YOLO detector + trained head, head classes mapped         (Custom head mode)
+  - custom_head     : frozen YOLO detector + trained head, head classes mapped         (Custom Model mode)
+  - sam2_dynamic    : SAM 2 learning from the annotated images, no training             (SAM 2 Dynamic mode)
 
 New predictions are MERGED into the image's current annotations. Anything already on the image counts as
 confidence 1.0, so a prediction that overlaps an existing annotation (IoU >= MERGE_IOU) is dropped and the
@@ -20,7 +21,8 @@ import torch
 
 from . import workspace_config as wcfg
 from . import assistant_modes
-from .assistant_providers import AssistantError, locate_predictor, head_predictor, map_head_classes as map_classes
+from .assistant_providers import (AssistantError, locate_predictor, head_predictor, sam2_predictor,
+                                  map_head_classes as map_classes)
 from .annotation_merge import merge as _merge, poly_rect as _poly_rect
 from .config import model_path, class_manager, state, input_folder, workspaceName, BASE_DIR
 
@@ -109,12 +111,13 @@ def current_provider(mode=None):
 
 def is_heavy(mode=None):
     """True for providers whose first use loads a big model (minutes, a download): the GUI shows a progress window."""
-    return current_provider(mode) in (wcfg.PROVIDER_LOCATE, wcfg.PROVIDER_HEAD)
+    return current_provider(mode) in (wcfg.PROVIDER_LOCATE, wcfg.PROVIDER_HEAD, wcfg.PROVIDER_SAM2)
 
 
-def build_predictor(mode=None, status=None, conf=None):
+def build_predictor(mode=None, status=None, conf=None, exclude=None):
     """predict(bgr_image) -> (predictions, is_polygon) for the configured provider. Loads what is needed (and
-    caches it). `conf` overrides the saved confidence threshold. Raises AssistantError with a message the user
+    caches it). `conf` overrides the saved confidence threshold. `exclude` is the path of the image about to be
+    annotated (SAM 2 Dynamic never uses it as its own reference). Raises AssistantError with a message the user
     can act on."""
     cfg = wcfg.get_assistant(workspaceName)
     provider = assistant_modes.provider_for(mode or assistant_modes.get_mode(), cfg["provider"])
@@ -125,6 +128,10 @@ def build_predictor(mode=None, status=None, conf=None):
 
     if provider == wcfg.PROVIDER_HEAD:
         return head_predictor(cfg["custom_head"], conf, current_classes(), BASE_DIR)
+
+    if provider == wcfg.PROVIDER_SAM2:
+        return sam2_predictor(cfg["sam2_dynamic"], current_classes(), BASE_DIR,
+                              polygon=state.annotation_mode == "polygon", exclude=exclude, status=status)
 
     if YOLO is None:
         raise AssistantError("ultralytics is not installed.")
@@ -207,7 +214,7 @@ def predict_current(images, current_index, mode=None, status=None, conf=None):
         orig_img = read_image(img_path)
     if orig_img is None:
         raise AssistantError(f"Could not read image: {images[current_index]}")
-    predict = build_predictor(mode, status, conf)
+    predict = build_predictor(mode, status, conf, exclude=img_path)
     try:
         return predict(orig_img)
     finally:

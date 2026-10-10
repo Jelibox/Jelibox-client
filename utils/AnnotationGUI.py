@@ -6,7 +6,7 @@ import copy
 import cv2
 import os
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 import numpy as np
 import sys
@@ -1110,7 +1110,7 @@ class AnnotationGUI:
     def show_export_dataset_dialog(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("Export Dataset")
-        dialog.geometry("560x395")
+        dialog.geometry("560x470")
         dialog.configure(bg=C_BASE)
         dialog.transient(self.root)
         dialog.grab_set()
@@ -1130,6 +1130,65 @@ class AnnotationGUI:
         fmt_combo = ttk.Combobox(body, values=["YOLO", "Pascal VOC (XML)", "COCO"], state='readonly', font=('Segoe UI', 10))
         fmt_combo.set('YOLO')
         fmt_combo.pack(fill=tk.X, pady=(0,8))
+
+        # Where to save: the Jelibox folder (replaced on every export) or any folder, e.g. on an HDD, so a
+        # finished dataset is archived there and the SSD is not written to.
+        from . import app_settings
+        tk.Label(body, text="Save to:", bg=C_CARD, fg=C_TXT1).pack(anchor='w')
+        dest_row = tk.Frame(body, bg=C_CARD)
+        dest_row.pack(fill=tk.X)
+        saved_dir = app_settings.get('export_dir') or ''
+        # A remembered folder that is gone (an unplugged drive, say) is not used: the default takes over, and the
+        # setting stays so the folder is picked up again when the drive is back.
+        missing = {'path': saved_dir if saved_dir and not os.path.isdir(saved_dir) else ''}
+        dest_var = tk.StringVar(value='' if missing['path'] else saved_dir)
+        dest_shown = tk.StringVar()
+        tk.Label(dest_row, textvariable=dest_shown, bg=C_CARD2, fg=C_TXT1, anchor='w', padx=8, pady=4,
+                 font=('Segoe UI', 9)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        dest_hint = tk.Label(body, text='', bg=C_CARD, fg=C_TXT3, anchor='w', justify=tk.LEFT, wraplength=520,
+                             font=('Segoe UI', 8))
+        dest_hint.pack(fill=tk.X, pady=(2, 8))
+
+        def refresh_dest():
+            chosen = dest_var.get().strip()
+            if chosen:
+                dest_shown.set(chosen)
+                nxt = export_module.next_version_name(chosen, workspaceName)
+                dest_hint.config(text=f'The next export goes into a new folder "{nxt}" inside it; '
+                                      f'nothing already there is touched.', fg=C_TXT3)
+            elif missing['path']:
+                dest_shown.set(f'Jelibox folder  ({export_dataset_folder})')
+                dest_hint.config(text=f'The folder you chose before was not found ({missing["path"]} - is the drive '
+                                      f'connected?), so the default folder is used. Connect it and reopen this '
+                                      f'window to use it again, or press Browse... for another one.', fg=C_AMBER)
+            else:
+                dest_shown.set(f'Jelibox folder  ({export_dataset_folder})')
+                dest_hint.config(text='The previous export of this workspace in that folder is replaced. '
+                                      'Choose another folder to keep every export.', fg=C_TXT3)
+
+        def browse_dest():
+            if export_state['active']:
+                return
+            start = dest_var.get().strip()
+            chosen = filedialog.askdirectory(title="Save the exported dataset in...", parent=dialog,
+                                             initialdir=start if os.path.isdir(start) else None)
+            if chosen:
+                missing['path'] = ''
+                dest_var.set(os.path.normpath(chosen))
+                app_settings.set('export_dir', dest_var.get())
+                refresh_dest()
+
+        def default_dest():
+            missing['path'] = ''
+            dest_var.set('')
+            app_settings.set('export_dir', None)
+            refresh_dest()
+
+        browse_btn = tk.Button(dest_row, text='Browse...', command=browse_dest, bg=C_CARD2, fg=C_TXT1)
+        browse_btn.pack(side=tk.LEFT, padx=(6, 0))
+        default_btn = tk.Button(dest_row, text='Default', command=default_dest, bg=C_CARD2, fg=C_TXT1)
+        default_btn.pack(side=tk.LEFT, padx=(6, 0))
+        refresh_dest()
 
         # Split slider area (two separators define train/valid/test)
         tk.Label(body, text="Split (Train / Valid / Test):", bg=C_CARD, fg=C_TXT1).pack(anchor='w')
@@ -1297,7 +1356,7 @@ class AnnotationGUI:
         aug_enabled = tk.BooleanVar(value=False)
         aug_widgets = []          # everything that must lock while exporting
         aug_op_vars = {}          # op name -> (enabled, magnitude, probability) tk variables
-        base_height, panel_height = 395, 370
+        base_height, panel_height = 470, 370
 
         aug_panel = tk.Frame(body, bg=C_CARD)
 
@@ -1431,6 +1490,8 @@ class AnnotationGUI:
             export_state['active'] = locked
             state = 'disabled' if locked else 'readonly'
             fmt_combo.config(state=state)
+            browse_btn.config(state='disabled' if locked else 'normal')
+            default_btn.config(state='disabled' if locked else 'normal')
             for w in aug_widgets:
                 w.config(state='disabled' if locked else 'normal')
             sb_train.config(state='disabled' if locked else 'normal')
@@ -1469,6 +1530,24 @@ class AnnotationGUI:
                 augmenter = Augmenter(aug_config)
                 seed = aug_config.seed
 
+            fmt_name = fmt
+            chosen = dest_var.get().strip() or None
+            fallback_note = ''
+            if chosen and not os.path.isdir(chosen):
+                # the drive was unplugged after the folder was picked: back to the default folder
+                missing['path'] = chosen
+                dest_var.set('')
+                refresh_dest()
+                fallback_note = f'\n\nThe folder you chose ({chosen}) was not found, so the default folder was used.'
+                chosen = None
+            export_target, replace = export_module.plan_export_target(export_dataset_folder, chosen, workspaceName, fmt_name)
+            if chosen:
+                needed = export_module.files_size(r['source'] for r in self._find_workspace_images(image_exts))
+                problem = export_module.check_destination(chosen, needed)
+                if problem:
+                    messagebox.showerror('Save to', problem, parent=dialog)
+                    return
+
             set_ui_locked(True)
             progress_bar['value'] = 0
             status_lbl.config(text='Preparing export...')
@@ -1495,10 +1574,10 @@ class AnnotationGUI:
 
             def worker():
                 try:
-                    target = export_dataset_folder
-                    # If the target exists, remove it to avoid mixing previous exports
+                    target = export_target
+                    # The default folder is replaced on every export; a folder the user chose is only added to.
                     try:
-                        if os.path.exists(target):
+                        if replace and os.path.exists(target):
                             # Safety: ensure target is inside project folder to avoid accidental deletes
                             proj_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
                             abs_target = os.path.abspath(target)
@@ -1523,9 +1602,9 @@ class AnnotationGUI:
                     else:
                         raise ValueError(f'Unknown format: {fmt}')
 
-                    extra = ''
+                    extra = fallback_note
                     if augmenter is not None:
-                        extra = f'\n\nAugmented copies added: {augmenter.created}'
+                        extra += f'\n\nAugmented copies added: {augmenter.created}'
                         if augmenter.skipped:
                             extra += f' ({augmenter.skipped} skipped: no effect fired)'
 

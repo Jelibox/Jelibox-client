@@ -9,6 +9,13 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Changed
+- **Import Dataset is now part of Add Workspace** (the Import Dataset button is gone, which frees room in the header). **Add Workspace** and the **+** on a workspace scan the chosen folder like Import Dataset did - every subfolder, images plus Pascal VOC, YOLO or COCO annotations (or images only) - and show what was found (images, format, classes) before anything is copied. There is a new optional **Filename prefix** field. A new workspace gets the classes found in the annotations as a starting point (still editable; the order you type comes first). An existing workspace keeps its classes: annotations of any other class are **skipped**, with an amber warning in the window before you press the button and a count afterwards. YOLO labels are now written again with the workspace's class numbers instead of being copied with the source dataset's numbers.
+- **Export Dataset: choose where to save.** A new **Save to** row (Browse... / Default) lets you export to any folder, e.g. an HDD, so finished datasets are archived there instead of on the SSD. Into a chosen folder every export becomes a new `<workspace>-v<N>` folder (N = highest existing `<workspace>-v<number>` there + 1, starting at v1), never replacing or deleting anything; the choice is remembered, and if that folder is gone (an unplugged drive) the default folder is used instead, with a note in the window. Jelibox checks that the folder is writable and has room for the images before it starts. Without a chosen folder nothing changes: `export dataset/<workspace>/` as before.
+
+### Added
+- **Analyze Dataset**: click a workspace in the picker (its name is highlighted) and press **Analyze** for a dashboard window with charts: objects per class, images per dataset, image resolutions, objects per image, width / height histograms, a width x height scatter and the shortest side per class. Everything is read from the VOC XML files, no image is opened. A warning strip (not a dialog) appears when objects have a side under 32 px. **Simulate** calculates the same numbers for a model input size (640 or your own, letterbox or stretch) without resizing any image, and a table compares 320 to 1280. Charts use matplotlib (zoom, pan, save as PNG, tooltips on hover). A progress bar shows while the annotations are read. The warning strip has a **Remove these objects** button: after a warning (it changes and deletes objects in the current dataset - back it up first) it removes the flagged objects, measured at the original or the simulated size, from the VOC XML files and rewrites their YOLO labels; images are never touched.
+
 ## [0.3.0] - 2026-10-10
 
 ### Added

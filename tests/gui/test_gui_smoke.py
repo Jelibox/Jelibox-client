@@ -397,6 +397,11 @@ class MainWindowTests(unittest.TestCase):
         os.makedirs(agui.yolo_labels_folder, exist_ok=True)
         os.makedirs(agui.vocdataset_folder, exist_ok=True)
         for name in ("img1", "img2", "img3"):
+            # the labels only exist for this test: other tests expect the images to open without annotations
+            for path in (os.path.join(agui.yolo_labels_folder, name + ".txt"),
+                         os.path.join(agui.vocdataset_folder, name + ".xml")):
+                if not os.path.exists(path):
+                    self.addCleanup(lambda p=path: os.path.exists(p) and os.remove(p))
             with open(os.path.join(agui.yolo_labels_folder, name + ".txt"), "w") as f:
                 f.write("0 0.5 0.5 0.4 0.4\n")
             with open(os.path.join(agui.vocdataset_folder, name + ".xml"), "w") as f:
@@ -474,6 +479,172 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(boxes[by_name["img1.png"]], boxes[by_name["img1_aug1.png"]])
         for i in data["images"]:
             self.assertTrue(os.path.exists(os.path.join(target, "images", "train", i["file_name"])))
+
+    def _open_export_dialog(self):
+        opened = []
+        real = tk.Toplevel
+        with mock.patch.object(tk, "Toplevel", side_effect=lambda *a, **k: opened.append(real(*a, **k)) or opened[-1]):
+            self.gui.show_export_dataset_dialog()
+        pump(self.root, 0.2)
+        return opened[0]
+
+    def _export_button(self, dlg, text):
+        return next(w for w in walk(dlg) if isinstance(w, tk.Button) and w.cget("text") == text)
+
+    def _export_and_wait(self, dlg, title, seconds=30):
+        """Press Export and run the Tk main loop until a message box with `title` is shown. The export reports back
+        with root.after() from its worker thread, which only works while the main loop runs (as in the real app)."""
+        end = time.time() + seconds
+
+        def poll():
+            if any(c[1] == title for c in self.dialogs.calls) or time.time() > end:
+                self.root.quit()
+            else:
+                self.root.after(50, poll)
+
+        self.root.after(50, self._export_button(dlg, "Export").invoke)
+        self.root.after(100, poll)
+        self.root.mainloop()
+        return any(c[1] == title for c in self.dialogs.calls)
+
+    def _close_export_dialog(self, dlg):
+        """The export runs on a worker thread: let it end and collect its leftovers on the Tk thread before the
+        dialog goes, or a Tk variable freed on that thread aborts Python (Tcl_AsyncDelete)."""
+        import gc
+        import threading
+        end = time.time() + 10
+        while threading.active_count() > 1 and time.time() < end:
+            pump(self.root, 0.05)
+        dlg.destroy()
+        gc.collect()
+
+    def test_export_dialog_saves_into_a_new_folder_of_the_chosen_location(self):
+        from utils import app_settings
+        self._label_the_test_images()
+        dest = self._target()
+        before = len(self.dialogs.calls)
+        dlg = self._open_export_dialog()
+        try:
+            with mock.patch("utils.AnnotationGUI.filedialog.askdirectory", return_value=dest):
+                self._export_button(dlg, "Browse...").invoke()
+            self.assertEqual(app_settings.get("export_dir"), os.path.normpath(dest))
+            self.assertTrue(self._export_and_wait(dlg, "Export Completed"))
+            made = os.listdir(dest)
+            self.assertEqual(len(made), 1)
+            self.assertEqual(made, [f"{WORKSPACE}-v1"])
+            self.assertTrue(os.listdir(os.path.join(dest, made[0], "train", "images")))
+            self.assertIn(os.path.join(dest, made[0]), self.dialogs.last("showinfo")[2])
+            # a second export is added next to it (v2), never over it
+            self.dialogs.calls[:] = self.dialogs.calls[:before]
+            self.assertTrue(self._export_and_wait(dlg, "Export Completed"))
+            self.assertEqual(sorted(os.listdir(dest)), [f"{WORKSPACE}-v1", f"{WORKSPACE}-v2"])
+        finally:
+            app_settings.set("export_dir", None)
+            self._close_export_dialog(dlg)
+
+    def test_export_dialog_without_a_chosen_folder_exports_into_the_jelibox_export_folder(self):
+        import utils.AnnotationGUI as agui
+        from utils import app_settings
+        self._label_the_test_images()
+        app_settings.set("export_dir", None)
+        os.makedirs(agui.export_dataset_folder, exist_ok=True)
+        stale = os.path.join(agui.export_dataset_folder, "old_export.txt")
+        open(stale, "w").close()
+        self.dialogs.calls[:] = [c for c in self.dialogs.calls if c[1] != "Export Completed"]
+        dlg = self._open_export_dialog()
+        try:
+            self.assertTrue(self._export_and_wait(dlg, "Export Completed"))
+            # inside the project the folder is emptied first; this test workspace lives outside it, where the
+            # export goes into a timestamped subfolder instead and nothing is deleted (unchanged behaviour)
+            found = [d for d in [agui.export_dataset_folder] + [os.path.join(agui.export_dataset_folder, n)
+                                                                for n in os.listdir(agui.export_dataset_folder)]
+                     if os.path.isdir(os.path.join(d, "train", "images"))]
+            self.assertTrue(found, "the dataset is under the Jelibox export folder")
+        finally:
+            self._close_export_dialog(dlg)
+
+    def test_export_dialog_refuses_a_folder_that_cannot_be_used(self):
+        from utils import app_settings
+        self._label_the_test_images()
+        dest = self._target()
+        self.dialogs.calls[:] = [c for c in self.dialogs.calls if c[1] != "Save to"]
+        dlg = self._open_export_dialog()
+        try:
+            with mock.patch("utils.AnnotationGUI.filedialog.askdirectory", return_value=dest):
+                self._export_button(dlg, "Browse...").invoke()
+            with mock.patch("utils.export.check_destination", return_value="Cannot save there"):
+                self._export_button(dlg, "Export").invoke()
+            self.assertEqual(self.dialogs.last("showerror")[1:], ("Save to", "Cannot save there"))
+            self.assertEqual(os.listdir(dest), [])
+            self.assertEqual(str(self._export_button(dlg, "Export").cget("state")), "normal", "not left locked")
+        finally:
+            app_settings.set("export_dir", None)
+            self._close_export_dialog(dlg)
+
+    def _export_texts(self, dlg):
+        def text_of(w):
+            var = str(w.cget("textvariable"))
+            return dlg.getvar(var) if var else str(w.cget("text"))
+        return " ".join(text_of(w) for w in walk(dlg) if isinstance(w, tk.Label))
+
+    def _under_default_folder(self):
+        import utils.AnnotationGUI as agui
+        root = agui.export_dataset_folder
+        found = [d for d in [root] + [os.path.join(root, n) for n in os.listdir(root)]
+                 if os.path.isdir(os.path.join(d, "train", "images"))] if os.path.isdir(root) else []
+        return bool(found)
+
+    def test_a_remembered_export_folder_that_is_gone_falls_back_to_the_default(self):
+        import shutil
+        from utils import app_settings
+        self._label_the_test_images()
+        gone = os.path.join(self._target(), "unplugged_hdd", "archive")           # the drive is not there
+        app_settings.set("export_dir", gone)
+        self.dialogs.calls[:] = [c for c in self.dialogs.calls if c[1] != "Export Completed"]
+        dlg = self._open_export_dialog()
+        try:
+            text = self._export_texts(dlg)
+            self.assertIn("Jelibox folder", text)
+            self.assertIn("was not found", text)
+            self.assertEqual(app_settings.get("export_dir"), gone, "remembered, so it is used again when the drive is back")
+            self.assertTrue(self._export_and_wait(dlg, "Export Completed"))
+            self.assertTrue(self._under_default_folder())
+            self.assertFalse(os.path.exists(gone), "nothing is created on the missing drive")
+        finally:
+            app_settings.set("export_dir", None)
+            self._close_export_dialog(dlg)
+
+    def test_the_remembered_folder_is_used_again_when_it_is_back(self):
+        from utils import app_settings
+        dest = self._target()
+        app_settings.set("export_dir", dest)
+        dlg = self._open_export_dialog()
+        try:
+            self.assertIn(dest, self._export_texts(dlg))
+            self.assertNotIn("was not found", self._export_texts(dlg))
+        finally:
+            app_settings.set("export_dir", None)
+            self._close_export_dialog(dlg)
+
+    def test_a_folder_that_disappears_while_the_dialog_is_open_falls_back_to_the_default(self):
+        import shutil
+        from utils import app_settings
+        self._label_the_test_images()
+        dest = self._target()
+        self.dialogs.calls[:] = [c for c in self.dialogs.calls if c[1] != "Export Completed"]
+        dlg = self._open_export_dialog()
+        try:
+            with mock.patch("utils.AnnotationGUI.filedialog.askdirectory", return_value=dest):
+                self._export_button(dlg, "Browse...").invoke()
+            shutil.rmtree(dest)                                            # the drive is pulled out
+            self.assertTrue(self._export_and_wait(dlg, "Export Completed"))
+            self.assertIn("was not found, so the default folder was used", self.dialogs.last("showinfo")[2])
+            self.assertTrue(self._under_default_folder())
+            self.assertFalse(os.path.exists(dest))
+            self.assertIn("Jelibox folder", self._export_texts(dlg))
+        finally:
+            app_settings.set("export_dir", None)
+            self._close_export_dialog(dlg)
 
     def test_export_dialog_augmentation_panel(self):
         opened = []
@@ -733,13 +904,15 @@ class OtherWindowTests(unittest.TestCase):
         self.assertTrue(self.root.title().startswith("Jelibox"))
         find_button(self.root, "Dark" if theme.MODE == "light" else "Light")
 
-    def test_open_folder_button_sits_after_import_dataset_and_opens_the_install_folder(self):
+    def test_open_folder_button_sits_after_add_workspace_and_opens_the_install_folder(self):
         import sys
         from utils.WorkspacePicker import WorkspacePickerApp
         app = WorkspacePickerApp(self.root, entry_script=os.path.join(os.getcwd(), "x.py"))
         pump(self.root, 0.3)
-        self.assertLess(find_button(self.root, "Import Dataset").winfo_rootx(),
+        self.assertLess(find_button(self.root, "Add Workspace").winfo_rootx(),
                         find_button(self.root, "Open Folder").winfo_rootx())
+        self.assertFalse([b for b in buttons(self.root) if "Import Dataset" in label_of(b)],
+                         "importing a dataset is part of Add Workspace now")
         target = "os.startfile" if sys.platform == "win32" else "subprocess.Popen"
         with mock.patch(target, create=True) as opener:
             find_button(self.root, "Open Folder").invoke()
@@ -751,6 +924,93 @@ class OtherWindowTests(unittest.TestCase):
         with mock.patch(target, create=True, side_effect=OSError("no file manager")):
             find_button(self.root, "Open Folder").invoke()
         self.assertEqual(len(self.dialogs.calls), 1)
+
+    def _workspace_label(self):
+        return [w for w in walk(self.root) if isinstance(w, tk.Label) and str(w.cget("text")).endswith(f" {WORKSPACE}")
+                and str(w.cget("text")).startswith("📁")][0]
+
+    def test_clicked_workspace_is_highlighted_and_enables_analyze(self):
+        from utils.WorkspacePicker import WorkspacePickerApp
+        app = WorkspacePickerApp(self.root, entry_script=os.path.join(os.getcwd(), "x.py"))
+        pump(self.root, 0.3)
+        analyze = find_button(self.root, "Analyze")
+        self.assertEqual(str(analyze.cget("state")), "disabled")
+        self.assertIsNone(app.selected)
+        self.assertNotEqual(self._workspace_label().cget("bg"), theme.C_ACCENT_TINT)
+
+        self._workspace_label().event_generate("<Button-1>")
+        pump(self.root, 0.3)
+        self.assertEqual(app.selected, WORKSPACE)
+        label = self._workspace_label()
+        self.assertEqual(label.cget("bg"), theme.C_ACCENT_TINT)
+        self.assertEqual(label.cget("fg"), theme.C_ACCENT)
+        self.assertEqual(str(find_button(self.root, "Analyze").cget("state")), "normal")
+
+        self._workspace_label().event_generate("<Button-1>")        # collapsing keeps it selected
+        pump(self.root, 0.3)
+        self.assertEqual(self._workspace_label().cget("bg"), theme.C_ACCENT_TINT)
+
+    def test_analyze_opens_the_dashboard_for_the_selected_workspace(self):
+        from utils.WorkspacePicker import WorkspacePickerApp
+        app = WorkspacePickerApp(self.root, entry_script=os.path.join(os.getcwd(), "x.py"))
+        pump(self.root, 0.3)
+        with mock.patch("utils.DatasetAnalysisDialog.open_dataset_analysis") as opened:
+            app._open_analysis()                                    # nothing selected: nothing happens
+            opened.assert_not_called()
+            app._select_workspace(WORKSPACE)
+            find_button(self.root, "Analyze").invoke()
+        opened.assert_called_once()
+        args = opened.call_args[0]
+        self.assertEqual((args[0], args[1]), (self.root, WORKSPACE))
+        self.assertEqual(args[2].workspace, WORKSPACE, "the dashboard gets the analysis that was just made")
+
+    def test_analyze_shows_a_progress_popup_while_it_reads_and_closes_it_after(self):
+        from utils import WorkspacePicker
+        from utils.WorkspacePicker import WorkspacePickerApp
+        from utils.progress_popup import show_progress_popup
+        app = WorkspacePickerApp(self.root, entry_script=os.path.join(os.getcwd(), "x.py"))
+        pump(self.root, 0.3)
+        app._select_workspace(WORKSPACE)
+        seen, popups = [], []
+
+        def spy(parent, title, color):
+            popup, update = show_progress_popup(parent, title, color)
+            popups.append((title, color, popup))
+
+            def recording(done, total, label=None):
+                seen.append((done, total, label))
+                update(done, total, label)
+            return popup, recording
+
+        with mock.patch.object(WorkspacePicker, "show_progress_popup", spy), \
+                mock.patch("utils.DatasetAnalysisDialog.open_dataset_analysis") as opened:
+            app._open_analysis()
+        title, color, popup = popups[0]
+        self.assertIn(WORKSPACE, title)
+        self.assertEqual(color, theme.C_ACCENT)
+        self.assertEqual(seen[0][2], "Counting images...")
+        self.assertEqual(seen[-1][2], "Drawing the charts...")
+        self.assertEqual(seen[-1][0], seen[-1][1])
+        self.assertFalse(popup.winfo_exists(), "the popup is gone once the dashboard is up")
+        opened.assert_called_once()
+
+    def test_a_failing_analysis_closes_the_popup_and_says_why(self):
+        from utils.WorkspacePicker import WorkspacePickerApp
+        app = WorkspacePickerApp(self.root, entry_script=os.path.join(os.getcwd(), "x.py"))
+        pump(self.root, 0.3)
+        app._select_workspace(WORKSPACE)
+        with mock.patch("utils.dataset_analysis.analyze_workspace", side_effect=OSError("unreadable")):
+            app._open_analysis()
+        self.assertIn("unreadable", self.dialogs.last("showerror")[2])
+        self.assertEqual([w for w in self.root.winfo_children() if isinstance(w, tk.Toplevel)], [])
+
+    def test_selection_is_dropped_when_the_workspace_disappears(self):
+        from utils.WorkspacePicker import WorkspacePickerApp
+        app = WorkspacePickerApp(self.root, entry_script=os.path.join(os.getcwd(), "x.py"))
+        app._select_workspace("gone")
+        app.refresh_workspaces()
+        self.assertIsNone(app.selected)
+        self.assertEqual(str(app.analyze_btn.cget("state")), "disabled")
 
     def _picker(self, flag):
         from utils.WorkspacePicker import WorkspacePickerApp

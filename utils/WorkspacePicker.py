@@ -17,20 +17,21 @@ import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
-from .theme import (C_BASE, C_PANEL, C_CARD, C_CARD2, C_BORDER, C_ACCENT,
+from .theme import (C_BASE, C_PANEL, C_CARD, C_CARD2, C_BORDER, C_ACCENT, C_ACCENT_TINT,
                     C_GREEN, C_RED, C_AMBER, C_TXT1, C_TXT2, C_TXT3,
                     C_ON_ACCENT, C_ON_RED, MODE, toggle_mode)
-from .workspace_manager import (list_workspaces, instance_path, count_images, DATASETS_ROOT,
+from .workspace_manager import (list_workspaces, instance_path, count_images, DATASETS_ROOT, workspace_name_for,
                                 count_images_in_folder, sanitize_workspace_name, parse_classes_input,
-                                existing_classes_for_workspace, create_workspace_instance,
+                                existing_classes_for_workspace,
                                 workspace_stats, delete_instance, delete_workspace)
-from .dataset_import import (scan_dataset_folder, detect_dataset_format, import_dataset,
+from .dataset_import import (scan_dataset_folder, detect_dataset_format, import_dataset, scan_classes,
                              yolo_classes_resolved, sanitize_filename_prefix)
 from . import collab
 from . import assistant_modes
 from . import relocate
 from . import workspace_manager
 from . import ServerSettingsDialog
+from .progress_popup import show_progress_popup
 
 
 class WorkspacePickerApp:
@@ -42,6 +43,7 @@ class WorkspacePickerApp:
         self.process = None
         self.expanded = set()
         self.workspaces = {}
+        self.selected = None            # workspace name (no index) last clicked; Analyze Dataset works on it
 
         self.root.title("Jelibox — Workspaces")
         self.root.geometry("1100x680")
@@ -94,11 +96,13 @@ class WorkspacePickerApp:
         self._btn(header, "+  Add Workspace", lambda: self._open_add_workspace_dialog(),
                   C_ACCENT, C_ON_ACCENT, bold=True).pack(side=tk.LEFT, padx=(0, 6), pady=12, ipady=5, ipadx=10)
 
-        self._btn(header, "⬇  Import Dataset", self._open_import_dataset_dialog,
+        self._btn(header, "📂  Open Folder", self._open_install_folder,
                   C_CARD2, C_TXT1, bold=True).pack(side=tk.LEFT, padx=(0, 6), pady=12, ipady=5, ipadx=10)
 
-        self._btn(header, "📂  Open Folder", self._open_install_folder,
-                  C_CARD2, C_TXT1, bold=True).pack(side=tk.LEFT, pady=12, ipady=5, ipadx=10)
+        self.analyze_btn = self._btn(header, "📊  Analyze", self._open_analysis,
+                                     C_CARD2, C_TXT1, bold=True)
+        self.analyze_btn.pack(side=tk.LEFT, pady=12, ipady=5, ipadx=10)
+        self._update_analyze_button()
 
         self.theme_btn = self._btn(
             header, "◐  Dark" if MODE == "light" else "◐  Light", self._toggle_theme,
@@ -201,6 +205,34 @@ class WorkspacePickerApp:
         for n, (mode, *_rest) in enumerate(assistant_modes.MODES, 1):
             self.root.bind(str(n), lambda e, m=mode: self._choose_mode(m))
         self.root.bind("<Escape>", self._close_mode_menu)
+
+    def _select_workspace(self, name):
+        self.selected = name
+        self._update_analyze_button()
+
+    def _update_analyze_button(self):
+        if self.selected is None:
+            self.analyze_btn.config(state=tk.DISABLED, fg=C_TXT3, cursor='arrow')
+        else:
+            self.analyze_btn.config(state=tk.NORMAL, fg=C_TXT1, cursor='hand2')
+
+    def _open_analysis(self):
+        if self.selected is None:
+            return
+        from .DatasetAnalysisDialog import open_dataset_analysis
+        from .dataset_analysis import analyze_workspace
+        popup, update = self._show_progress_popup(f'Analyzing "{self.selected}"...', C_ACCENT)
+        failure = None
+        try:
+            data = analyze_workspace(self.selected, update)
+            update(1, 1, "Drawing the charts...")
+            open_dataset_analysis(self.root, self.selected, data)
+        except Exception as exc:                        # a broken file must not leave the popup stuck
+            failure = exc
+        finally:
+            popup.destroy()
+        if failure is not None:
+            messagebox.showerror("Analyze Dataset", f"Could not analyze this workspace:\n{failure}", parent=self.root)
 
     def _open_install_folder(self):
         """Show the folder Jelibox is installed in (datasets, models, exports... all live there)."""
@@ -381,6 +413,9 @@ class WorkspacePickerApp:
     # ----------------------------------------------------------
     def refresh_workspaces(self):
         self.workspaces = list_workspaces()
+        if self.selected not in self.workspaces:
+            self.selected = None
+        self._update_analyze_button()
         for child in self.tree_frame.winfo_children():
             child.destroy()
 
@@ -407,31 +442,36 @@ class WorkspacePickerApp:
 
     def _add_workspace_row(self, name, instances):
         is_expanded = name in self.expanded
+        is_selected = name == self.selected
+        base = C_ACCENT_TINT if is_selected else C_PANEL       # the clicked workspace stays highlighted
+        name_fg = C_ACCENT if is_selected else C_TXT1
 
-        row = tk.Frame(self.tree_frame, bg=C_PANEL, cursor='hand2')
+        row = tk.Frame(self.tree_frame, bg=base, cursor='hand2')
         row.pack(fill=tk.X)
+        row.is_selected = is_selected
 
-        caret = tk.Label(row, text=('▾' if is_expanded else '▸'), bg=C_PANEL,
+        caret = tk.Label(row, text=('▾' if is_expanded else '▸'), bg=base,
                           fg=C_TXT2, font=('Segoe UI', 9), width=2)
         caret.pack(side=tk.LEFT, padx=(10, 0), pady=8)
 
-        label = tk.Label(row, text=f"📁 {name}", bg=C_PANEL, fg=C_TXT1,
+        label = tk.Label(row, text=f"📁 {name}", bg=base, fg=name_fg,
                           font=('Segoe UI', 10, 'bold'), anchor='w')
         label.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=8)
 
-        count = tk.Label(row, text=str(len(instances)), bg=C_PANEL, fg=C_TXT3,
+        count = tk.Label(row, text=str(len(instances)), bg=base, fg=C_TXT3,
                           font=('Segoe UI', 8))
         count.pack(side=tk.RIGHT, padx=(2, 10))
 
-        add_btn = tk.Label(row, text="+", bg=C_PANEL, fg=C_TXT3,
+        add_btn = tk.Label(row, text="+", bg=base, fg=C_TXT3,
                             font=('Segoe UI', 11, 'bold'), width=2, cursor='hand2')
         add_btn.pack(side=tk.RIGHT, padx=0)
 
-        del_btn = tk.Label(row, text="🗑", bg=C_PANEL, fg=C_TXT3,
+        del_btn = tk.Label(row, text="🗑", bg=base, fg=C_TXT3,
                             font=('Segoe UI', 9), width=2, cursor='hand2')
         del_btn.pack(side=tk.RIGHT, padx=0)
 
         def toggle(event=None, n=name):
+            self._select_workspace(n)
             if n in self.expanded:
                 self.expanded.remove(n)
             else:
@@ -452,9 +492,9 @@ class WorkspacePickerApp:
 
         def on_leave(event=None, widgets=(row, caret, label, count)):
             for w in widgets:
-                w.config(bg=C_PANEL)
-            add_btn.config(bg=C_PANEL)
-            del_btn.config(bg=C_PANEL)
+                w.config(bg=base)
+            add_btn.config(bg=base)
+            del_btn.config(bg=base)
 
         def add_btn_enter(event=None):
             add_btn.config(bg=C_ACCENT, fg=C_ON_ACCENT)
@@ -519,6 +559,7 @@ class WorkspacePickerApp:
             del_btn.config(bg=C_PANEL, fg=C_TXT3)
 
         def open_it(event=None, n=instance_name):
+            self._select_workspace(workspace_name_for(n))
             self.open_instance(n)
 
         def delete_click(event=None, n=instance_name):
@@ -599,8 +640,11 @@ class WorkspacePickerApp:
     # ----------------------------------------------------------
     def _open_add_workspace_dialog(self, existing_workspace=None):
         """
-        existing_workspace=None  -> full "Add Workspace" form (name + folder + classes)
-        existing_workspace="foo" -> "Add Instance" form (folder only, reuses foo's classes)
+        existing_workspace=None  -> full "Add Workspace" form (name + dataset folder + classes + prefix)
+        existing_workspace="foo" -> "Add Instance" form (dataset folder + prefix, reuses foo's classes)
+
+        The folder is scanned like the old Import Dataset did (every subfolder; images plus one of Pascal VOC /
+        YOLO / COCO, or images only) and the result is shown before anything is copied.
         """
         dialog = tk.Toplevel(self.root)
         dialog.configure(bg=C_BASE)
@@ -649,7 +693,8 @@ class WorkspacePickerApp:
             lbl.config(text=text, fg=color)
 
         # ---- state shared with on_create() ----
-        state = {'folder': None, 'image_count': 0}
+        state = {'folder': None, 'scan': None, 'format': 'unset', 'found': {}, 'auto_classes': '',
+                 'yolo_unnamed_classes': False}
 
         # ======== NAME (only for a brand-new workspace) ========
         name_var = tk.StringVar()
@@ -670,6 +715,7 @@ class WorkspacePickerApp:
                 if not raw:
                     set_status(name_status, "", C_TXT3)
                     render_classes_section(None)
+                    show_skip_warning()
                     return
                 existing = existing_classes_for_workspace(raw) if raw.replace("_", "").replace("-", "").isalnum() else None
                 if existing is not None:
@@ -681,40 +727,117 @@ class WorkspacePickerApp:
                 else:
                     set_status(name_status, "✓ New workspace", C_GREEN)
                 render_classes_section(existing)
+                show_skip_warning()
 
             # render_classes_section is defined further down (classes section
             # is built after this), but only ever called once typing starts -
             # by then the whole dialog has finished building.
             name_var.trace_add('write', on_name_change)
 
-        # ======== IMAGE FOLDER ========
-        section_label("IMAGE FOLDER")
+        # ======== DATASET FOLDER ========
+        section_label("DATASET FOLDER")
         folder_row = tk.Frame(form, bg=C_BASE)
         folder_row.pack(fill=tk.X)
+
         folder_var = tk.StringVar(value="(no folder selected)")
         folder_display = tk.Label(folder_row, textvariable=folder_var, bg=C_CARD2, fg=C_TXT2,
                                    font=('Segoe UI', 9), anchor='w', padx=8, pady=7)
         folder_display.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
         folder_status = status_label()
+        skip_status = status_label()          # amber: objects the import would leave out
+        hint_label("Every subfolder is searched: images plus Pascal VOC (.xml), YOLO (.txt with "
+                   "classes.txt / obj.names / data.yaml) or COCO (.json).")
+
+        def recenter():
+            dialog.update_idletasks()
+            x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+            y = max(0, (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2) - 20)
+            dialog.geometry(f"+{x}+{y}")
+
+        def target_classes():
+            """The classes this dataset has to fit: the workspace's own when it already has some, else None."""
+            name = existing_workspace
+            if name is None:
+                raw = name_var.get().strip()
+                name = raw if raw and raw.replace("_", "").replace("-", "").isalnum() else None
+            return (existing_classes_for_workspace(name) or None) if name else None
+
+        def show_skip_warning():
+            """Warn BEFORE the import: annotations of classes the workspace does not have are left out."""
+            target = target_classes()
+            extra = {c: n for c, n in state['found'].items() if target and c not in target}
+            if not extra:
+                set_status(skip_status, "", C_TXT3)
+                return
+            listing = ", ".join(f"{c} ({n})" for c, n in list(extra.items())[:6]) + (" ..." if len(extra) > 6 else "")
+            set_status(skip_status,
+                       f"⚠ {sum(extra.values())} object(s) will be SKIPPED - their class is not in this workspace "
+                       f"({', '.join(target)}): {listing}. A workspace's classes are shared by all its datasets, "
+                       f"so they are not changed here; add the class inside the workspace first if you need it.",
+                       C_AMBER)
+            recenter()
 
         def browse_folder():
-            chosen = filedialog.askdirectory(title="Select folder with images", parent=dialog)
+            chosen = filedialog.askdirectory(title="Select dataset folder", parent=dialog)
             if not chosen:
                 return
-            state['folder'] = chosen
+            state.update(folder=chosen, scan=None, format='unset', found={}, yolo_unnamed_classes=False)
             folder_var.set(chosen)
-            if not os.path.isdir(chosen):
-                set_status(folder_status, "✗ Not a folder.", C_RED)
-                state['image_count'] = 0
+            set_status(folder_status, "Scanning...", C_TXT3)
+            set_status(skip_status, "", C_TXT3)
+            dialog.update()
+
+            scan = scan_dataset_folder(chosen)
+            state['scan'] = scan
+            n_images = len(scan['images'])
+            if n_images == 0:
+                state['format'] = None
+                set_status(folder_status, "✗ No images found in this folder (every subfolder was searched).", C_RED)
                 return
-            n = count_images_in_folder(chosen)
-            state['image_count'] = n
-            if n == 0:
-                set_status(folder_status,
-                          "✗ No images found in this folder. Pick a folder that "
-                          "directly contains .jpg/.png/... files.", C_RED)
+            try:
+                fmt = detect_dataset_format(scan)
+            except ValueError as e:
+                state['format'] = 'conflict'
+                set_status(folder_status, f"✗ {e}", C_RED)
+                return
+
+            state['format'] = fmt
+            state['found'] = found = scan_classes(scan, fmt) if fmt else {}
+            color = C_GREEN
+            if fmt is None:
+                text = f"✓ {n_images} image(s) found - no annotations detected, they will be added unannotated."
+            elif fmt == 'yolo' and not yolo_classes_resolved(scan):
+                state['yolo_unnamed_classes'] = True
+                color = C_AMBER
+                text = (f"⚠ {n_images} image(s) and {len(scan['yolo'])} YOLO annotation(s) found, but no class name "
+                        f"file (classes.txt / obj.names / data.yaml) - classes will import as class_0, class_1, ... "
+                        f"Add that file to the folder and browse again to get the real names.")
             else:
-                set_status(folder_status, f"✓ {n} image(s) found", C_GREEN)
+                label = {'voc': 'Pascal VOC', 'yolo': 'YOLO', 'coco': 'COCO'}[fmt]
+                shown = ", ".join(found) if len(found) <= 8 else ", ".join(list(found)[:8]) + " ..."
+                text = (f"✓ {n_images} image(s), {len(scan[fmt])} {label} annotation file(s), "
+                        f"{len(found)} class(es): {shown}")
+            if scan['duplicates']:
+                color = C_AMBER
+                text += (f"\n⚠ {scan['duplicates']} image(s) have the same file name as another one in a different "
+                         f"subfolder - only one image of each name is imported.")
+            set_status(folder_status, text, color)
+
+            # a new workspace gets the classes found in the annotations as a starting point (still editable)
+            if target_classes() is None and found and not state['yolo_unnamed_classes']:
+                typed = classes_var.get().strip()
+                if not typed or typed == state['auto_classes']:
+                    suggestion = "{" + ", ".join(found) + "}"
+                    try:
+                        parse_classes_input(suggestion)
+                    except ValueError:
+                        pass
+                    else:
+                        classes_var.set(suggestion)
+                        state['auto_classes'] = suggestion
+            show_skip_warning()
+            recenter()
 
         self._btn(folder_row, "📁  Browse...", browse_folder, C_CARD2, C_TXT1,
                   font_size=9).pack(side=tk.LEFT, padx=(8, 0), ipady=6, ipadx=8)
@@ -775,9 +898,35 @@ class WorkspacePickerApp:
             existing_classes_for_workspace(existing_workspace) if existing_workspace is not None else None
         )
 
-        # ======== Progress view (shown in place of the form while copying) ========
+        # ======== FILENAME PREFIX (optional) ========
+        section_label("FILENAME PREFIX (OPTIONAL)")
+        prefix_var = tk.StringVar()
+        prefix_entry = tk.Entry(form, textvariable=prefix_var, font=('Segoe UI', 10),
+                                bg=C_CARD2, fg=C_TXT1, insertbackground=C_ACCENT, relief=tk.FLAT)
+        prefix_entry.pack(fill=tk.X, ipady=6)
+        prefix_default = 'Renames images and annotations in order - "test-" gives test-1, test-2, ... Blank keeps the names.'
+        prefix_status = tk.Label(form, text=prefix_default, font=('Segoe UI', 8), bg=C_BASE, fg=C_TXT3,
+                                 anchor='w', justify=tk.LEFT, wraplength=width - 48)
+        prefix_status.pack(fill=tk.X, pady=(3, 0))
+
+        def on_prefix_change(*_):
+            raw = prefix_var.get().strip()
+            if not raw:
+                prefix_status.config(text=prefix_default, fg=C_TXT3, font=('Segoe UI', 8))
+                return
+            try:
+                sanitize_filename_prefix(raw)
+            except ValueError as e:
+                prefix_status.config(text=f"✗ {e}", fg=C_RED, font=('Segoe UI', 8, 'bold'))
+                return
+            prefix_status.config(text=f"✓ Files will be renamed {raw}1, {raw}2, {raw}3, ...", fg=C_GREEN,
+                                 font=('Segoe UI', 8, 'bold'))
+
+        prefix_var.trace_add('write', on_prefix_change)
+
+        # ======== Progress view (shown in place of the form while importing) ========
         progress_frame = tk.Frame(dialog, bg=C_BASE, padx=24, pady=24)
-        progress_status_var = tk.StringVar(value="Copying images...")
+        progress_status_var = tk.StringVar(value="Importing...")
         tk.Label(progress_frame, textvariable=progress_status_var, bg=C_BASE, fg=C_TXT1,
                  font=('Segoe UI', 10)).pack(pady=(10, 14))
         bar_w = width - 48
@@ -787,8 +936,8 @@ class WorkspacePickerApp:
         bar_fill = tk.Frame(bar_bg, bg=C_ACCENT, width=0, height=8)
         bar_fill.place(x=0, y=0, relheight=1)
 
-        def on_copy_progress(done, total):
-            progress_status_var.set(f"Copying images... {done}/{total}")
+        def on_copy_progress(done, total, label=None):
+            progress_status_var.set(label or f"Importing... {done}/{total}")
             frac = (done / total) if total else 1.0
             bar_fill.place(width=int(bar_w * frac))
             dialog.update()
@@ -815,16 +964,19 @@ class WorkspacePickerApp:
                     return
 
             # ---- validate folder ----
-            if not state['folder']:
-                set_status(folder_status, "✗ Choose a folder first.", C_RED)
+            if not state['folder'] or state['scan'] is None:
+                set_status(folder_status, "✗ Choose a dataset folder first.", C_RED)
                 return
-            if not os.path.isdir(state['folder']):
-                set_status(folder_status, "✗ Not a folder.", C_RED)
-                return
-            if state['image_count'] == 0:
+            if state['format'] == 'conflict':
+                return                      # the specific error is already shown under the folder field
+            if not state['scan']['images']:
                 set_status(folder_status, "✗ No images found in this folder.", C_RED)
                 return
-
+            try:
+                prefix = sanitize_filename_prefix(prefix_var.get())
+            except ValueError as e:
+                set_status(prefix_status, f"✗ {e}", C_RED)
+                return
             # ---- validate classes (only when this will define a new workspace) ----
             # Not a hard blocker: an empty or malformed entry just means the
             # workspace is created without predefined classes - classes can
@@ -849,16 +1001,22 @@ class WorkspacePickerApp:
                             return
                         classes_to_write = None
 
-            # ---- do the copy, with progress ----
+            if state['yolo_unnamed_classes']:
+                if not messagebox.askyesno(
+                        "Class Names Not Found",
+                        "No class name file (classes.txt, obj.names, or data.yaml) was found for this YOLO "
+                        "dataset, so its classes will be imported as class_0, class_1, ... instead of their "
+                        "real names.\n\nContinue now, or cancel and add that file to the folder first?",
+                        parent=dialog):
+                    return
+            # ---- do the import, with progress ----
             form.pack_forget()
             progress_frame.pack(fill=tk.BOTH, expand=True)
             dialog.update()
 
             try:
-                instance_name, n = create_workspace_instance(
-                    target_name, state['folder'],
-                    classes=classes_to_write, progress_cb=on_copy_progress
-                )
+                result = import_dataset(state['folder'], target_name, prefix=prefix,
+                                        progress_cb=on_copy_progress, classes=classes_to_write)
             except (ValueError, OSError) as e:
                 dialog.destroy()
                 messagebox.showerror("Couldn't Add Workspace", str(e), parent=self.root)
@@ -867,11 +1025,17 @@ class WorkspacePickerApp:
             dialog.destroy()
             self.expanded.add(target_name)
             self.refresh_workspaces()
-            messagebox.showinfo(
-                "Workspace Ready",
-                f'"{instance_name}" created with {n} image(s).',
-                parent=self.root
-            )
+            lines = [f'"{result["instance_name"]}" created with {result["image_count"]} image(s).']
+            if result['format']:
+                lines.append(f'Annotations: {result["format"]}, {result["annotated_count"]} annotated image(s).')
+            if result['classes']:
+                lines.append(f'Classes: {", ".join(result["classes"])}')
+            skipped = result['skipped']
+            if skipped:
+                lines.append(f'\n{sum(skipped.values())} object(s) skipped - their class is not in this workspace: '
+                             + ", ".join(f"{c} ({n})" for c, n in skipped.items()))
+            show = messagebox.showwarning if skipped else messagebox.showinfo
+            show("Workspace Ready", "\n".join(lines), parent=self.root)
 
         self._btn(btn_row, create_label, on_create, C_ACCENT, C_ON_ACCENT,
                   font_size=10, bold=True).pack(side=tk.RIGHT, ipady=8, ipadx=16)
@@ -886,46 +1050,11 @@ class WorkspacePickerApp:
     # ----------------------------------------------------------
     #  Shared progress popup (used by delete, which can touch a lot of files)
     # ----------------------------------------------------------
-    def _show_progress_popup(self, title):
+    def _show_progress_popup(self, title, bar_color=C_RED):
         """Small centered popup with a status line + progress bar.
         Returns (popup, update_fn) where update_fn(done, total, label=None)
         advances it - call popup.destroy() when the work is finished."""
-        popup = tk.Toplevel(self.root)
-        popup.title(title)
-        popup.configure(bg=C_BASE)
-        popup.transient(self.root)
-        popup.grab_set()
-        popup.resizable(False, False)
-        popup.protocol("WM_DELETE_WINDOW", lambda: None)  # can't cancel mid-delete
-
-        width = 420
-        tk.Frame(popup, bg=C_BASE, width=width, height=1).pack(side=tk.TOP)
-
-        status_var = tk.StringVar(value=title)
-        tk.Label(popup, textvariable=status_var, bg=C_BASE, fg=C_TXT1,
-                 font=('Segoe UI', 10)).pack(pady=(20, 14))
-
-        bar_w = width - 48
-        bar_bg = tk.Frame(popup, bg=C_PANEL, width=bar_w, height=6)
-        bar_bg.pack(pady=(0, 20))
-        bar_bg.pack_propagate(False)
-        bar_fill = tk.Frame(bar_bg, bg=C_RED, width=0, height=6)
-        bar_fill.place(x=0, y=0, relheight=1)
-
-        def update_fn(done, total, label=None):
-            if label:
-                status_var.set(label)
-            frac = (done / total) if total else 1.0
-            bar_fill.place(width=int(bar_w * frac))
-            popup.update()
-
-        popup.update_idletasks()
-        x = (popup.winfo_screenwidth() // 2) - (popup.winfo_width() // 2)
-        y = (popup.winfo_screenheight() // 2) - (popup.winfo_height() // 2)
-        popup.geometry(f"+{x}+{y}")
-        popup.update()
-
-        return popup, update_fn
+        return show_progress_popup(self.root, title, bar_color)
 
     # ----------------------------------------------------------
     #  Delete instance
@@ -1057,263 +1186,6 @@ class WorkspacePickerApp:
 
         delete_btn.config(command=do_delete)
         confirm_entry.bind('<Return>', lambda e: do_delete())
-        dialog.bind('<Escape>', lambda e: dialog.destroy())
-
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
-        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
-        dialog.geometry(f"+{x}+{y}")
-
-    # ----------------------------------------------------------
-    #  Import Dataset (any folder layout, VOC / YOLO / COCO / images-only)
-    # ----------------------------------------------------------
-    def _open_import_dataset_dialog(self):
-        dialog = tk.Toplevel(self.root)
-        dialog.configure(bg=C_BASE)
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.resizable(False, False)
-        dialog.title("Import Dataset")
-        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
-
-        width = 480
-        hdr = tk.Frame(dialog, bg=C_ACCENT, height=48)
-        hdr.pack(fill=tk.X)
-        hdr.pack_propagate(False)
-        tk.Label(hdr, text="⬇  Import Dataset", font=('Segoe UI', 12, 'bold'),
-                 bg=C_ACCENT, fg=C_ON_ACCENT).pack(side=tk.LEFT, padx=16, pady=10)
-
-        form = tk.Frame(dialog, bg=C_BASE, padx=24, pady=18)
-        form.pack(fill=tk.BOTH, expand=True)
-        tk.Frame(form, bg=C_BASE, width=width, height=1).pack(side=tk.TOP)
-
-        def section_label(text):
-            tk.Label(form, text=text, font=('Segoe UI', 8, 'bold'),
-                     bg=C_BASE, fg=C_TXT2, anchor='w').pack(fill=tk.X, pady=(14, 4))
-
-        def hint_label(text):
-            tk.Label(form, text=text, font=('Segoe UI', 8), bg=C_BASE, fg=C_TXT3,
-                     anchor='w', justify=tk.LEFT, wraplength=width - 48).pack(fill=tk.X, pady=(3, 0))
-
-        def status_label():
-            lbl = tk.Label(form, text="", font=('Segoe UI', 8, 'bold'), bg=C_BASE,
-                            fg=C_TXT3, anchor='w', justify=tk.LEFT, wraplength=width - 48)
-            lbl.pack(fill=tk.X, pady=(3, 0))
-            return lbl
-
-        def set_status(lbl, text, color):
-            lbl.config(text=text, fg=color)
-
-        state = {'folder': None, 'scan': None, 'format': 'unset', 'yolo_unnamed_classes': False}
-
-        # ======== WORKSPACE NAME ========
-        section_label("WORKSPACE NAME")
-        name_var = tk.StringVar()
-        name_entry = tk.Entry(form, textvariable=name_var, font=('Segoe UI', 10),
-                              bg=C_CARD2, fg=C_TXT1, insertbackground=C_ACCENT, relief=tk.FLAT)
-        name_entry.pack(fill=tk.X, ipady=6)
-        hint_label('Groups instances together - "weapon-1" and "weapon-2" both '
-                   'belong to the "weapon" workspace.')
-        name_status = status_label()
-        name_entry.focus_set()
-
-        def on_name_change(*_):
-            raw = name_var.get().strip()
-            if not raw:
-                set_status(name_status, "", C_TXT3)
-                return
-            existing = existing_classes_for_workspace(raw) if raw.replace("_", "").replace("-", "").isalnum() else None
-            if existing is not None:
-                preview = ", ".join(existing) if existing else "(no classes yet)"
-                set_status(name_status,
-                          f"ℹ Existing workspace - a new instance will be added, "
-                          f"reusing its classes: {preview}", C_ACCENT)
-            else:
-                set_status(name_status, "✓ New workspace", C_GREEN)
-
-        name_var.trace_add('write', on_name_change)
-
-        # ======== DATASET FOLDER ========
-        section_label("DATASET FOLDER")
-        folder_row = tk.Frame(form, bg=C_BASE)
-        folder_row.pack(fill=tk.X)
-        folder_var = tk.StringVar(value="(no folder selected)")
-        folder_display = tk.Label(folder_row, textvariable=folder_var, bg=C_CARD2, fg=C_TXT2,
-                                   font=('Segoe UI', 9), anchor='w', padx=8, pady=7)
-        folder_display.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        scan_status = status_label()
-        hint_label("Every subfolder is searched for images plus one annotation format - "
-                   "Pascal VOC (.xml), YOLO (.txt), or COCO (.json).")
-
-        # ======== FILENAME PREFIX (optional) ========
-        section_label("FILENAME PREFIX (OPTIONAL)")
-        prefix_var = tk.StringVar()
-        prefix_entry = tk.Entry(form, textvariable=prefix_var, font=('Segoe UI', 10),
-                                bg=C_CARD2, fg=C_TXT1, insertbackground=C_ACCENT, relief=tk.FLAT)
-        prefix_entry.pack(fill=tk.X, ipady=6)
-        prefix_status = status_label()
-        hint_label('Renames every imported image (and its annotation) to keep them in '
-                   'order - e.g. "test-" becomes test-1, test-2, test-3, ... '
-                   'Leave blank to keep the original filenames.')
-
-        def on_prefix_change(*_):
-            raw = prefix_var.get().strip()
-            if not raw:
-                set_status(prefix_status, "", C_TXT3)
-                return
-            try:
-                sanitize_filename_prefix(raw)
-            except ValueError as e:
-                set_status(prefix_status, f"✗ {e}", C_RED)
-                return
-            set_status(prefix_status, f"✓ Files will be renamed {raw}1, {raw}2, {raw}3, ...", C_GREEN)
-
-        prefix_var.trace_add('write', on_prefix_change)
-
-        def browse_folder():
-            chosen = filedialog.askdirectory(title="Select dataset folder", parent=dialog)
-            if not chosen:
-                return
-            state['folder'] = chosen
-            state['scan'] = None
-            state['format'] = 'unset'
-            state['yolo_unnamed_classes'] = False
-            folder_var.set(chosen)
-            set_status(scan_status, "Scanning...", C_TXT3)
-            dialog.update()
-
-            scan = scan_dataset_folder(chosen)
-            state['scan'] = scan
-            n_images = len(scan['images'])
-
-            if n_images == 0:
-                state['format'] = None
-                set_status(scan_status,
-                          "✗ No images found in this folder (every subfolder was searched).", C_RED)
-                return
-
-            try:
-                fmt = detect_dataset_format(scan)
-            except ValueError as e:
-                state['format'] = 'conflict'
-                set_status(scan_status, f"✗ {e}", C_RED)
-                return
-
-            state['format'] = fmt
-            if fmt is None:
-                set_status(scan_status,
-                          f"✓ {n_images} image(s) found - no annotations detected, "
-                          f"will import as unannotated.", C_GREEN)
-            elif fmt == 'yolo' and not yolo_classes_resolved(scan):
-                state['yolo_unnamed_classes'] = True
-                fmt_count = len(scan['yolo'])
-                set_status(scan_status,
-                          f"⚠ {n_images} image(s) and {fmt_count} YOLO annotation(s) found, "
-                          f"but no class name file (classes.txt / obj.names / data.yaml) was "
-                          f"found alongside them - classes will import as class_0, class_1, "
-                          f"etc. instead of their real names. Add that file to the dataset "
-                          f"folder and re-browse if you'd rather fix this first, or continue "
-                          f"and rename classes later.", C_AMBER)
-            else:
-                fmt_label = {'voc': 'Pascal VOC', 'yolo': 'YOLO', 'coco': 'COCO'}[fmt]
-                fmt_count = len(scan[fmt])
-                set_status(scan_status,
-                          f"✓ {n_images} image(s) and {fmt_count} {fmt_label} annotation(s) found.",
-                          C_GREEN)
-
-        self._btn(folder_row, "📁  Browse...", browse_folder, C_CARD2, C_TXT1,
-                  font_size=9).pack(side=tk.LEFT, padx=(8, 0), ipady=6, ipadx=8)
-
-        # ======== Progress view ========
-        progress_frame = tk.Frame(dialog, bg=C_BASE, padx=24, pady=24)
-        progress_status_var = tk.StringVar(value="Importing...")
-        tk.Label(progress_frame, textvariable=progress_status_var, bg=C_BASE, fg=C_TXT1,
-                 font=('Segoe UI', 10)).pack(pady=(10, 14))
-        bar_w = width - 48
-        bar_bg = tk.Frame(progress_frame, bg=C_PANEL, width=bar_w, height=8)
-        bar_bg.pack()
-        bar_bg.pack_propagate(False)
-        bar_fill = tk.Frame(bar_bg, bg=C_ACCENT, width=0, height=8)
-        bar_fill.place(x=0, y=0, relheight=1)
-
-        def on_import_progress(done, total, label=None):
-            if label:
-                progress_status_var.set(label)
-            frac = (done / total) if total else 1.0
-            bar_fill.place(width=int(bar_w * frac))
-            dialog.update()
-
-        # ======== Buttons ========
-        btn_row = tk.Frame(form, bg=C_BASE)
-        btn_row.pack(fill=tk.X, pady=(18, 0))
-
-        self._btn(btn_row, "✕  Cancel", dialog.destroy, C_CARD2, C_TXT2,
-                  font_size=10).pack(side=tk.LEFT, ipady=8, ipadx=12)
-
-        def on_import():
-            try:
-                target_name = sanitize_workspace_name(name_var.get())
-            except ValueError as e:
-                set_status(name_status, f"✗ {e}", C_RED)
-                return
-
-            if not state['folder'] or state['scan'] is None:
-                set_status(scan_status, "✗ Choose a dataset folder first.", C_RED)
-                return
-            if state['format'] == 'conflict':
-                return  # the specific error is already shown under the folder field
-            if len(state['scan']['images']) == 0:
-                set_status(scan_status, "✗ No images found in this folder.", C_RED)
-                return
-
-            try:
-                prefix = sanitize_filename_prefix(prefix_var.get())
-            except ValueError as e:
-                set_status(prefix_status, f"✗ {e}", C_RED)
-                return
-
-            if state.get('yolo_unnamed_classes'):
-                proceed = messagebox.askyesno(
-                    "Class Names Not Found",
-                    "No class name file (classes.txt, obj.names, or data.yaml) was found "
-                    "for this YOLO dataset, so its classes will be imported as generic "
-                    "names - class_0, class_1, and so on - instead of their real names.\n\n"
-                    "You can rename them later from inside the workspace. Continue the "
-                    "import now, or cancel and add that file to the dataset folder first?",
-                    parent=dialog
-                )
-                if not proceed:
-                    return
-
-            form.pack_forget()
-            progress_frame.pack(fill=tk.BOTH, expand=True)
-            dialog.update()
-
-            try:
-                result = import_dataset(state['folder'], target_name, prefix=prefix,
-                                        progress_cb=on_import_progress)
-            except (ValueError, OSError) as e:
-                dialog.destroy()
-                messagebox.showerror("Import Failed", str(e), parent=self.root)
-                return
-
-            dialog.destroy()
-            self.expanded.add(target_name)
-            self.refresh_workspaces()
-
-            classes_text = ", ".join(result['classes']) if result['classes'] else "(none)"
-            messagebox.showinfo(
-                "Dataset Imported",
-                f'"{result["instance_name"]}" created with {result["image_count"]} image(s).\n\n'
-                f'Annotation format: {result["format"] or "none"}\n'
-                f'Annotated images: {result["annotated_count"]}\n'
-                f'Classes: {classes_text}',
-                parent=self.root
-            )
-
-        self._btn(btn_row, "⬇  Import Dataset", on_import, C_ACCENT, C_ON_ACCENT,
-                  font_size=10, bold=True).pack(side=tk.RIGHT, ipady=8, ipadx=16)
-
         dialog.bind('<Escape>', lambda e: dialog.destroy())
 
         dialog.update_idletasks()

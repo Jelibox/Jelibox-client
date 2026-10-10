@@ -14,6 +14,7 @@ Jelibox is designed for individuals and teams that need a private, offline-first
 
 - Local annotation workflow with no required cloud account
 - A VS Code-style workspace picker for switching between datasets
+- **Add Workspace** also imports a whole dataset folder: every subfolder is scanned for images plus Pascal VOC, YOLO or COCO annotations (or images only), an optional filename prefix renames them, and a warning shows beforehand if some annotations use classes the workspace does not have (they are skipped)
 - Bounding box annotation for object detection
 - Polygon annotation for image segmentation
 - Four annotation modes chosen on a front menu: **YOLO-World**, **LocateAnything** (NVIDIA LocateAnything-3B), **Custom Model** and **SAM 2 Dynamic** (a detector plus a small model you train) - see [Modes](#modes)
@@ -24,6 +25,7 @@ Jelibox is designed for individuals and teams that need a private, offline-first
 - Repeat annotations from the previous image
 - ZeroFill masking for removing sensitive image regions locally
 - Dataset export for YOLO and Pascal VOC XML
+- **Analyze Dataset**: select a workspace in the picker and open a dashboard of charts (objects per class, object sizes, image resolutions, small-object warning) - and simulate what the smallest objects become at a model input size such as 640 px, by calculation only. A progress bar shows while the annotations are read, and the small-object warning has a **Remove these objects** button that deletes those objects from the dataset (XML and YOLO labels) after a warning to back it up first
 - Live camera or video inference through Streamlit
 
 ## Modes
@@ -95,7 +97,7 @@ What happens:
 - **Administrator rights:** Windows needs none, except to install the Visual C++ runtime when it is missing (just that installer asks for permission). Linux needs no `sudo`, except to install the OpenCV system libraries (`libGL`, GLib) when they are missing.
 - **No uv access?** If the installer cannot download uv, install it yourself from <https://docs.astral.sh/uv/> (or set `JELIBOX_UV` to an existing `uv` executable) and run the installer again.
 - **Updating:** run the same command again. It reports what it found (`Found Jelibox v0.1.0 ... updating to v0.2.0`), updates in place, and never touches your datasets, models or configs. If you are already on the newest version it says so and stops (`JELIBOX_FORCE=1` reinstalls anyway). A folder that is a `git` checkout is left alone - use `git pull` there.
-- **Find the install folder:** click **Open Folder** in the workspace picker toolbar (next to Import Dataset).
+- **Find the install folder:** click **Open Folder** in the workspace picker toolbar (next to Add Workspace).
 - **Move it somewhere else:** click **Move Jelibox** in the workspace picker and choose a folder. Jelibox creates `<folder>/Jelibox`, builds a fresh virtual environment there (same package versions, needs internet), moves your datasets, models and configs over, and deletes the old venv and folder. If anything fails before the files are moved, the old install is left untouched.
 - **A specific version:** set `JELIBOX_VERSION` first, for example `$env:JELIBOX_VERSION="v0.1.0"` (PowerShell) or `JELIBOX_VERSION=v0.1.0 curl ... | bash`. Use `main` for the latest development version (changes not in a release yet). Other options: `JELIBOX_GPU` (`nvidia` or `cpu`, skips the GPU question), `JELIBOX_HOME` (install location), `JELIBOX_NO_INSTALL=1` (download and unpack only) and `JELIBOX_FORCE=1` (reinstall even if current). If `uv` is already on your machine it is reused.
 - **Want to read it before running it?** That is a good habit. The scripts are short: [`install.ps1`](install.ps1) and [`install.sh`](install.sh).
@@ -229,6 +231,8 @@ Jelibox supports:
 ## Exporting a Dataset
 
 Use the **Export Dataset** action in the application to export YOLO, Pascal VOC, or COCO data with train, validation, and test splits.
+
+**Save to:** by default the dataset goes into `export dataset/<workspace>/` inside Jelibox (the previous export of that workspace is replaced). Press **Browse...** to save anywhere else instead - an HDD or an external drive, for example, to keep finished datasets (images and annotations together) off the SSD. Jelibox then makes a new folder `<workspace>-v<N>` inside the folder you chose: N is one more than the highest `<workspace>-v<number>` already there (`ppe-v1`, then `ppe-v2`, ... and if `ppe-v4` exists the next one is `ppe-v5`), so an archive is never overwritten and nothing in your folder is deleted. The folder is remembered for next time; **Default** switches back. If the remembered folder is not there any more (an unplugged external drive, say) the default folder is used instead and the window says so; the choice is kept and used again once the drive is back. Before exporting, Jelibox checks that the folder can be written to and that the images alone fit in its free space.
 
 COCO exports use this structure:
 

@@ -5,6 +5,7 @@
 
 # --- YOLO-World, custom-trained dual-head models, training ------------------------------------------------------
 ultralytics>=8.4.68           # custom dual-head models need 8.4.68 or newer (it also brings opencv, numpy, scipy, ...)
+matplotlib                    # Analyze Dataset charts (ultralytics already brings it in)
 streamlit
 yt-dlp
 pyinstaller

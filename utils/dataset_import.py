@@ -70,10 +70,12 @@ def scan_dataset_folder(root_folder):
         'yolo': {basename: path},         # .txt, excluding class-list files
         'coco': [path, ...],              # .json that look like COCO
         'yolo_classes_file': path or None,  # classes.txt / obj.names / data.yaml
+        'duplicates': int,                # images whose file name another image already has (only one is kept)
       }
     """
     images, voc, yolo, coco = {}, {}, {}, []
     yolo_classes_file = None
+    duplicates = 0
 
     for path in _walk_files(root_folder):
         fname = os.path.basename(path)
@@ -81,6 +83,8 @@ def scan_dataset_folder(root_folder):
         ext = ext.lower()
 
         if ext in IMAGE_EXTENSIONS:
+            if base in images:
+                duplicates += 1
             images[base] = path
         elif ext == ".xml":
             voc[base] = path
@@ -97,8 +101,59 @@ def scan_dataset_folder(root_folder):
 
     return {
         "images": images, "voc": voc, "yolo": yolo, "coco": coco,
-        "yolo_classes_file": yolo_classes_file,
+        "yolo_classes_file": yolo_classes_file, "duplicates": duplicates,
     }
+
+
+def _yolo_rows(path):
+    """[(class index, numbers)] of a YOLO label file."""
+    rows = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if not parts:
+                    continue
+                try:
+                    rows.append((int(float(parts[0])), [float(v) for v in parts[1:]]))
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    return rows
+
+
+def scan_classes(scan, fmt):
+    """{class name: number of objects} that importing this scan would bring in (images that have an annotation
+    file only), without writing anything. Used to warn before the import."""
+    counts = {}
+    if fmt == "voc":
+        from .file_handler import _parse_voc_objects
+        for base, path in scan["voc"].items():
+            if base not in scan["images"]:
+                continue
+            try:
+                boxes, polygons = _parse_voc_objects(ET.parse(path).getroot())
+            except (ET.ParseError, OSError, AttributeError, ValueError):
+                continue
+            for cls in [b[4] for b in boxes] + [p[1] for p in polygons]:
+                counts[cls] = counts.get(cls, 0) + 1
+    elif fmt == "yolo":
+        names = _parse_yolo_class_names(scan["yolo_classes_file"])
+        per_index = {}
+        for base, path in scan["yolo"].items():
+            if base in scan["images"]:
+                for idx, _nums in _yolo_rows(path):
+                    per_index[idx] = per_index.get(idx, 0) + 1
+        for idx in sorted(per_index):
+            name = names[idx] if idx < len(names) else f"class_{idx}"
+            counts[name] = counts.get(name, 0) + per_index[idx]
+    elif fmt == "coco":
+        for file_name, entry in _load_coco_files(scan["coco"]).items():
+            if os.path.splitext(file_name)[0] in scan["images"]:
+                for _bbox, _polygon, cls in entry["objects"]:
+                    counts[cls] = counts.get(cls, 0) + 1
+    return counts
 
 
 def sanitize_filename_prefix(prefix):
@@ -211,10 +266,12 @@ def _image_size(path):
 #  backfills YOLO labels from it.
 # ============================================================
 
-def _import_voc_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total):
+def _import_voc_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total,
+                            locked=False, skipped=None):
     from .file_handler import _parse_voc_size, _parse_voc_objects
 
     class_set = set(class_order)
+    fixed = set(class_order) if locked else None     # a workspace's own classes: nothing else is added
     annotated = 0
 
     # Pass 1: copy every VOC XML that has a matching image, and collect
@@ -231,12 +288,17 @@ def _import_voc_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, pr
         size = _parse_voc_size(root)
         parsed[base] = (root, boxes, polygons, size)
         for cls in [b[4] for b in boxes] + [p[1] for p in polygons]:
-            if cls not in class_set:
+            if cls not in class_set and not locked:
                 class_set.add(cls)
                 class_order.append(cls)
 
     for base, (root, boxes, polygons, size) in parsed.items():
         new_base = rename_map.get(base, base)
+        if locked:
+            boxes, polygons = _drop_unknown(boxes, polygons, fixed, skipped)
+            for obj in list(root.findall("object")):
+                if obj.find("name").text not in fixed:
+                    root.remove(obj)
 
         # Keep <filename> in sync with the renamed image, so the XML we
         # write doesn't point at a file that no longer exists under that name.
@@ -268,7 +330,8 @@ def _import_voc_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, pr
 #  to the absolute-pixel VOC XML Jelibox's editor expects.
 # ============================================================
 
-def _import_yolo_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total):
+def _import_yolo_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total,
+                             locked=False, skipped=None):
     yolo_class_names = _parse_yolo_class_names(scan["yolo_classes_file"])
 
     matched = [(base, path) for base, path in scan["yolo"].items() if base in scan["images"]]
@@ -291,7 +354,7 @@ def _import_yolo_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, p
     for i in range(max_idx + 1):
         name = yolo_class_names[i] if i < len(yolo_class_names) else f"class_{i}"
         index_to_name[i] = name
-        if name not in class_set:
+        if name not in class_set and not locked:
             class_set.add(name)
             class_order.append(name)
 
@@ -317,6 +380,9 @@ def _import_yolo_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, p
             except ValueError:
                 continue
             cls = index_to_name.get(idx, f"class_{idx}")
+            if locked and cls not in class_set:
+                skipped[cls] = skipped.get(cls, 0) + 1
+                continue
 
             if len(nums) == 4:
                 cx, cy, bw, bh = nums
@@ -334,7 +400,11 @@ def _import_yolo_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, p
         ann = build_voc_xml(img_name, (h, w, 3), boxes, polygons)
         with open(os.path.join(voc_dir, new_base + ".xml"), "w", encoding="utf-8") as f:
             f.write(prettify_xml(ann))
-        shutil.copy2(txt_path, os.path.join(yolo_dir, new_base + ".txt"))
+        # written again (not copied): the file's class numbers follow the SOURCE dataset's order,
+        # the workspace's own class list decides here
+        lines = _yolo_lines_from_annotations(boxes, polygons, class_order, w, h)
+        with open(os.path.join(yolo_dir, new_base + ".txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
         annotated += 1
 
         done += 1
@@ -398,7 +468,8 @@ def _load_coco_files(paths):
     return merged
 
 
-def _import_coco_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total):
+def _import_coco_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total,
+                             locked=False, skipped=None):
     coco_data = _load_coco_files(scan["coco"])
 
     # Match COCO's file_name entries to the images we actually found, by
@@ -412,7 +483,7 @@ def _import_coco_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, p
     class_set = set(class_order)
     for entry in by_basename.values():
         for _bbox, _polygon, cls in entry["objects"]:
-            if cls not in class_set:
+            if cls not in class_set and not locked:
                 class_set.add(cls)
                 class_order.append(cls)
 
@@ -431,6 +502,9 @@ def _import_coco_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, p
 
         boxes, polygons = [], []
         for bbox, polygon, cls in entry["objects"]:
+            if locked and cls not in class_set:
+                skipped[cls] = skipped.get(cls, 0) + 1
+                continue
             if polygon is not None:
                 polygons.append([polygon, cls])
             elif bbox is not None:
@@ -455,11 +529,27 @@ def _import_coco_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, p
     return class_order, annotated, done
 
 
+def _drop_unknown(boxes, polygons, fixed, skipped):
+    """The boxes / polygons whose class is in `fixed`; the others are counted in `skipped` ({class: objects})."""
+    keep_boxes, keep_polygons = [], []
+    for b in boxes:
+        if b[4] in fixed:
+            keep_boxes.append(b)
+        else:
+            skipped[b[4]] = skipped.get(b[4], 0) + 1
+    for p in polygons:
+        if p[1] in fixed:
+            keep_polygons.append(p)
+        else:
+            skipped[p[1]] = skipped.get(p[1], 0) + 1
+    return keep_boxes, keep_polygons
+
+
 # ============================================================
 #  Orchestrator
 # ============================================================
 
-def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None):
+def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None, classes=None):
     """
     Import an external folder (any layout, searched recursively) as a new
     datasetsInput/<workspace>-<N> instance, converting whichever single
@@ -474,10 +564,22 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None)
     progress_cb(done, total, label), if given, is called repeatedly while
     images are copied and annotations converted.
 
+    A workspace that already has classes keeps exactly those: annotations of any other class are left out and
+    counted in the summary's "skipped". For a new workspace `classes` (optional) come first, in that order, and the
+    classes found in the annotations are added after them.
+
     Returns a summary dict. Raises ValueError on bad or conflicting input.
     """
     if not source_folder or not os.path.isdir(source_folder):
         raise ValueError(f"'{source_folder}' is not a folder.")
+    source_real = os.path.realpath(source_folder)
+    root_real = os.path.realpath(DATASETS_ROOT)
+    try:
+        inside = os.path.commonpath([source_real, root_real]) == root_real
+    except ValueError:
+        inside = False
+    if inside:
+        raise ValueError("This folder is already inside datasetsInput. Pick the original folder elsewhere on disk.")
 
     prefix = sanitize_filename_prefix(prefix)  # raises ValueError on bad chars
 
@@ -508,20 +610,23 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None)
         if progress_cb:
             progress_cb(done, total, f"Copying images... {done}/{n_images}")
 
-    class_order = list(existing_classes_for_workspace(workspace_name) or [])
+    existing = existing_classes_for_workspace(workspace_name)
+    locked = bool(existing)
+    class_order = list(existing) if locked else list(classes or [])
+    skipped = {}
     annotated = 0
 
     if fmt == "voc":
         class_order, annotated, done = _import_voc_annotations(
-            scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total)
+            scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total, locked, skipped)
     elif fmt == "yolo":
         class_order, annotated, done = _import_yolo_annotations(
-            scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total)
+            scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total, locked, skipped)
     elif fmt == "coco":
         class_order, annotated, done = _import_coco_annotations(
-            scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total)
+            scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total, locked, skipped)
 
-    if class_order and existing_classes_for_workspace(workspace_name) is None:
+    if class_order and not locked:
         workspace_config.set_classes(workspace_name, class_order)
 
     format_labels = {"voc": "Pascal VOC", "yolo": "YOLO", "coco": "COCO", None: None}
@@ -531,4 +636,6 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None)
         "annotated_count": annotated,
         "format": format_labels[fmt],
         "classes": class_order,
+        "skipped": skipped,
+        "duplicates": scan["duplicates"],
     }

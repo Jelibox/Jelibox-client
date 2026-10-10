@@ -66,7 +66,7 @@ class WorkspaceManagerTests(unittest.TestCase):
     def test_workspace_name_for(self):
         from utils.workspace_manager import workspace_name_for as w
         self.assertEqual(w("weapon-1"), "weapon")
-        self.assertEqual(w("ppeKujangv3-24"), "ppeKujangv3")
+        self.assertEqual(w("siteSafety-24"), "siteSafety")
         self.assertEqual(w("my-project"), "my-project")
 
 

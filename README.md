@@ -1,31 +1,89 @@
 # Jelibox
 
-**Jelibox is a local computer vision annotation tool for creating object detection and image segmentation datasets.** It runs on your own computer, supports bounding boxes and polygons, and can use Ultralytics YOLO models for inference and training.
+**Soft to use. Sharp on every object.**
+
+Jelibox is a private, local annotation tool for object detection and segmentation datasets. Import what you already have, label it with four kinds of AI help, see what it really contains in a built-in dashboard, and export it augmented, all on your own computer with no account and no upload.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey)](jelibox_linux_installation.bash)
+[![Latest release](https://img.shields.io/github/v/release/Jelibox/Jelibox-client)](https://github.com/Jelibox/Jelibox-client/releases/latest)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-lightgrey)](jelibox_windows_installation.bat)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey)](jelibox_linux_installation.bash)
 
-Jelibox is designed for individuals and teams that need a private, offline-first workflow for labeling image datasets without uploading images to a third-party service.
+[Website](https://jelibox.github.io/Jelibox-client/) | [Install in one line](#install-in-one-line) | [What's new](CHANGELOG.md)
 
-![Jelibox annotation interface](assets/visualize.png)
+![Jelibox annotation interface](assets/annotate.jpg)
 
-## Features
+## Install in one line
+
+**Windows** - open **PowerShell** and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.ps1 | iex
+```
+
+**Linux** - open a terminal and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.sh | bash
+```
+
+It downloads the newest release and gives Jelibox its own private Python (via uv), so yours is never touched. Run the same command later to update; your datasets and models are never touched. Options, what it changes on your system, and the manual install are in [Installation](#installation).
+
+## Why Jelibox
+
+- **Private.** Images, labels and models stay on your machine. There is no account to create and nothing to upload.
+- **Four auto-label modes.** Zero-shot prompts (YOLO-World), NVIDIA LocateAnything-3B, a small head you train for your own classes (Custom Model), or SAM 2 learning from your own labels with no training (SAM 2 Dynamic).
+- **Any dataset in, any dataset out.** Import Pascal VOC, YOLO or COCO folders; export YOLO, Pascal VOC or COCO with augmentation, to any drive.
+- **Understand it before you train.** A dashboard of class counts, object sizes and image resolutions, with a warning for objects that will be too small for your model, and a simulation of what resizing to 640 px (or any size) does to them.
+- **Light on your computer.** The CPU is enough to start; an NVIDIA GPU makes the heavy modes fast. The window fits a 12-inch laptop screen.
+
+## Highlights
+
+### Four ways to auto-label
+
+Pick a mode when Jelibox starts (and change it any time with the **Mode** button), then press **G** to label the current image, or choose **Full dataset** in the Infer window to label every image. [Modes](#modes) lists what each one needs.
+
+| Mode | In one line |
+| --- | --- |
+| **YOLO-World** | Describe it in words, or use any Ultralytics model of your own. Nothing to download. |
+| **LocateAnything** | NVIDIA LocateAnything-3B labels a whole folder from a list of categories. |
+| **Custom Model** | A detector finds the objects, a small model you train gives each one your own class. |
+| **SAM 2 Dynamic** | No training: SAM 2 learns from every image you annotate. |
+
+### Bring any dataset in, safely
+
+**Add Workspace** scans a folder and all its subfolders for images plus Pascal VOC, YOLO or COCO annotations (or images alone) and shows what it found before it copies anything. An optional filename prefix renames images and labels in order. If the annotations use a class your workspace does not have, you are warned first and those objects are skipped instead of being mixed in.
+
+<img src="assets/add-workspace.png" alt="The Add Workspace window with a scan result and a class warning" width="380">
+
+### Know your dataset before you train on it
+
+Select a workspace and press **Analyze** for a dashboard of objects per class, size histograms, a width x height scatter and image resolutions. A warning strip appears when objects are smaller than a limit you set (32 px by default). **Simulate** shows what your smallest objects become when every image is resized to a model input size such as 640 px, by calculation only (no image is copied or resized), and a table compares 320 to 1280 so you can choose the input size that fits. **Remove these objects** deletes the tiny ones from the dataset after a warning to back it up first.
+
+![The Analyze Dataset dashboard](assets/dashboard.png)
+
+### Export augmented, and keep it where you want
+
+**Export Dataset** writes YOLO, Pascal VOC or COCO with a train / valid / test split. Optional augmentation (brightness, contrast, saturation, hue, blur, noise, grayscale, JPEG compression, flips and rotation) moves boxes and polygons together with the picture, keeps your originals, and can be made repeatable with a seed. **Save to** lets you export to any folder, for example an HDD, so finished datasets stay off your SSD: each export becomes a new `<workspace>-v<N>` folder and nothing is ever overwritten.
+
+<img src="assets/export.png" alt="The Export Dataset window with the Save to folder and the augmentation options" width="420">
+
+## All features
 
 - Local annotation workflow with no required cloud account
 - A VS Code-style workspace picker for switching between datasets
-- **Add Workspace** also imports a whole dataset folder: every subfolder is scanned for images plus Pascal VOC, YOLO or COCO annotations (or images only), an optional filename prefix renames them, and a warning shows beforehand if some annotations use classes the workspace does not have (they are skipped)
-- Bounding box annotation for object detection
-- Polygon annotation for image segmentation
-- Four annotation modes chosen on a front menu: **YOLO-World**, **LocateAnything** (NVIDIA LocateAnything-3B), **Custom Model** and **SAM 2 Dynamic** (a detector plus a small model you train) - see [Modes](#modes)
-- AI-assisted annotation with the **Infer** button (or `G`): on the current image, or on **every image of the dataset at once** - you pick which in the Infer window
+- Bounding box annotation for object detection and polygon annotation for segmentation, with undo / redo (`Ctrl+Z` / `Ctrl+Y`)
+- Four auto-label modes chosen on a front menu: **YOLO-World**, **LocateAnything**, **Custom Model** and **SAM 2 Dynamic** - see [Modes](#modes)
+- AI-assisted annotation with the **Infer** button (or `G`): on the current image, or on **every image of the dataset at once**
+- **Add Workspace** imports whole dataset folders (Pascal VOC, YOLO, COCO or images only) with an optional filename prefix
+- **Analyze**: dataset dashboard, small-object warning with an adjustable limit, resize simulation, and removal of tiny objects
+- **Export Dataset** to YOLO, Pascal VOC or COCO with optional augmentation and a **Save to** folder of your choice
 - Model training from the annotation workspace, reading images straight from `datasetsInput/` (no duplicate copies)
 - NVIDIA CUDA and CPU workflows, depending on the installed PyTorch build
 - Class management, visibility toggles, image search, zoom, and multi-selection
 - Repeat annotations from the previous image
 - ZeroFill masking for removing sensitive image regions locally
-- Dataset export for YOLO and Pascal VOC XML
-- **Analyze Dataset**: select a workspace in the picker and open a dashboard of charts (objects per class, object sizes, image resolutions, small-object warning) - and simulate what the smallest objects become at a model input size such as 640 px, by calculation only. A progress bar shows while the annotations are read, and the small-object limit (32 px by default) can be set in the dashboard, and the warning has a **Remove these objects** button that deletes those objects from the dataset (XML and YOLO labels) after a warning to back it up first
+- Light and dark themes
 - Live camera or video inference through Streamlit
 
 ## Modes
@@ -227,6 +285,7 @@ Jelibox supports:
 - Pascal VOC XML annotations in the `vocdataset/` workspace folder
 - YOLO labels in the `YOLOdataset/<workspace>/labels/` folder, paired with images from `datasetsInput/` at training/export time
 - COCO JSON YOLO exports with bounding boxes and polygon segmentations
+- Importing Pascal VOC, YOLO and COCO datasets (any folder layout) through **Add Workspace**
 
 ## Exporting a Dataset
 
@@ -276,7 +335,9 @@ For training failures caused by limited memory, try a smaller image size, a smal
 
 ## Screenshots
 
-![Jelibox annotation interface](assets/visualize.png)
+![Jelibox annotation interface](assets/annotate.jpg)
+
+![The Analyze Dataset overview](assets/dashboard-overview.png)
 
 ## Contributing
 

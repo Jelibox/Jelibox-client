@@ -9,6 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Changed
+- **README and website rewritten** around what Jelibox does today: the four auto-label modes, importing any dataset, the Analyze dashboard, and augmented export to any drive, with new screenshots of each, a one-line install at the top of the README, a release badge, and a social preview image for shared links. The old annotation screenshot is replaced by a current one.
+
 ## [0.4.1] - 2026-10-10
 
 ### Added

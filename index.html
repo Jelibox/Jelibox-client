@@ -4,10 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="google-site-verification" content="2dDeMeLVPGU-jXJDLVFoqY3q3CPxB_4xz4yJbas3ano"/>
-    <meta name="description" content="Jelibox is a local, private image annotation tool for YOLO object detection and segmentation datasets, with a built-in Label Assistant powered by YOLO-World or your own model.">
+    <meta name="description" content="Jelibox is a private, local annotation tool for YOLO object detection and segmentation datasets. Import VOC, YOLO or COCO, auto-label with YOLO-World, LocateAnything, your own model or SAM 2, analyze your dataset in a dashboard, and export it augmented.">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Jelibox | Local image annotation with four auto-label modes">
+    <meta property="og:description" content="Import any dataset, auto-label it, see what it really contains in a built-in dashboard, and export it augmented. Private, on your own machine.">
+    <meta property="og:image" content="https://jelibox.github.io/Jelibox-client/assets/og-image.png">
+    <meta property="og:url" content="https://jelibox.github.io/Jelibox-client/">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://jelibox.github.io/Jelibox-client/assets/og-image.png">
     <meta name="theme-color" content="#EAE5DA" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#0B0C12" media="(prefers-color-scheme: dark)">
-    <title>Jelibox | Local Image Annotation</title>
+    <title>Jelibox | Local Image Annotation, Auto-labeling and Dataset Analysis</title>
     <link rel="icon" href="assets/jelibox.png" type="image/png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&amp;display=swap">
@@ -121,16 +128,45 @@
         footer { padding:44px 0 44px; color:var(--faint); font-size:13px; }
         footer .shell { display:flex; justify-content:space-between; flex-wrap:wrap; gap:14px; }
 
+        /* auto-label modes */
+        .mode-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
+        .mode { padding:26px 24px; border-radius:22px; background:var(--surface); border:1px solid var(--line); }
+        .mode-num { display:grid; place-items:center; width:30px; height:30px; margin-bottom:16px; border-radius:50%; background:var(--tint); color:var(--accent-text); font:800 13px var(--display); }
+        .mode h3 { margin:0 0 8px; font:800 19px var(--display); letter-spacing:-.025em; }
+        .mode p { margin:0; color:var(--muted); font-size:14px; }
+        .mode p.need { margin-top:14px; color:var(--faint); font-size:12.5px; }
+        .mode em { color:var(--text); font-style:normal; font-weight:700; }
+
+        /* screenshots next to their explanation */
+        .shot { border-radius:16px; background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow); overflow:hidden; }
+        .shot img { display:block; width:100%; height:auto; }
+        .wide-shot { margin-top:16px; }
+        .split { display:grid; grid-template-columns:minmax(0,5fr) minmax(0,6fr); gap:48px; align-items:center; margin-top:84px; }
+        .section-head + .split { margin-top:0; }
+        .split.flip .split-text { order:2; }
+        .split-text h3 { margin:10px 0 12px; font:800 clamp(1.5rem,3vw,2.15rem)/1.1 var(--display); letter-spacing:-.035em; }
+        .split-text .feature-tag { margin-bottom:0; }
+        .split-text p { margin:0 0 14px; color:var(--muted); }
+        .split-text ul { margin:0; padding-left:20px; color:var(--muted); font-size:15px; }
+        .split-text li { margin-bottom:9px; }
+        .split-text code, .feature code { padding:2px 6px; border-radius:6px; background:var(--surface2); font:500 12.5px var(--mono); }
+        .shot.portrait { max-width:460px; justify-self:center; width:100%; }
+        .split.stack { grid-template-columns:1fr; gap:30px; }
+        .split.stack .split-text ul { columns:2; column-gap:40px; }
+        .split.stack .split-text li { break-inside:avoid; }
+        .feature-grid.even .feature:last-child { grid-column:auto; }
+        .loop { grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); }
+
         @keyframes rise { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:none; } }
         .hero .shell > * { animation:rise .6s ease both; }
         .hero .shell > *:nth-child(2) { animation-delay:.06s; } .hero .shell > *:nth-child(3) { animation-delay:.12s; }
         .hero .shell > *:nth-child(4) { animation-delay:.18s; } .hero .shell > *:nth-child(5) { animation-delay:.24s; }
 
-        @media (max-width:900px) { .feature-grid,.loop { grid-template-columns:repeat(2,1fr); } .strip { grid-template-columns:repeat(2,1fr); } .feature.wide,.feature-grid .feature:last-child { grid-column:span 2; } }
+        @media (max-width:900px) { .split.stack .split-text ul { columns:1; } .split { grid-template-columns:1fr; gap:26px; margin-top:64px; } .split.flip .split-text { order:0; } .mode-grid { grid-template-columns:repeat(2,1fr); } .feature-grid,.loop { grid-template-columns:repeat(2,1fr); } .strip { grid-template-columns:repeat(2,1fr); } .feature.wide,.feature-grid .feature:last-child { grid-column:span 2; } }
         @media (max-width:640px) {
             .shell { width:min(100% - 32px,1120px); }
             .nav-links a:not(.button) { display:none; }
-            .feature-grid,.loop,.strip,.install-grid { grid-template-columns:1fr; } .feature.wide,.feature-grid .feature:last-child { grid-column:auto; }
+            .feature-grid,.loop,.strip,.install-grid,.mode-grid { grid-template-columns:1fr; } .feature.wide,.feature-grid .feature:last-child { grid-column:auto; }
             .hero { padding-top:52px; } .section { padding-top:76px; } .window { border-radius:14px; }
         }
         @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto !important; animation:none !important; transition:none !important; } }
@@ -140,7 +176,7 @@
     <header class="nav">
         <div class="shell nav-inner">
             <a class="brand" href="#top" aria-label="Jelibox home"><img src="assets/jelibox.png" alt="Jelibox logo"><span>Jelibox</span></a>
-            <nav class="nav-links" aria-label="Main navigation"><a href="#features">Features</a><a href="#workflow">Workflow</a><a href="#install">Install</a><a class="button button-primary" href="https://github.com/Jelibox/Jelibox-client" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav>
+            <nav class="nav-links" aria-label="Main navigation"><a href="#modes">Auto-label</a><a href="#tools">Dataset tools</a><a href="#features">Features</a><a href="#install">Install</a><a class="button button-primary" href="https://github.com/Jelibox/Jelibox-client" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav>
         </div>
     </header>
 
@@ -148,7 +184,7 @@
         <section class="hero">
             <div class="shell">
                 <h1>Soft to use. <em>Sharp on every object.</em></h1>
-                <p class="lead">Jelibox is a private, local workspace for building object detection and segmentation datasets. Annotate, auto-label, train, and export without your images ever leaving your machine.</p>
+                <p class="lead">Jelibox is a private, local workspace for building object detection and segmentation datasets. Import what you have, label it with four kinds of AI help, see what it really contains, and export it augmented, without your images ever leaving your machine.</p>
                 <div class="actions">
                     <a class="button button-primary" href="#install">Get started</a>
                     <a class="button button-secondary" href="https://github.com/Jelibox/Jelibox-client" target="_blank" rel="noopener noreferrer">View on GitHub ↗</a>
@@ -156,38 +192,96 @@
                 <div class="meta-row"><span><strong>YOLO</strong>ready</span><span><strong>Windows</strong>&amp; Linux</span><span><strong>Apache 2.0</strong>licensed</span></div>
                 <div class="window">
                     <div class="window-bar"><i></i><i></i><i></i><span>Jelibox — workspace</span></div>
-                    <img src="assets/visualize.png" alt="Jelibox annotation workspace with the class panel, image canvas, and information panel" width="1536" height="864">
+                    <img src="assets/annotate.jpg" alt="Jelibox annotation workspace with the class panel, image canvas with labeled boxes, and the information panel" width="1600" height="884">
                 </div>
             </div>
         </section>
 
         <div class="shell strip">
-            <div class="strip-item"><strong>Detect</strong><span>Bounding boxes with direct manipulation</span></div>
-            <div class="strip-item"><strong>Segment</strong><span>Polygon tools for precise masks</span></div>
-            <div class="strip-item"><strong>Auto-label</strong><span>YOLO-World or your own trained model</span></div>
-            <div class="strip-item"><strong>Export</strong><span>YOLO, COCO, or Pascal VOC</span></div>
+            <div class="strip-item"><strong>Import</strong><span>Any folder of images with Pascal VOC, YOLO or COCO labels</span></div>
+            <div class="strip-item"><strong>Auto-label</strong><span>Four assistants, from zero-shot prompts to SAM 2</span></div>
+            <div class="strip-item"><strong>Analyze</strong><span>A dashboard that shows what your dataset really holds</span></div>
+            <div class="strip-item"><strong>Export</strong><span>YOLO, COCO or VOC, augmented, to any drive</span></div>
         </div>
+
+        <section class="section shell" id="modes">
+            <div class="section-head"><span class="eyebrow">Auto-label</span><h2>Four ways to let a model do the boring part.</h2><p class="section-lead">Pick a mode when Jelibox starts and change it any time. Press <b>G</b> for the current image, or label the whole folder in one run.</p></div>
+            <div class="mode-grid">
+                <article class="mode"><span class="mode-num">1</span><h3>YOLO-World</h3><p>Describe it in words (&ldquo;white horse&rdquo;) and map each phrase to your classes. Or bring any Ultralytics model of your own.</p><p class="need">Nothing to download. Runs on a CPU.</p></article>
+                <article class="mode"><span class="mode-num">2</span><h3>LocateAnything</h3><p>NVIDIA LocateAnything-3B labels a whole folder from a list of categories, in English or Chinese.</p><p class="need">About 7 GB once. GPU with 8 GB+ recommended.</p></article>
+                <article class="mode"><span class="mode-num">3</span><h3>Custom Model</h3><p>Find people or bottles, then a small model you train gives each one <em>your</em> class: sleeping / working, Coca-Cola / Fanta.</p><p class="need">Train once on images you already labeled.</p></article>
+                <article class="mode"><span class="mode-num">4</span><h3>SAM 2 Dynamic</h3><p>No training. Annotate a few images and SAM 2 learns from each one, then finds the same objects in the next, as boxes or polygons.</p><p class="need">One SAM 2 model, 75&ndash;224 MB, downloaded once.</p></article>
+            </div>
+        </section>
+
+        <section class="section shell" id="tools">
+            <div class="section-head"><span class="eyebrow">Dataset tools</span><h2>Everything around the labels, built in.</h2><p class="section-lead">Most annotation tools stop at the box. Jelibox also helps you bring data in, understand it, and ship it.</p></div>
+
+            <div class="split">
+                <div class="split-text">
+                    <span class="feature-tag">Import</span>
+                    <h3>Bring any dataset in, safely.</h3>
+                    <p>Point <b>Add Workspace</b> at a folder. Jelibox searches every subfolder and shows what it found before it copies a single file.</p>
+                    <ul>
+                        <li>Images with Pascal VOC, YOLO or COCO labels, or images alone</li>
+                        <li>Classes are picked up from the annotations, in the order you want</li>
+                        <li>An optional prefix renames images and labels in order</li>
+                        <li>Annotations of a class your workspace does not have are flagged <em>first</em> and skipped, never mixed in silently</li>
+                    </ul>
+                </div>
+                <div class="shot portrait"><img src="assets/add-workspace.png" alt="The Add Workspace window showing 40 images and 3 classes found, with a warning that one class is not in the workspace" width="660" height="850" loading="lazy"></div>
+            </div>
+
+            <div class="split stack">
+                <div class="split-text">
+                    <span class="feature-tag">Analyze</span>
+                    <h3>Know your dataset before you train on it.</h3>
+                    <p>Select a workspace and open the dashboard: objects per class, size histograms, image resolutions, all in interactive charts.</p>
+                    <ul>
+                        <li>A warning appears when objects are smaller than a limit you choose (32 px by default)</li>
+                        <li><b>Simulate</b> a model input size such as 640 px and see how small your smallest objects become. It is calculated, so no image is copied or resized</li>
+                        <li>Compare 320 to 1280 in one table to pick the input size that fits</li>
+                        <li>Remove the tiny objects in one click, after a clear warning</li>
+                    </ul>
+                </div>
+                <div class="shot"><img src="assets/dashboard.png" alt="The Analyze Dataset dashboard with width and height histograms, a width by height scatter and a small-object warning" width="1475" height="1030" loading="lazy"></div>
+            </div>
+
+            <div class="split flip">
+                <div class="split-text">
+                    <span class="feature-tag">Export</span>
+                    <h3>Export augmented, and keep it where you want.</h3>
+                    <p>YOLO, Pascal VOC or COCO with a train / valid / test split you set with a slider.</p>
+                    <ul>
+                        <li>Augmentation: brightness, contrast, saturation, hue, blur, noise, grayscale, JPEG, flips and rotation. Boxes and polygons move with the picture</li>
+                        <li>Every effect has its own strength and chance; originals are always kept; a seed makes it repeatable</li>
+                        <li><b>Save to</b> any folder, such as an HDD, so archives stay off your SSD. Each export becomes a new <code>workspace-v5</code>, <code>-v6</code>&hellip; folder and nothing is overwritten</li>
+                    </ul>
+                </div>
+                <div class="shot portrait"><img src="assets/export.png" alt="The Export Dataset window with the Save to folder, the split slider and the augmentation options" width="700" height="905" loading="lazy"></div>
+            </div>
+        </section>
 
         <section class="section shell" id="features">
             <div class="section-head"><span class="eyebrow">Features</span><h2>Less friction between image and insight.</h2><p class="section-lead">Everything you need to annotate, inspect, train, and export without sending your dataset through a cloud service.</p></div>
-            <div class="feature-grid">
-                <article class="feature wide"><span class="feature-tag">Label Assistant</span><h3>Describe it, and Jelibox finds it</h3><p>Pick YOLO-World to detect objects from plain-text prompts, no training needed, and map each prompt to your own classes (for example “white horse” and “black horse” both become <b>horse</b>). Or switch to the model you trained in the workspace. Predictions merge with your existing boxes and skip anything that overlaps.</p></article>
-                <article class="feature"><span class="feature-tag">Privacy</span><h3>Local by design</h3><p>Your images, labels, and models stay on the machine you control.</p></article>
-                <article class="feature"><span class="feature-tag">Precision</span><h3>Box + polygon tools</h3><p>Edit coordinates directly with handles, zoom, visibility controls, and class management.</p></article>
+            <div class="feature-grid even">
+                <article class="feature"><span class="feature-tag">Privacy</span><h3>Local by design</h3><p>Your images, labels, and models stay on the machine you control. No account, no upload.</p></article>
+                <article class="feature"><span class="feature-tag">Precision</span><h3>Box + polygon tools</h3><p>Edit coordinates with handles, zoom, visibility controls and class management. Undo and redo everything with <code>Ctrl+Z</code> / <code>Ctrl+Y</code>.</p></article>
                 <article class="feature"><span class="feature-tag">Pipeline</span><h3>Train in context</h3><p>Go from annotations to Ultralytics training without leaving your workspace, and without duplicating your source images.</p></article>
-                <article class="feature"><span class="feature-tag">Output</span><h3>Flexible exports</h3><p>Prepare datasets in YOLO, COCO, or Pascal VOC formats for downstream tooling.</p></article>
-                <article class="feature"><span class="feature-tag">Comfort</span><h3>Light and dark themes</h3><p>A calm cream interface that is easy on the eyes, with a dark mode when you need it.</p></article>
-                <article class="feature"><span class="feature-tag">Access</span><h3>Open and practical</h3><p>Run the tool on Linux or Windows with installation scripts included in the repo.</p></article>
+                <article class="feature"><span class="feature-tag">Privacy tools</span><h3>ZeroFill masking</h3><p>Black out sensitive regions of an image locally before the dataset leaves your hands.</p></article>
+                <article class="feature"><span class="feature-tag">Speed</span><h3>Repeat and auto-label</h3><p>Repeat the previous image&rsquo;s annotations, or label the current image, or the whole dataset, with one key.</p></article>
+                <article class="feature"><span class="feature-tag">Comfort</span><h3>Light and dark themes</h3><p>A calm cream interface that is easy on the eyes, with a dark mode when you need it. Fits a 12-inch laptop screen.</p></article>
             </div>
         </section>
 
         <section class="section shell" id="workflow">
-            <div class="section-head"><span class="eyebrow">Workflow</span><h2>A loop that gets faster every round.</h2><p class="section-lead">Label a few images by hand, let a model help with the rest, and keep correcting. Each pass makes the next one quicker.</p></div>
+            <div class="section-head"><span class="eyebrow">Workflow</span><h2>A loop that gets faster every round.</h2><p class="section-lead">Label a few images by hand, let a model help with the rest, check the numbers, and keep correcting. Each pass makes the next one quicker.</p></div>
             <div class="loop">
+                <div class="step"><h3>Import</h3><p>Add a folder of images, with or without existing labels, from any common format.</p></div>
                 <div class="step"><h3>Annotate</h3><p>Draw boxes or polygons on a handful of images with keyboard-first controls.</p></div>
-                <div class="step"><h3>Assist</h3><p>Press <b>G</b> to let YOLO-World or your trained model label the current image.</p></div>
-                <div class="step"><h3>Train</h3><p>Train an Ultralytics model on your labels right from the workspace.</p></div>
-                <div class="step"><h3>Export</h3><p>Ship the dataset or the model in the format your pipeline expects.</p></div>
+                <div class="step"><h3>Assist</h3><p>Press <b>G</b> and let YOLO-World, LocateAnything, your own model or SAM 2 label the rest.</p></div>
+                <div class="step"><h3>Analyze</h3><p>Check class balance and object sizes, and choose a model input size that suits them.</p></div>
+                <div class="step"><h3>Export</h3><p>Ship an augmented dataset in the format your pipeline expects, or train right here.</p></div>
             </div>
         </section>
 
@@ -244,7 +338,7 @@
         </section>
 
         <section class="shell final-cta">
-            <h2>Build datasets with a little more control.</h2>
+            <h2>Build better datasets, on your own machine.</h2>
             <a class="button" href="https://github.com/Jelibox/Jelibox-client" target="_blank" rel="noopener noreferrer">Open Jelibox on GitHub ↗</a>
         </section>
     </main>

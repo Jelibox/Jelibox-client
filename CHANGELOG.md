@@ -9,10 +9,12 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Added
-- **Full YOLO training in the Custom Model mode.** The Train window now starts with a choice: **Head only** (as before) or **Full YOLO training**, which trains every layer with Ultralytics like the Train button of the other modes, with base model, square image size, epochs, batch, learning rate, freeze and an option to continue from the model trained here. The window shows a **table with one row per epoch** (box / cls / dfl loss, precision, recall, mAP50, mAP50-95, time) and the best epoch, a progress bar, the time left and Stop; the head run gets the same table. The best model is saved as `modelAssistant.pt` (the old one as `modelAssistant.prev.pt`) and selected as My trained model for YOLO-World mode.
+## [0.4.5] - 2026-10-11
 
-### Fixed
+### Added
+- **Full YOLO training in the Custom Model mode.** The Train window now starts with a choice: **Head only** (as before) or **Full YOLO training**, which trains every layer with Ultralytics like the Train button of the other modes, with base model, square image size, epochs, batch, learning rate, freeze and an option to continue from the model trained here. The window shows a **table with one row per epoch** (box / cls / dfl loss, precision, recall, mAP50, mAP50-95, time) and the best epoch, a progress bar, the time left and Stop; the head run gets the same table. The best model is saved as `modelAssistant.pt` (the old one as `modelAssistant.prev.pt`) and selected as My trained model for YOLO-World mode.
+
+### Fixed
 - The plain **Train** button (YOLO-World and the other modes) no longer fails on a computer without an NVIDIA GPU: it trains on the CPU when PyTorch has no GPU.
 
 ## [0.4.4] - 2026-10-10
@@ -116,7 +118,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.1...v0.4.2

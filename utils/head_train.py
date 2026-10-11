@@ -212,7 +212,7 @@ def train(job, emit=emit, should_stop=lambda: False):
          epochs=epochs, device=dev.type, batch=batch, imgsz=list(imgsz),
          head_params_m=round(sum(p.numel() for p in model.head.parameters()) / 1e6, 2))
 
-    best, best_epoch, stopped, last_metrics = -1.0, 0, False, None
+    best, best_epoch, stopped, last_metrics, ran = -1.0, 0, False, None, 0
     for ep in range(epochs):
         if should_stop():
             stopped = True
@@ -235,6 +235,9 @@ def train(job, emit=emit, should_stop=lambda: False):
             sched.step()
             run += loss.item()
             n += 1
+            if should_stop():                                  # "Finish early": this epoch ends here, but is still
+                stopped = True                                 # validated and saved like any other
+                break
         m = evaluate(model, vdl, nc, dev, amp)
         last_metrics = m
         ck = dict(head=model.head.state_dict(), names=classes,
@@ -246,10 +249,13 @@ def train(job, emit=emit, should_stop=lambda: False):
             torch.save(ck, os.path.join(out, "head_best.pt"))
         emit("epoch", epoch=ep + 1, epochs=epochs, loss=run / max(n, 1), acc=m["acc"], f1=m["f1"], best=is_best,
              recall=m["recall"], support=m["support"], seconds=time.time() - t0)
+        ran += 1
+        if stopped:
+            break
 
     if model.backbone.fingerprint() != fingerprint:
         raise RuntimeError("The detector's weights changed during training - this must never happen.")
-    summary = dict(best_f1=max(best, 0.0), best_epoch=best_epoch, epochs_run=ep + (0 if stopped else 1),
+    summary = dict(best_f1=max(best, 0.0), best_epoch=best_epoch, epochs_run=ran,
                    stopped=stopped, out_dir=out, has_head=os.path.isfile(os.path.join(out, "head_best.pt")),
                    classes=classes, last_recall=(last_metrics or {}).get("recall"),
                    last_support=(last_metrics or {}).get("support"))
@@ -264,8 +270,9 @@ def main(argv=None):
         return 2
     with open(argv[0], "r", encoding="utf-8") as f:
         job = json.load(f)
+    stop_file = job.get("stop_file")
     try:
-        train(job)
+        train(job, should_stop=lambda: bool(stop_file) and os.path.exists(stop_file))
     except Exception as exc:
         import traceback
         traceback.print_exc()

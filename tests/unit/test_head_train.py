@@ -237,6 +237,41 @@ class TrainerTests(unittest.TestCase):
         self.assertEqual(summary["epochs_run"], 1)
         self.assertTrue(summary["has_head"])
 
+    def test_finish_early_ends_an_epoch_in_the_middle_but_still_validates_and_saves_it(self):
+        asked = {"n": 0}
+
+        def should_stop():
+            asked["n"] += 1
+            return asked["n"] >= 3                          # the epoch's own check, then batch 1, then batch 2
+
+        events = []
+        with mock.patch.object(ht, "ultralytics_problem", return_value=None):
+            summary = ht.train(self.job(epochs=5, batch=2),
+                               emit=lambda event, **f: events.append({"event": event, **f}), should_stop=should_stop)
+        self.assertTrue(summary["stopped"])
+        self.assertEqual(summary["epochs_run"], 1, "the interrupted epoch counts: it was validated and saved")
+        self.assertTrue(summary["has_head"])
+        self.assertEqual([e["epoch"] for e in events if e["event"] == "epoch"], [1])
+        self.assertEqual(events[-1]["event"], "done")
+
+    def test_the_head_process_looks_for_the_stop_file_the_window_creates(self):
+        job = self.job()
+        job["stop_file"] = os.path.join(self.tmp.name, "finish_early.flag")
+        path = os.path.join(self.tmp.name, "job.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(job, f)
+        seen = {}
+
+        def fake_train(job, emit=None, should_stop=None):
+            seen["before"] = should_stop()
+            with open(job["stop_file"], "w") as f:
+                f.write("x")
+            seen["after"] = should_stop()
+
+        with mock.patch.object(ht, "train", fake_train):
+            self.assertEqual(ht.main([path]), 0)
+        self.assertEqual((seen["before"], seen["after"]), (False, True))
+
     def test_the_detector_changing_is_an_error(self):
         class Moving(FakeBackbone):
             calls = 0

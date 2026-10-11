@@ -16,9 +16,15 @@ CLASSES = ["cat", "dog"]
 
 
 class FakeTrainer:
-    def __init__(self, epoch, epochs, fitness, best_fitness, save_dir):
-        self.epoch, self.epochs, self.fitness, self.best_fitness, self.save_dir = epoch, epochs, fitness, best_fitness, save_dir
+    """The object Ultralytics hands to its callbacks; `stop` is the flag it checks between batches."""
+
+    def __init__(self, epochs, save_dir):
+        self.epochs, self.save_dir, self.stop = epochs, save_dir, False
         self.tloss = object()
+        self.epoch, self.fitness, self.best_fitness, self.metrics = 0, 0.0, 0.0, {}
+
+    def begin_epoch(self, epoch, fitness, best_fitness):
+        self.epoch, self.fitness, self.best_fitness = epoch, fitness, best_fitness
         self.metrics = {"metrics/precision(B)": 0.5 + epoch / 10, "metrics/recall(B)": 0.4 + epoch / 10,
                         "metrics/mAP50(B)": fitness, "metrics/mAP50-95(B)": fitness / 2, "val/box_loss": 9.0}
 
@@ -27,16 +33,23 @@ class FakeTrainer:
 
 
 class FakeYOLO:
-    """Stands in for ultralytics.YOLO: calls the registered callbacks the way a real run does."""
+    """Stands in for ultralytics.YOLO: calls the registered callbacks the way a real run does, including leaving
+    the batch loop and the epoch loop when `trainer.stop` is set, and the final evaluation afterwards."""
     fitnesses = [0.2, 0.5, 0.4]
+    batches = 3
+    on_batch = None                  # hook(epoch, batch, trainer) for a test that wants to act mid-epoch
     made = []
 
     def __init__(self, weights):
-        self.weights, self.callbacks, self.kwargs = weights, {}, None
+        self.weights, self.callbacks, self.kwargs, self.final_eval_ran = weights, {}, None, False
         FakeYOLO.made.append(self)
 
     def add_callback(self, event, fn):
         self.callbacks.setdefault(event, []).append(fn)
+
+    def _run(self, event, trainer):
+        for fn in self.callbacks.get(event, []):
+            fn(trainer)
 
     def train(self, **kw):
         self.kwargs = kw
@@ -44,15 +57,24 @@ class FakeYOLO:
         os.makedirs(os.path.join(save_dir, "weights"), exist_ok=True)
         with open(os.path.join(save_dir, "weights", "best.pt"), "wb") as f:
             f.write(b"best")
-        self.trainer = types.SimpleNamespace(save_dir=save_dir)
-        for fn in self.callbacks.get("on_train_start", []):
-            fn(self.trainer)
+        trainer = FakeTrainer(kw["epochs"], save_dir)
+        self.trainer = trainer
+        self._run("on_train_start", trainer)
         best = -1.0
         for e in range(kw["epochs"]):
             fitness = self.fitnesses[e % len(self.fitnesses)]
             best = max(best, fitness)
-            for fn in self.callbacks.get("on_fit_epoch_end", []):
-                fn(FakeTrainer(e, kw["epochs"], fitness, best, save_dir))
+            trainer.begin_epoch(e, fitness, best)
+            for b in range(self.batches):
+                if FakeYOLO.on_batch:
+                    FakeYOLO.on_batch(e, b, trainer)
+                self._run("on_train_batch_end", trainer)
+                if trainer.stop:
+                    break                                   # Ultralytics checks `stop` between batches
+            self._run("on_fit_epoch_end", trainer)           # validation has run, even for an interrupted epoch
+            if trainer.stop:
+                break
+        self.final_eval_ran = True
 
 
 class Base(unittest.TestCase):
@@ -69,12 +91,14 @@ class Base(unittest.TestCase):
                 f.write(f"{i % 2} 0.5 0.5 0.4 0.4\n")
         FakeYOLO.made.clear()
         FakeYOLO.fitnesses = [0.2, 0.5, 0.4]
+        FakeYOLO.on_batch = None
+        self.addCleanup(setattr, FakeYOLO, "on_batch", None)
 
     def job(self, **kw):
         job = {"kind": "yolo", "images_folders": [self.images], "labels_folder": self.labels, "classes": CLASSES,
                "init_weights": "yolo11s.pt", "imgsz": 640, "epochs": 3, "batch": 8, "lr": 0.001, "freeze": 0,
                "val_fraction": 0.2, "out_dir": self.out, "scratch_dir": os.path.join(self.out, "dataset"),
-               "workers": 1, "device": "cpu"}
+               "workers": 1, "device": "cpu", "stop_file": os.path.join(self.out, "finish_early.flag")}
         job.update(kw)
         return job
 
@@ -195,6 +219,69 @@ class TrainTests(Base):
             self.assertEqual(yj.pick_device(), "cpu")
         with mock.patch.dict(sys.modules, {"torch": None}):               # not installed
             self.assertEqual(yj.pick_device(), "cpu")
+
+
+class FinishEarlyTests(Base):
+    """The Finish early button: a file appears, the next batch sees it and Ultralytics wraps the run up properly."""
+
+    def flag_at(self, epoch, batch):
+        flag = os.path.join(self.out, "finish_early.flag")
+
+        def hook(e, b, trainer):
+            if (e, b) == (epoch, batch):
+                os.makedirs(self.out, exist_ok=True)
+                with open(flag, "w") as f:
+                    f.write("x")
+        FakeYOLO.on_batch = hook
+
+    def test_without_the_flag_the_run_goes_to_the_end(self):
+        summary, events = self.run_job(self.job(epochs=3))
+        self.assertFalse(summary["stopped"])
+        self.assertEqual(summary["epochs_run"], 3)
+        self.assertFalse(FakeYOLO.made[0].trainer.stop)
+
+    def test_the_flag_ends_the_run_in_the_middle_of_an_epoch_but_it_is_still_validated_and_evaluated(self):
+        self.flag_at(1, 1)                                   # epoch 2, second batch
+        summary, events = self.run_job(self.job(epochs=5))
+        model = FakeYOLO.made[0]
+        self.assertTrue(model.trainer.stop, "Ultralytics was told to stop")
+        self.assertTrue(model.final_eval_ran, "and then ran its usual final evaluation")
+        self.assertEqual([e["epoch"] for e in events if e["event"] == "epoch"], [1, 2],
+                         "the interrupted epoch is validated and reported like the others")
+        self.assertTrue(summary["stopped"])
+        self.assertEqual((summary["epochs_run"], summary["best_epoch"]), (2, 2))
+        self.assertTrue(summary["has_model"])
+        self.assertEqual(events[-1]["event"], "done")
+        said = [e["text"] for e in events if e["event"] == "status"]
+        self.assertTrue(any("Finishing early" in t for t in said), said)
+
+    def test_a_flag_that_appears_during_validation_is_seen_after_the_epoch(self):
+        FakeYOLO.batches = 1
+        self.addCleanup(setattr, FakeYOLO, "batches", 3)
+        flag = os.path.join(self.out, "finish_early.flag")
+        seen = []
+
+        def hook(e, b, trainer):
+            if e == 0:
+                os.makedirs(self.out, exist_ok=True)
+                with open(flag, "w") as f:
+                    f.write("x")
+        FakeYOLO.on_batch = hook
+        summary, _ = self.run_job(self.job(epochs=4))
+        self.assertTrue(summary["stopped"])
+        self.assertEqual(summary["epochs_run"], 1)
+
+    def test_the_end_of_the_flag_is_announced_once(self):
+        self.flag_at(0, 0)
+        _, events = self.run_job(self.job(epochs=3))
+        said = [e["text"] for e in events if e["event"] == "status" and "Finishing early" in e["text"]]
+        self.assertEqual(len(said), 1)
+
+    def test_a_job_without_a_stop_file_never_stops_early(self):
+        job = self.job(epochs=2)
+        del job["stop_file"]
+        summary, _ = self.run_job(job)
+        self.assertFalse(summary["stopped"])
 
 
 class MainTests(Base):

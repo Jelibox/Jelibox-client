@@ -30,7 +30,7 @@ from .image_manager import (repeat_last_annotations, delete_current_image,
                           save_and_backup_bboxes)
 from .TrainingConfigDialog import TrainingConfigDialog
 from .LabelAssistantDialog import open_label_assistant
-from .HeadTrainDialog import open_head_training
+from .HeadTrainDialog import open_head_training, open_model_training, build_yolo_job
 from . import export as export_module
 import threading
 import webbrowser
@@ -3315,28 +3315,6 @@ class AnnotationGUI:
     # ----------------------------------------------------------
     #  Training
     # ----------------------------------------------------------
-    def monitor_training_process(self):
-        if hasattr(state, "training_process"):
-            process = state.training_process
-            if process.poll() is None:
-                self.root.after(2000, self.monitor_training_process)
-            else:
-                state.training_running = False
-                exit_code = process.returncode
-                if exit_code == 0:
-                    messagebox.showinfo("Training Finished",
-                                        "✅ YOLO Training completed successfully!",
-                                        parent=self.root)
-                    print("[GUI] Training completed with exit code 0 (success)")
-                else:
-                    messagebox.showwarning(
-                        "Training Finished with Error",
-                        f"⚠️ Training process exited with code: {exit_code}\n\n"
-                        f"Check the terminal window for error details.",
-                        parent=self.root
-                    )
-                    print(f"[GUI] Training exited with code {exit_code} (possible error)")
-
     def start_training(self):
         global CLASSLIST, model_folder, model_path
         self.save_current()
@@ -3399,69 +3377,32 @@ class AnnotationGUI:
         current_imgsz = config['imgsz']
         selected_base = config.get('base_model')
 
-        state.training_running = True
-        train_script = os.path.join(os.path.dirname(__file__), "training.py")
-        dataset_root = yolo_dataset_folder
         image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
         image_folders = sorted({os.path.dirname(r['source'])
                                 for r in self._find_workspace_images(image_exts)})
         if not image_folders:
             image_folders = [input_folder]
-        class_args = list(CLASSLIST)
+        # an existing model is trained on (it keeps what it learned), otherwise the base model from the dialog
+        default_base = "yolo11s-seg.pt" if model_type == "seg" else "yolo11s.pt"
+        init_model = model_path if os.path.exists(model_path) else (selected_base or default_base)
+        job = build_yolo_job(
+            images_folders=image_folders, labels_folder=yolo_labels_folder, classes=list(CLASSLIST),
+            init_weights=init_model, imgsz=current_imgsz, epochs=current_epoch, batch=current_batch,
+            lr=config['lr0'], freeze=config['freeze'], weight_decay=config['weight_decay'], val_fraction=0.3,
+            out_dir=os.path.join(model_folder, "yolo_run"))
 
-        cmd = [
-            sys.executable, train_script,
-            "--dataset_root",   dataset_root,
-            "--images_folders", *image_folders,
-            "--labels_folder",  yolo_labels_folder,
-            "--model_type",     model_type,
-            "--model_path",     model_path,
-            "--model_folder",   model_folder,
-            "--epochs",         str(current_epoch),
-            "--batch",          str(current_batch),
-            "--imgsz",          str(current_imgsz),
-            "--freeze",         str(config['freeze']),
-            "--lr0",            str(config['lr0']),
-            "--weight_decay",   str(config['weight_decay']),
-        ]
-        if selected_base:
-            cmd += ["--base_model", selected_base]
-        cmd += ["--classlist"] + class_args
+        def finished(_installed):
+            state.training_running = False
+            state.training_process = None
 
-        try:
-            if shutil.which("gnome-terminal"):
-                terminal_cmd = ["gnome-terminal", "--wait", "--"] + cmd
-            elif shutil.which("xterm"):
-                terminal_cmd = ["xterm", "-hold", "-e"] + cmd
-            elif shutil.which("konsole"):
-                terminal_cmd = ["konsole", "-e"] + cmd
-            else:
-                terminal_cmd = cmd
-
-            print(f"[GUI] Training command: {' '.join(terminal_cmd)}")
-            print(f"[GUI] Training script path: {train_script}")
-            print(f"[GUI] Script exists: {os.path.exists(train_script)}")
-
-            process = subprocess.Popen(terminal_cmd)
-            state.training_process = process
-
-            messagebox.showinfo(
-                "Training Started",
-                f"Training started in new terminal!\n\n"
-                f"🧠 Base Model  : {selected_base if selected_base else 'Existing model (continue)'}\n"
-                f"📐 Input Size  : {current_imgsz} px\n"
-                f"📊 Epochs      : {current_epoch}\n"
-                f"📦 Batch Size  : {current_batch}\n\n"
-                f"Check terminal for progress.",
-                parent=self.root
-            )
-            self.monitor_training_process()
-
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to start training:\n{str(e)}",
-                                 parent=self.root)
-
-        state.training_running = False
+        # the progress (a row per epoch) is shown in a window of its own, not in a terminal
+        state.training_running = True
+        dlg = open_model_training(self.root, image_folders, yolo_labels_folder, model_folder, job, model_path,
+                                  on_done=finished)
+        if dlg.proc is None:
+            state.training_running = False
+        else:
+            state.training_process = dlg.proc.proc
 
     def _train_head(self):
         """Custom Model mode: Train fits a head on the frozen detector, or (a choice in its window) trains a

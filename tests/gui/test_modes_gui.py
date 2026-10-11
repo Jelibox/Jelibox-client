@@ -360,6 +360,15 @@ class DialogScrollTests(ModeGuiBase):
         dlg.win.destroy()
 
 
+def buttons_fit(test, dlg):
+    """Finish early / Stop now / Close are all visible and inside the window (they were cut off once)."""
+    pump(dlg.win, 0.3)
+    bottom = dlg.win.winfo_rooty() + dlg.win.winfo_height()
+    for button in (dlg.finish_btn, dlg.stop_btn, dlg.close_btn):
+        test.assertTrue(button.winfo_viewable(), button.cget("text"))
+        test.assertLessEqual(button.winfo_rooty() + button.winfo_height(), bottom, button.cget("text"))
+
+
 FAKE_TRAINER = r'''
 import json, os, sys, time
 job = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -377,11 +386,22 @@ ev("start", train_images=9, val_images=3, classes=job["classes"], counts=[5, 4],
 for i in range(1, job["epochs"] + 1):
     if mode == "slow" and i == 2:
         time.sleep(60)
+    stop_now = False
+    if mode == "graceful":                      # an epoch that only the stop file ends early
+        for _ in range(150):
+            if os.path.exists(job["stop_file"]):
+                stop_now = True
+                break
+            time.sleep(0.1)
     print("some plain log line", flush=True)
     with open(os.path.join(job["out_dir"], "head_best.pt"), "wb") as f:
         f.write(b"head-%d" % i)
     ev("epoch", epoch=i, epochs=job["epochs"], loss=1.0 / i, acc=0.5, f1=0.4 + i / 10, best=True,
        recall=[0.5, 0.6], support=[5, 4], seconds=0.01)
+    if stop_now:
+        ev("done", best_f1=0.5, best_epoch=i, epochs_run=i, stopped=True, out_dir=job["out_dir"], has_head=True,
+           classes=job["classes"], last_recall=[0.5, 0.6], last_support=[5, 4])
+        raise SystemExit(0)
 ev("done", best_f1=0.9, best_epoch=job["epochs"], epochs_run=job["epochs"], stopped=False, out_dir=job["out_dir"],
    has_head=True, classes=job["classes"], last_recall=[0.5, 0.6], last_support=[5, 4])
 '''
@@ -558,6 +578,74 @@ class HeadTrainDialogTests(ModeGuiBase):
             self.assertTrue(pump_until(self.root, lambda: dlg.finished, 20))
         self.assertEqual(self.read_bytes(os.path.join(ctx.model_dir, "head_best.pt")), b"head-1")
         self.assertIn("kept", dlg.title_label.cget("text"))
+        dlg.win.destroy()
+
+    def test_the_progress_window_always_shows_its_buttons_whatever_the_text_says(self):
+        dlg = self.open()
+        dlg.epochs_var.set(3)
+        dlg.save()
+        buttons_fit(self, dlg)
+        self.assertTrue(pump_until(self.root, lambda: dlg.finished, 30))
+        buttons_fit(self, dlg)                                    # the long ending text is in
+        dlg.win.destroy()
+
+    def test_the_window_has_finish_early_and_stop_now_buttons(self):
+        dlg = self.open()
+        dlg.epochs_var.set(5)
+        with mock.patch.dict(os.environ, {"FAKE_TRAIN_MODE": "slow"}):
+            dlg.save()
+            self.assertEqual((dlg.finish_btn.cget("text"), dlg.stop_btn.cget("text")), ("Finish early", "Stop now"))
+            self.assertEqual((str(dlg.finish_btn.cget("state")), str(dlg.stop_btn.cget("state"))), ("normal", "normal"))
+            self.assertTrue(pump_until(self.root, lambda: float(dlg.bar.cget("value")) >= 1, 20))
+            dlg._stop()
+            self.assertTrue(pump_until(self.root, lambda: dlg.finished, 20))
+        self.assertEqual((str(dlg.finish_btn.cget("state")), str(dlg.stop_btn.cget("state"))), ("disabled", "disabled"))
+        dlg.win.destroy()
+
+    def test_finish_early_wraps_the_head_run_up_and_installs_the_head(self):
+        dlg = self.open()
+        dlg.epochs_var.set(5)
+        with mock.patch.dict(os.environ, {"FAKE_TRAIN_MODE": "graceful"}):
+            dlg.save()
+            self.addCleanup(lambda: dlg.proc.stop())
+            dlg._finish_early()
+            self.assertEqual((dlg.finish_btn.cget("text"), str(dlg.finish_btn.cget("state"))), ("Finishing ...", "disabled"))
+            self.assertIn("Finishing early", dlg.status_label.cget("text"))
+            self.assertEqual(str(dlg.stop_btn.cget("state")), "normal", "Stop now still ends it at once")
+            self.assertTrue(pump_until(self.root, lambda: dlg.finished, 30), "the run never ended")
+        self.assertEqual(dlg.title_label.cget("text"), "Finished early")
+        self.assertFalse(dlg.stopping)
+        self.assertEqual(self.read_bytes(os.path.join(ctx.model_dir, "head_best.pt")), b"head-1")
+        self.assertEqual(len(dlg.table.get_children()), 1, "the interrupted epoch is in the table")
+        self.assertIn("epoch 1", dlg.status_label.cget("text"))
+        self.assertFalse(os.path.exists(os.path.join(ctx.model_dir, "head_run", "finish_early.flag")), "flag cleaned up")
+        self.assertTrue(wc.get_assistant(WORKSPACE)["custom_head"]["head_path"].endswith("head_best.pt"))
+        dlg.win.destroy()
+
+    def test_finish_early_twice_or_after_stop_now_does_nothing(self):
+        dlg = self.open()
+        dlg.epochs_var.set(5)
+        with mock.patch.dict(os.environ, {"FAKE_TRAIN_MODE": "graceful"}):
+            dlg.save()
+            self.addCleanup(lambda: dlg.proc.stop())        # whatever happens, no trainer is left running
+            dlg._finish_early()
+            flag = os.path.join(ctx.model_dir, "head_run", "finish_early.flag")
+            self.assertTrue(os.path.exists(flag))
+            stamp = os.stat(flag).st_mtime_ns
+            with mock.patch("builtins.open", side_effect=AssertionError("a second press must not touch the file")):
+                dlg._finish_early()                        # the second press is ignored
+            self.assertTrue(dlg.finishing)
+            self.assertEqual(os.stat(flag).st_mtime_ns, stamp)
+            self.assertTrue(pump_until(self.root, lambda: dlg.finished, 30))
+        dlg.win.destroy()
+
+    def test_the_job_names_the_file_the_finish_early_button_creates(self):
+        dlg = self.open()
+        dlg.epochs_var.set(1)
+        self.run_to_end(dlg)
+        with open(os.path.join(ctx.model_dir, "head_run", "job.json"), encoding="utf-8") as f:
+            job = __import__("json").load(f)
+        self.assertEqual(job["stop_file"], os.path.join(ctx.model_dir, "head_run", "finish_early.flag"))
         dlg.win.destroy()
 
     def test_closing_while_training_asks_first(self):
@@ -1120,6 +1208,165 @@ class MainWindowModeTests(unittest.TestCase):
         self.assertTrue(yolo.called)
         self.assertFalse(head.called)
 
+    # ------------------------------------------------------------ the plain Train button: a window, not a terminal
+    def _plain_train(self, mode="ok", cfg=None, polygon=False, slow=False):
+        """Press Train in YOLO-World mode with a fake settings dialog and a fake trainer process. Returns the
+        progress window the button opened (and keeps the Popen mock, which must stay unused)."""
+        import sys
+        from utils import HeadTrainDialog as htd
+        am.set_mode(am.MODE_YOLO_WORLD)
+        script = os.path.join(ctx.root, "fake_yolo_trainer.py")
+        with open(script, "w") as f:
+            f.write(FAKE_YOLO_TRAINER)
+        cfg = cfg or {"epoch": 2, "batch": 4, "imgsz": 320, "freeze": 0, "lr0": 0.001, "weight_decay": 0.0005,
+                      "base_model": "yolo11n.pt"}
+        dialog = mock.Mock()
+        dialog.show.return_value = cfg
+        captured = []
+        real = htd.open_model_training
+
+        def spy(*a, **k):
+            dlg = real(*a, **k)
+            captured.append(dlg)
+            return dlg
+
+        self.addCleanup(setattr, config.state, "annotation_mode", config.state.annotation_mode)
+        config.state.annotation_mode = "polygon" if polygon else "bbox"
+        with mock.patch("utils.AnnotationGUI.TrainingConfigDialog", return_value=dialog), \
+                mock.patch("utils.HeadTrainDialog.default_command",
+                           lambda job_path: [sys.executable, "-u", script, job_path]), \
+                mock.patch("utils.AnnotationGUI.open_model_training", spy), \
+                mock.patch("utils.AnnotationGUI.subprocess.Popen", wraps=__import__("subprocess").Popen) as popen, \
+                mock.patch.dict(os.environ, {"FAKE_TRAIN_MODE": mode}):
+            self.gui.start_training()
+        self.popen = popen
+        self.assertEqual(len(captured), 1, "the Train button opened one progress window")
+        return captured[0]
+
+    def _clean_trained_model(self):
+        import shutil
+        for name in ("modelAssistant.pt", "modelAssistant.prev.pt"):
+            try:
+                os.remove(os.path.join(ctx.model_dir, name))
+            except OSError:
+                pass
+        shutil.rmtree(os.path.join(ctx.model_dir, "yolo_run"), ignore_errors=True)
+
+    def _wait(self, dlg, timeout=30):
+        self.assertTrue(pump_until(self.root, lambda: dlg.finished, timeout), "the training never ended")
+
+    def test_train_in_yolo_world_mode_opens_a_progress_window_instead_of_a_terminal(self):
+        self._clean_trained_model()
+        self.addCleanup(self._clean_trained_model)
+        dlg = self._plain_train()
+        commands = [c[0][0] for c in self.popen.call_args_list]               # the argument lists, not the environment
+        self.assertEqual(len(commands), 1, "only the training process itself is started: " + str(commands))
+        self.assertFalse(any(word in " ".join(commands[0]) for word in ("terminal", "xterm", "konsole", "training.py")),
+                         commands)
+        self.assertEqual(dlg.win.title(), "Train model")
+        self.assertEqual(dlg.active_kind, "yolo")
+        self.assertIsNone(dlg.win.grab_status(), "the annotation window stays usable while it trains")
+        self.assertTrue(config.state.training_running)
+        self.assertIs(config.state.training_process, dlg.proc.proc)
+        self._wait(dlg)
+        rows = [dlg.table.item(i)["values"] for i in dlg.table.get_children()]
+        self.assertEqual([r[0] for r in rows], [1, 2], "a table row per epoch")
+        self.assertEqual(dlg.title_label.cget("text"), "Training finished")
+        with open(config.model_path, "rb") as f:
+            self.assertEqual(f.read(), b"model-2")
+        self.assertIn("G and the full-dataset run use it", dlg.status_label.cget("text"))
+        self.assertFalse(config.state.training_running)
+        self.assertIsNone(config.state.training_process)
+        a = wc.get_assistant(WORKSPACE)
+        self.assertEqual(a["provider"], wc.PROVIDER_CUSTOM)
+        dlg.win.destroy()
+
+    def test_the_settings_of_the_old_dialog_become_the_job(self):
+        self._clean_trained_model()
+        self.addCleanup(self._clean_trained_model)
+        cfg = {"epoch": 3, "batch": 8, "imgsz": 416, "freeze": 10, "lr0": 0.002, "weight_decay": 0.001,
+               "base_model": "yolov8s.pt"}
+        dlg = self._plain_train(cfg=cfg)
+        self._wait(dlg)
+        with open(os.path.join(ctx.model_dir, "yolo_run", "job.json"), encoding="utf-8") as f:
+            job = __import__("json").load(f)
+        self.assertEqual((job["kind"], job["init_weights"], job["epochs"], job["batch"], job["imgsz"], job["freeze"]),
+                         ("yolo", "yolov8s.pt", 3, 8, 416, 10))
+        self.assertEqual((job["lr"], job["weight_decay"], job["val_fraction"]), (0.002, 0.001, 0.3))
+        self.assertEqual(job["classes"], config.class_manager.get_classes())
+        self.assertEqual(job["labels_folder"], config.yolo_labels_folder)
+        self.assertTrue(job["images_folders"])
+        dlg.win.destroy()
+
+    def test_an_existing_model_is_trained_on_and_a_polygon_workspace_defaults_to_a_seg_model(self):
+        self._clean_trained_model()
+        self.addCleanup(self._clean_trained_model)
+        os.makedirs(ctx.model_dir, exist_ok=True)
+        with open(config.model_path, "wb") as f:
+            f.write(b"old model")
+        dlg = self._plain_train()
+        self._wait(dlg)
+        with open(os.path.join(ctx.model_dir, "yolo_run", "job.json"), encoding="utf-8") as f:
+            self.assertEqual(__import__("json").load(f)["init_weights"], config.model_path)
+        with open(os.path.join(ctx.model_dir, "modelAssistant.prev.pt"), "rb") as f:
+            self.assertEqual(f.read(), b"old model", "the model that was there is kept")
+        dlg.win.destroy()
+        self._clean_trained_model()
+        cfg = {"epoch": 1, "batch": 4, "imgsz": 320, "freeze": 0, "lr0": 0.001, "weight_decay": 0.0005}   # no base chosen
+        dlg = self._plain_train(cfg=cfg, polygon=True)
+        self._wait(dlg)
+        with open(os.path.join(ctx.model_dir, "yolo_run", "job.json"), encoding="utf-8") as f:
+            self.assertEqual(__import__("json").load(f)["init_weights"], "yolo11s-seg.pt")
+        dlg.win.destroy()
+
+    def test_a_second_train_while_one_runs_is_refused_and_stop_frees_the_button(self):
+        self._clean_trained_model()
+        self.addCleanup(self._clean_trained_model)
+        cfg = {"epoch": 5, "batch": 4, "imgsz": 320, "freeze": 0, "lr0": 0.001, "weight_decay": 0.0005,
+               "base_model": "yolo11n.pt"}
+        dlg = self._plain_train(mode="slow", cfg=cfg)
+        self.assertTrue(pump_until(self.root, lambda: float(dlg.bar.cget("value")) >= 1, 20), "epoch 1 never came")
+        self.rec.calls.clear()
+        with mock.patch("utils.AnnotationGUI.TrainingConfigDialog") as again:
+            self.gui.start_training()
+        self.assertFalse(again.called)
+        self.assertIn("already running", self.rec.of("showwarning")[-1][2])
+        dlg._stop()
+        self._wait(dlg, 20)
+        self.assertFalse(config.state.training_running)
+        self.assertIsNone(config.state.training_process)
+        with open(config.model_path, "rb") as f:
+            self.assertEqual(f.read(), b"model-1", "the best model so far is kept")
+        dlg.win.destroy()
+
+    def test_finish_early_works_in_the_window_of_the_plain_train_button_too(self):
+        self._clean_trained_model()
+        self.addCleanup(self._clean_trained_model)
+        cfg = {"epoch": 5, "batch": 4, "imgsz": 320, "freeze": 0, "lr0": 0.001, "weight_decay": 0.0005,
+               "base_model": "yolo11n.pt"}
+        dlg = self._plain_train(mode="graceful", cfg=cfg)
+        dlg._finish_early()
+        self._wait(dlg, 30)
+        self.assertEqual(dlg.title_label.cget("text"), "Finished early")
+        with open(config.model_path, "rb") as f:
+            self.assertEqual(f.read(), b"model-1")
+        self.assertIn("G and the full-dataset run use it", dlg.status_label.cget("text"))
+        self.assertFalse(config.state.training_running)
+        self.assertIsNone(config.state.training_process)
+        dlg.win.destroy()
+
+    def test_a_failed_training_is_explained_in_the_window_and_frees_the_button(self):
+        self._clean_trained_model()
+        self.addCleanup(self._clean_trained_model)
+        dlg = self._plain_train(mode="error")
+        self._wait(dlg)
+        self.assertEqual(dlg.title_label.cget("text"), "Training failed")
+        self.assertIn("CUDA out of memory", dlg.status_label.cget("text"))
+        self.assertFalse(os.path.exists(config.model_path))
+        self.assertFalse(config.state.training_running)
+        self.assertIsNone(config.state.training_process)
+        dlg.win.destroy()
+
 
 
 FAKE_YOLO_TRAINER = r"""
@@ -1142,11 +1389,23 @@ os.makedirs(weights, exist_ok=True)
 for i in range(1, job["epochs"] + 1):
     if mode == "slow" and i == 2:
         time.sleep(60)
+    stop_now = False
+    if mode == "graceful":                      # an epoch that only the stop file ends early
+        for _ in range(150):
+            if os.path.exists(job["stop_file"]):
+                stop_now = True
+                break
+            time.sleep(0.1)
     print("some plain log line", flush=True)
     with open(os.path.join(weights, "best.pt"), "wb") as f:
         f.write(b"model-%d" % i)
     ev("epoch", epoch=i, epochs=job["epochs"], box_loss=1.0 / i, cls_loss=0.5 / i, dfl_loss=0.9 / i, precision=0.5,
        recall=0.4, map50=0.1 * i, map5095=0.05 * i, fitness=0.1 * i, best=(i != 2), seconds=0.01)
+    if stop_now:
+        ev("done", best_epoch=i, best_fitness=0.1 * i, epochs_run=i, stopped=True, out_dir=job["out_dir"],
+           weights=os.path.join(weights, "best.pt"), has_model=True, classes=job["classes"], map50=0.1 * i,
+           map5095=0.05 * i)
+        raise SystemExit(0)
 ev("done", best_epoch=job["epochs"], best_fitness=0.3, epochs_run=job["epochs"], stopped=False, out_dir=job["out_dir"],
    weights=os.path.join(weights, "best.pt"), has_model=True, classes=job["classes"], map50=0.1 * job["epochs"],
    map5095=0.05 * job["epochs"])
@@ -1395,6 +1654,56 @@ class FullYoloTrainingTests(ModeGuiBase):
         self.assertEqual(self.read_bytes(self.model_file), b"model-1")
         self.assertIn("best model so far was kept", dlg.title_label.cget("text"))
         self.assertEqual(wc.get_assistant(WORKSPACE)["provider"], wc.PROVIDER_CUSTOM)
+        dlg.win.destroy()
+
+    def test_finish_early_wraps_the_full_training_up_and_installs_the_model(self):
+        dlg = self.open()
+        dlg.epochs_var.set(5)
+        with mock.patch.dict(os.environ, {"FAKE_TRAIN_MODE": "graceful"}):
+            dlg.save()
+            self.addCleanup(lambda: dlg.proc.stop())
+            dlg._finish_early()
+            self.assertEqual((dlg.finish_btn.cget("text"), str(dlg.finish_btn.cget("state"))), ("Finishing ...", "disabled"))
+            self.assertTrue(pump_until(self.root, lambda: dlg.finished, 30), "the run never ended")
+        self.assertEqual(dlg.title_label.cget("text"), "Finished early")
+        self.assertIn("then evaluated", dlg.status_label.cget("text"))
+        self.assertIn("My trained model", dlg.status_label.cget("text"))
+        self.assertEqual(self.read_bytes(self.model_file), b"model-1")
+        self.assertEqual(len(dlg.table.get_children()), 1)
+        self.assertEqual(float(dlg.bar.cget("value")), 1.0)
+        self.assertFalse(os.path.exists(os.path.join(ctx.model_dir, "yolo_run", "finish_early.flag")))
+        self.assertEqual(wc.get_assistant(WORKSPACE)["provider"], wc.PROVIDER_CUSTOM)
+        self.assertEqual(dlg.done_calls, [self.model_file])
+        dlg.win.destroy()
+
+    def test_stop_now_after_finish_early_still_ends_it_at_once(self):
+        dlg = self.open()
+        dlg.epochs_var.set(5)
+        with mock.patch.dict(os.environ, {"FAKE_TRAIN_MODE": "slow"}):
+            dlg.save()
+            self.assertTrue(pump_until(self.root, lambda: float(dlg.bar.cget("value")) >= 1, 20))
+            dlg._finish_early()                            # the slow fake ignores the file
+            dlg._stop()
+            self.assertTrue(pump_until(self.root, lambda: dlg.finished, 20))
+        self.assertIn("kept", dlg.title_label.cget("text"))
+        self.assertNotEqual(dlg.title_label.cget("text"), "Finished early")
+        dlg.win.destroy()
+
+    def test_the_job_names_the_file_the_finish_early_button_creates(self):
+        dlg = self.open()
+        dlg.epochs_var.set(1)
+        self.run_to_end(dlg)
+        self.assertEqual(self.job()["stop_file"], os.path.join(ctx.model_dir, "yolo_run", "finish_early.flag"))
+        dlg.win.destroy()
+
+    def test_the_progress_window_always_shows_its_buttons_whatever_the_text_says(self):
+        dlg = self.open()
+        dlg.epochs_var.set(3)
+        dlg.save()
+        buttons_fit(self, dlg)
+        self.assertTrue(pump_until(self.root, lambda: dlg.finished, 30))
+        buttons_fit(self, dlg)                                    # the long ending text is in, the table has rows
+        self.assertEqual(len(dlg.table.get_children()), 3)
         dlg.win.destroy()
 
     def test_the_head_run_still_has_a_table_too(self):

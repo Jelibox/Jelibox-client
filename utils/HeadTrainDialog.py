@@ -58,6 +58,11 @@ def default_command(job_path):
     return [sys.executable, "-u", "-m", module, job_path]
 
 
+def stop_file_for(out_dir):
+    """The file the window creates to say "Finish early"; the training process looks for it after every batch."""
+    return os.path.join(out_dir, "finish_early.flag")
+
+
 def build_job(*, images_folders, labels_folder, classes, weights, taps, imgsz, epochs, batch, lr, class_weights,
               hflip, val_fraction, out_dir, base_dir=BASE_DIR, workers=2):
     return {
@@ -65,18 +70,19 @@ def build_job(*, images_folders, labels_folder, classes, weights, taps, imgsz, e
         "weights": weights, "detectors_dir": os.path.join(base_dir, "models", "_detectors"),
         "taps": list(taps), "imgsz": list(imgsz), "epochs": int(epochs), "batch": int(batch), "lr": float(lr),
         "workers": workers, "class_weights": bool(class_weights), "hflip": bool(hflip),
-        "val_fraction": float(val_fraction), "out_dir": out_dir,
+        "val_fraction": float(val_fraction), "out_dir": out_dir, "stop_file": stop_file_for(out_dir),
     }
 
 
 def build_yolo_job(*, images_folders, labels_folder, classes, init_weights, imgsz, epochs, batch, lr, freeze,
-                   val_fraction, out_dir, workers=1):
+                   val_fraction, out_dir, workers=1, weight_decay=0.0005):
     """The job file of a full YOLO training (see utils/yolo_train_job.py)."""
     return {
         "kind": "yolo", "images_folders": list(images_folders), "labels_folder": labels_folder,
         "classes": list(classes), "init_weights": init_weights, "imgsz": int(imgsz), "epochs": int(epochs),
         "batch": int(batch), "lr": float(lr), "freeze": int(freeze), "val_fraction": float(val_fraction),
-        "out_dir": out_dir, "scratch_dir": os.path.join(out_dir, "dataset"), "workers": workers,
+        "weight_decay": float(weight_decay), "out_dir": out_dir, "scratch_dir": os.path.join(out_dir, "dataset"),
+        "workers": workers, "stop_file": stop_file_for(out_dir),
     }
 
 
@@ -215,7 +221,12 @@ class HeadTrainDialog(_Dialog):
     SAVE_TEXT = "Start training"
 
     def __init__(self, parent, images_folders, labels_folder, model_folder, command=None, on_done=None,
-                 model_path=None, task="detect"):
+                 model_path=None, task="detect", preset=None, title=None):
+        """`preset` = a ready full-training job (the plain Train button's settings): the setup part is skipped, the
+        window goes straight to its progress view and does not hold the annotation window while it runs."""
+        if title:
+            self.TITLE = title
+        self.preset = preset
         self.images_folders, self.labels_folder, self.model_folder = list(images_folders), labels_folder, model_folder
         self.run_dir = os.path.join(model_folder, "head_run")
         self.yolo_dir = os.path.join(model_folder, "yolo_run")
@@ -226,7 +237,8 @@ class HeadTrainDialog(_Dialog):
         self.proc = None
         self.running = False
         self.finished = False
-        self.stopping = False
+        self.stopping = False                # Stop now: the process was killed
+        self.finishing = False               # Finish early: the process was asked to wrap up
         self.result = None
         self.error = None
         self.active_kind = "head"            # what the run in progress (or the last one) is
@@ -234,9 +246,21 @@ class HeadTrainDialog(_Dialog):
         self.pairs = head_data.labelled_pairs(self.images_folders, self.labels_folder)
         super().__init__(parent)
         self._built = True
-        self.win.title("Train custom model")
+        self.win.title("Train model" if preset else "Train custom model")
         self.win.bind('<Escape>', lambda e: self._close())
         self.win.protocol("WM_DELETE_WINDOW", self._close)
+        if preset:
+            self._start_preset()
+
+    def _start_preset(self):
+        job = self.preset
+        os.makedirs(self.yolo_dir, exist_ok=True)
+        shutil.rmtree(os.path.join(self.yolo_dir, RUN_NAME), ignore_errors=True)      # an older run must not pass for this one
+        self._launch(job, "yolo", self.yolo_dir, int(job["epochs"]))
+        if self.proc is None:                                    # could not start: the error box said why
+            self.win.destroy()
+            return
+        self.win.grab_release()                                  # hours of training must not lock the annotation window
 
     # ---------------------------------------------------------- setup view
     def build(self, body):
@@ -549,7 +573,15 @@ class HeadTrainDialog(_Dialog):
         shutil.rmtree(os.path.join(self.yolo_dir, RUN_NAME), ignore_errors=True)   # an older run must not pass for this one
         self._launch(job, "yolo", self.yolo_dir, epochs)
 
+    def _remove_flag(self):
+        try:
+            os.remove(stop_file_for(self.active_dir))
+        except OSError:
+            pass
+
     def _launch(self, job, kind, run_dir, epochs):
+        self.active_dir = run_dir
+        self._remove_flag()                                      # a flag left by an older run must not end this one
         job_path = os.path.join(run_dir, "job.json")
         with open(job_path, "w", encoding="utf-8") as f:
             json.dump(job, f, indent=2)
@@ -591,14 +623,16 @@ class HeadTrainDialog(_Dialog):
         self.bar = ttk.Progressbar(view, mode='determinate', maximum=self.total_epochs, length=self.WIDTH - 60,
                                    style='Jelibox.Horizontal.TProgressbar')
         self.bar.pack(fill=tk.X)
-        self.stats_label = tk.Label(view, text="", bg=C_BASE, fg=C_TXT1, font=('Segoe UI', 10), anchor='w',
+        self.stats_label = tk.Label(view, text="\n\n ", bg=C_BASE, fg=C_TXT1, font=('Segoe UI', 10), anchor='w',
                                     justify=tk.LEFT, wraplength=self.WIDTH - 60)
         self.stats_label.pack(fill=tk.X, pady=(10, 4))
         # one row per finished epoch
         columns = YOLO_COLUMNS if yolo else HEAD_COLUMNS
         table_box = tk.Frame(view, bg=C_BORDER)
         table_box.pack(fill=tk.X, pady=(4, 6))
-        self.table = ttk.Treeview(table_box, columns=[c[0] for c in columns], show='headings', height=8,
+        small_screen = self.win.winfo_screenheight() < 900             # a 12-inch laptop: shorter table and log
+        self.table = ttk.Treeview(table_box, columns=[c[0] for c in columns], show='headings',
+                                  height=6 if small_screen else 8,
                                   style='Jelibox.Treeview', selectmode='none')
         for key, title, width in columns:
             self.table.heading(key, text=title)
@@ -611,7 +645,7 @@ class HeadTrainDialog(_Dialog):
         self.table.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=1, pady=1)
         box = tk.Frame(view, bg=C_BORDER)
         box.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-        self.log = tk.Text(box, height=6, bg=C_CARD2, fg=C_TXT2, font=('Consolas', 8), relief=tk.FLAT, wrap='none',
+        self.log = tk.Text(box, height=4 if small_screen else 6, bg=C_CARD2, fg=C_TXT2, font=('Consolas', 8), relief=tk.FLAT, wrap='none',
                            state=tk.DISABLED, highlightthickness=0)
         scroll = tk.Scrollbar(box, command=self.log.yview, width=10, bg=C_BORDER, troughcolor=C_CARD2, relief=tk.FLAT)
         self.log.configure(yscrollcommand=scroll.set)
@@ -619,14 +653,23 @@ class HeadTrainDialog(_Dialog):
         self.log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=1, pady=1)
         buttons = tk.Frame(view, bg=C_BASE)
         buttons.pack(fill=tk.X)
-        self.stop_btn = tk.Button(buttons, text="Stop", command=self._stop, bg=C_AMBER, fg=C_ON_ACCENT,
+        self.finish_btn = tk.Button(buttons, text="Finish early", command=self._finish_early, bg=C_ACCENT,
+                                    fg=C_ON_ACCENT, font=('Segoe UI', 9, 'bold'), relief=tk.FLAT, cursor='hand2',
+                                    borderwidth=0, activebackground=C_ACCENT)
+        self.finish_btn.pack(side=tk.RIGHT, ipadx=16, ipady=4)
+        self.stop_btn = tk.Button(buttons, text="Stop now", command=self._stop, bg=C_AMBER, fg=C_ON_ACCENT,
                                   font=('Segoe UI', 9, 'bold'), relief=tk.FLAT, cursor='hand2', borderwidth=0)
-        self.stop_btn.pack(side=tk.RIGHT, ipadx=22, ipady=4)
+        self.stop_btn.pack(side=tk.RIGHT, padx=(0, 8), ipadx=16, ipady=4)
         self.close_btn = tk.Button(buttons, text="Close", command=self._close, bg=C_CARD2, fg=C_TXT1,
                                    font=('Segoe UI', 9), relief=tk.FLAT, cursor='hand2', borderwidth=0,
                                    state=tk.DISABLED)
         self.close_btn.pack(side=tk.RIGHT, padx=8, ipadx=16, ipady=4)
-        self.scroll.fit(self.win, self.WIDTH)
+        self.win.geometry("")                                  # follow what the content asks for, as its text changes
+        self.win.minsize(self.WIDTH, 1)
+        self.win.update_idletasks()
+        x, y = self.win.winfo_x(), self.win.winfo_y()
+        y = max(0, min(y, self.win.winfo_screenheight() - self.win.winfo_reqheight() - 40))
+        self.win.geometry(f"+{x}+{y}")                         # a position only: the size stays automatic
 
     def _log(self, text):
         self.log.config(state=tk.NORMAL)
@@ -720,7 +763,9 @@ class HeadTrainDialog(_Dialog):
         self.proc.proc.wait()
         self.proc.close()
         self.stop_btn.config(state=tk.DISABLED)
+        self.finish_btn.config(state=tk.DISABLED)
         self.close_btn.config(state=tk.NORMAL)
+        self._remove_flag()
         if self.active_kind == "yolo":
             self._ended_yolo()
         else:
@@ -736,6 +781,14 @@ class HeadTrainDialog(_Dialog):
         if error is not None:
             self.title_label.config(text="Training failed", fg=C_RED)
             self.status_label.config(text=error, fg=C_RED)
+        elif installed and self.result and self.finishing and not self.stopping:
+            self.title_label.config(text="Finished early", fg=C_GREEN)
+            self.bar.config(value=self.result["epochs_run"])
+            self.status_label.config(
+                text=f"Stopped during epoch {self.result['epochs_run']}; best head: epoch {self.result['best_epoch']}, "
+                     f"macro-F1 {self.result['best_f1']:.3f}.\n"
+                     f"Saved as {os.path.relpath(installed, BASE_DIR)} and selected in Label Assistant - G and "
+                     f"Auto-annotate all use it now.", fg=C_TXT2)
         elif installed and self.result and not self.result["stopped"]:
             self.title_label.config(text="Training finished", fg=C_GREEN)
             self.bar.config(value=self.total_epochs)
@@ -767,11 +820,22 @@ class HeadTrainDialog(_Dialog):
         if installed:
             select_trained_model(workspaceName)
         shown = os.path.relpath(installed, BASE_DIR) if installed else ""
-        use = ("Saved as " + shown + " and selected as My trained model. YOLO-World mode uses it: press Mode, choose "
-               "YOLO-World, then press G.")
+        from . import assistant_modes
+        if self.preset and assistant_modes.get_mode() == assistant_modes.MODE_YOLO_WORLD:
+            use = f"Saved as {shown} and selected as My trained model: G and the full-dataset run use it now."
+        else:
+            use = (f"Saved as {shown} and selected as My trained model. YOLO-World mode uses it: press Mode, choose "
+                   f"YOLO-World, then press G.")
         if error is not None:
             self.title_label.config(text="Training failed", fg=C_RED)
             self.status_label.config(text=error, fg=C_RED)
+        elif installed and self.result and self.finishing and not self.stopping:
+            self.title_label.config(text="Finished early", fg=C_GREEN)
+            self.bar.config(value=self.result["epochs_run"])
+            self.status_label.config(
+                text=f"Stopped during epoch {self.result['epochs_run']}, then evaluated. Best epoch "
+                     f"{self.result['best_epoch']}; last epoch: mAP50 {self.result.get('map50') or 0:.3f}, mAP50-95 "
+                     f"{self.result.get('map5095') or 0:.3f}.\n" + use, fg=C_TXT2)
         elif installed and self.result and not self.result.get("stopped"):
             self.title_label.config(text="Training finished", fg=C_GREEN)
             self.bar.config(value=self.total_epochs)
@@ -791,10 +855,26 @@ class HeadTrainDialog(_Dialog):
         if self.on_done:
             self.on_done(installed)
 
+    def _finish_early(self):
+        """Ask the training to stop now but end properly: validate, save and run its final evaluation."""
+        if not (self.proc and self.running) or self.finishing or self.stopping:
+            return
+        try:
+            with open(stop_file_for(self.active_dir), "w", encoding="utf-8") as f:
+                f.write("finish early\n")
+        except OSError as exc:
+            messagebox.showerror("Train custom model", f"Could not ask the training to finish:\n{exc}", parent=self.win)
+            return
+        self.finishing = True
+        self.finish_btn.config(state=tk.DISABLED, text="Finishing ...")
+        self.status_label.config(text="Finishing early: the epoch in progress is validated and saved, then the final "
+                                      "evaluation runs. Stop now ends it at once instead.")
+
     def _stop(self):
         if self.proc and self.running:
             self.stopping = True
             self.stop_btn.config(state=tk.DISABLED, text="Stopping ...")
+            self.finish_btn.config(state=tk.DISABLED)
             self.proc.stop()
 
     def _close(self):
@@ -806,6 +886,14 @@ class HeadTrainDialog(_Dialog):
             self._stop()
             return                                                  # Close turns on once the process has ended
         self.win.destroy()
+
+
+def open_model_training(parent, images_folders, labels_folder, model_folder, job, model_path, command=None,
+                        on_done=None):
+    """The plain Train button (YOLO-World and the other modes): run `job` (see build_yolo_job) and show its progress
+    in a window. Returns the window at once; training goes on while the user keeps annotating."""
+    return HeadTrainDialog(parent, images_folders, labels_folder, model_folder, command, on_done,
+                           model_path=model_path, preset=job, title="TRAIN MODEL")
 
 
 def open_head_training(parent, images_folders, labels_folder, model_folder, command=None, on_done=None,

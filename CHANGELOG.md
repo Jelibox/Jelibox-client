@@ -9,6 +9,15 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Added
+- **Finish early** in the training window (the head training, the full YOLO training and the plain Train button): it stops the training in the middle of the epoch in progress but ends it properly. The epoch is validated and saved, then Ultralytics runs its usual final evaluation of the best model, and the result is installed as after a normal run. The old Stop button is now **Stop now**: it ends the process at once (the best model so far is still kept).
+
+### Fixed
+- The training window cut off its buttons (Stop, Close) once the epoch table was added; the window now follows the size of its content, and the table and log are shorter on a small screen.
+
+### Changed
+- **The Train button of YOLO-World and the other modes now shows its progress in a window**, not in a terminal. It is the same window as the Custom Model's full training: a table with one row per epoch (box / cls / dfl loss, precision, recall, mAP50, mAP50-95, time), the best epoch, a progress bar, the time left and Stop. It does not lock the annotation window, so you can keep annotating while it trains. The best model is saved as `modelAssistant.pt` (the old one as `modelAssistant.prev.pt`) and selected as My trained model; the images are copied only into a scratch folder for the run and removed afterwards. The settings dialog before it is unchanged.
+
 ## [0.4.5] - 2026-10-11
 
 ### Added

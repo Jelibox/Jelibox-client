@@ -13,6 +13,10 @@ The images are read from datasetsInput and copied only into a scratch train/val 
 Ultralytics needs: images/ and labels/ side by side), which is removed at the end. The split is by position, like
 the head trainer: frames of a video are near-duplicates and a random split would flatter the scores.
 
+"Finish early": the window creates the file named by `job["stop_file"]`. The next batch sees it and tells Ultralytics
+to stop: it leaves the loop, validates, saves, and then runs its usual final evaluation of best.pt, so the run ends
+properly instead of being killed.
+
 Needs torch + ultralytics. Import this module only when a model is actually trained.
 """
 import json
@@ -128,8 +132,20 @@ def train(job, emit=emit):
             best["last"] = row
             emit("epoch", **row)
 
+        stop_file = job.get("stop_file")
+        asked = {"early": False}
+
+        def finish_early(trainer):
+            """The user pressed Finish early: stop after this batch, validate, save, final evaluation."""
+            if not asked["early"] and stop_file and os.path.exists(stop_file):
+                asked["early"] = True
+                trainer.stop = True
+                emit("status", text="Finishing early: validating this epoch, then the final evaluation ...")
+
         model.add_callback("on_train_start", on_train_start)
+        model.add_callback("on_train_batch_end", finish_early)
         model.add_callback("on_fit_epoch_end", on_epoch_end)
+        model.add_callback("on_fit_epoch_end", finish_early)
         model.train(data=yaml_path, epochs=epochs, imgsz=imgsz, batch=int(job["batch"]), optimizer="AdamW",
                     lr0=float(job["lr"]), weight_decay=float(job.get("weight_decay", 0.0005)),
                     freeze=int(job.get("freeze") or 0) or None, project=out, name=RUN_NAME,
@@ -138,7 +154,7 @@ def train(job, emit=emit):
         best_path = os.path.join(save_dir, "weights", "best.pt")
         last = best["last"]
         summary = dict(best_epoch=best["epoch"], best_fitness=max(best["fitness"], 0.0), epochs_run=last.get("epoch", 0),
-                       stopped=False, out_dir=out, weights=best_path, has_model=os.path.isfile(best_path),
+                       stopped=asked["early"], out_dir=out, weights=best_path, has_model=os.path.isfile(best_path),
                        classes=classes, map50=last.get("map50"), map5095=last.get("map5095"))
         emit("done", **summary)
         return summary

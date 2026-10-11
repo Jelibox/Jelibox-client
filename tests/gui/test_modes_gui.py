@@ -1121,5 +1121,336 @@ class MainWindowModeTests(unittest.TestCase):
         self.assertFalse(head.called)
 
 
+
+FAKE_YOLO_TRAINER = r"""
+import json, os, sys, time
+job = json.load(open(sys.argv[1], encoding="utf-8"))
+def ev(event, **f):
+    print("@@ " + json.dumps({"event": event, **f}), flush=True)
+mode = os.environ.get("FAKE_TRAIN_MODE", "ok")
+ev("status", text="Loading the model ...")
+if mode == "crash":
+    raise SystemExit(3)
+if mode == "error":
+    ev("error", message="CUDA out of memory")
+    raise SystemExit(1)
+ev("start", kind="yolo", train_images=9, val_images=3, classes=job["classes"], counts=[5, 4], epochs=job["epochs"],
+   device="cpu", batch=job["batch"], imgsz=[job["imgsz"], job["imgsz"]], model=os.path.basename(job["init_weights"]),
+   freeze=job["freeze"])
+weights = os.path.join(job["out_dir"], "train_run", "weights")
+os.makedirs(weights, exist_ok=True)
+for i in range(1, job["epochs"] + 1):
+    if mode == "slow" and i == 2:
+        time.sleep(60)
+    print("some plain log line", flush=True)
+    with open(os.path.join(weights, "best.pt"), "wb") as f:
+        f.write(b"model-%d" % i)
+    ev("epoch", epoch=i, epochs=job["epochs"], box_loss=1.0 / i, cls_loss=0.5 / i, dfl_loss=0.9 / i, precision=0.5,
+       recall=0.4, map50=0.1 * i, map5095=0.05 * i, fitness=0.1 * i, best=(i != 2), seconds=0.01)
+ev("done", best_epoch=job["epochs"], best_fitness=0.3, epochs_run=job["epochs"], stopped=False, out_dir=job["out_dir"],
+   weights=os.path.join(weights, "best.pt"), has_model=True, classes=job["classes"], map50=0.1 * job["epochs"],
+   map5095=0.05 * job["epochs"])
+"""
+
+
+@unittest.skipUnless(HAVE_DISPLAY, "no display available")
+class FullYoloTrainingTests(ModeGuiBase):
+    """The Train window's second choice: train every layer of a YOLO model, with a table row per epoch."""
+
+    def setUp(self):
+        super().setUp()
+        import shutil
+        import sys
+        from tests.helpers import make_images
+        self.data = os.path.join(ctx.root, "fulldata")
+        self.images = os.path.join(self.data, "images")
+        self.labels = os.path.join(self.data, "labels")
+        os.makedirs(self.labels, exist_ok=True)
+        for i, name in enumerate(make_images(self.images, 12)):
+            with open(os.path.join(self.labels, os.path.splitext(name)[0] + ".txt"), "w") as f:
+                f.write(f"{i % 2} 0.5 0.5 0.4 0.4\n")
+        self.script = os.path.join(ctx.root, "fake_yolo_trainer.py")
+        with open(self.script, "w") as f:
+            f.write(FAKE_YOLO_TRAINER)
+        self.command = lambda job_path: [sys.executable, "-u", self.script, job_path]
+        os.makedirs(ctx.model_dir, exist_ok=True)
+        self.model_file = os.path.join(ctx.model_dir, "modelAssistant.pt")
+        self.prev_file = os.path.join(ctx.model_dir, "modelAssistant.prev.pt")
+        for old in (self.model_file, self.prev_file):
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+        shutil.rmtree(os.path.join(ctx.model_dir, "yolo_run"), ignore_errors=True)
+
+    @staticmethod
+    def read_bytes(path):
+        with open(path, "rb") as f:
+            return f.read()
+
+    def open(self, full=True, **kw):
+        from utils.HeadTrainDialog import HeadTrainDialog
+        done = []
+        dlg = HeadTrainDialog(self.root, [self.images], self.labels, ctx.model_dir, command=self.command,
+                              model_path=self.model_file, on_done=done.append, **kw)
+        dlg.done_calls = done
+        if full:
+            dlg.kind_var.set("yolo")
+            dlg._apply_kind()
+        pump(self.root, 0.2)
+        return dlg
+
+    def run_to_end(self, dlg, timeout=30):
+        dlg.save()
+        self.assertTrue(pump_until(self.root, lambda: dlg.finished, timeout), "the run never ended")
+
+    def job(self):
+        with open(os.path.join(ctx.model_dir, "yolo_run", "job.json"), encoding="utf-8") as f:
+            return __import__("json").load(f)
+
+    # ---------------------------------------------------------------- the setup window
+    def test_the_window_offers_both_kinds_and_starts_on_the_head(self):
+        dlg = self.open(full=False)
+        self.assertEqual(dlg.kind_var.get(), "head")
+        self.assertEqual(dlg.det_title.cget("text"), "DETECTOR")
+        self.assertTrue(dlg.taps_row.winfo_ismapped())
+        self.assertFalse(dlg.continue_chk.winfo_ismapped())
+        radios = [w.cget("text") for w in walk(dlg.win) if isinstance(w, tk.Radiobutton)]
+        self.assertEqual(radios, ["Head only (fast)", "Full YOLO training (every layer)"])
+        dlg.win.destroy()
+
+    def test_choosing_full_training_swaps_the_fields_and_choosing_head_swaps_them_back(self):
+        dlg = self.open(full=False)
+        dlg.kind_var.set("yolo")
+        dlg._apply_kind()
+        pump(self.root, 0.2)
+        self.assertEqual(dlg.det_title.cget("text"), "BASE MODEL")
+        self.assertTrue(dlg.intro.cget("text").startswith("Trains a whole YOLO model"))
+        self.assertEqual(dlg.base_var.get(), "yolo11s.pt")
+        self.assertEqual(str(dlg.weights_box.cget("textvariable")), str(dlg.base_var))
+        self.assertIn("yolo11n.pt", dlg.weights_box.cget("values"))
+        self.assertFalse(dlg.taps_row.winfo_ismapped(), "taps belong to the head")
+        self.assertTrue(dlg.continue_chk.winfo_ismapped())
+        self.assertEqual(str(dlg.continue_chk.cget("state")), "disabled", "no trained model here yet")
+        self.assertTrue(all(w.winfo_ismapped() for w in dlg._yolo_cells))
+        self.assertFalse(any(w.winfo_ismapped() for w in dlg._head_cells))
+        self.assertEqual((dlg.sq_var.get(), dlg.freeze_var.get(), dlg.epochs_var.get(), dlg.batch_var.get()),
+                         (640, 0, 50, 16))
+        dlg.kind_var.set("head")
+        dlg._apply_kind()
+        pump(self.root, 0.2)
+        self.assertEqual(dlg.det_title.cget("text"), "DETECTOR")
+        self.assertTrue(dlg.taps_row.winfo_ismapped())
+        self.assertTrue(all(w.winfo_ismapped() for w in dlg._head_cells))
+        self.assertFalse(any(w.winfo_ismapped() for w in dlg._yolo_cells))
+        dlg.win.destroy()
+
+    def test_a_polygon_workspace_gets_the_segmentation_models(self):
+        dlg = self.open(task="seg")
+        self.assertEqual(dlg.base_var.get(), "yolo11s-seg.pt")
+        self.assertTrue(all("-seg" in v for v in dlg.weights_box.cget("values")))
+        self.assertIn("polygon", dlg.det_note.cget("text"))
+        dlg.win.destroy()
+
+    def test_continue_is_offered_once_a_model_has_been_trained(self):
+        with open(self.model_file, "wb") as f:
+            f.write(b"old model")
+        dlg = self.open()
+        self.assertEqual(str(dlg.continue_chk.cget("state")), "normal")
+        dlg.win.destroy()
+
+    def test_bad_settings_are_explained_and_nothing_starts(self):
+        dlg = self.open()
+        dlg.sq_var.set(100)
+        dlg.save()
+        self.assertIn("multiple of 32", self.rec.of("showwarning")[-1][2])
+        dlg.sq_var.set(640)
+        dlg.freeze_var.set(200)
+        dlg.save()
+        self.assertIn("Freeze", self.rec.of("showwarning")[-1][2])
+        dlg.freeze_var.set(0)
+        dlg.lr_var.set("5")
+        dlg.save()
+        self.assertIn("Learning rate", self.rec.of("showwarning")[-1][2])
+        dlg.lr_var.set("0.001")
+        dlg.base_var.set(os.path.join(ctx.root, "nope", "base.pt"))
+        dlg.save()
+        self.assertIn("not found", self.rec.of("showwarning")[-1][2])
+        self.assertIsNone(dlg.proc)
+        dlg.win.destroy()
+
+    # ---------------------------------------------------------------- a run
+    def test_a_run_shows_a_row_per_epoch_and_installs_the_model_as_my_trained_model(self):
+        dlg = self.open()
+        dlg.epochs_var.set(3)
+        self.run_to_end(dlg)
+        rows = [dlg.table.item(i) for i in dlg.table.get_children()]
+        self.assertEqual(len(rows), 3, "one table row per epoch")
+        self.assertEqual([r["values"][0] for r in rows], [1, 2, 3])
+        self.assertEqual([c[1] for c in __import__("utils.HeadTrainDialog", fromlist=["x"]).YOLO_COLUMNS][:4],
+                         ["Epoch", "Box", "Cls", "DFL"])
+        self.assertEqual([dlg.table.heading(c, "text") for c in dlg.table["columns"]],
+                         ["Epoch", "Box", "Cls", "DFL", "Precision", "Recall", "mAP50", "mAP50-95", "Time"])
+        self.assertEqual(rows[0]["values"][1:4], ["1.000", "0.500", "0.900"])
+        self.assertEqual(rows[2]["values"][6:8], ["0.300", "0.150"])
+        self.assertIn("best", rows[0]["tags"])
+        self.assertNotIn("best", rows[1]["tags"])
+        self.assertIn("Epoch 3 / 3", dlg.stats_label.cget("text"))
+        self.assertIn("mAP50", dlg.stats_label.cget("text"))
+        self.assertIn("some plain log line", dlg.log.get("1.0", "end"))
+        self.assertEqual(self.read_bytes(self.model_file), b"model-3")
+        a = wc.get_assistant(WORKSPACE)
+        self.assertEqual((a["provider"], a["custom_model"]["path"]), (wc.PROVIDER_CUSTOM, ""))
+        self.assertEqual(dlg.title_label.cget("text"), "Training finished")
+        self.assertIn("My trained model", dlg.status_label.cget("text"))
+        self.assertIn("YOLO-World", dlg.status_label.cget("text"))
+        self.assertEqual(float(dlg.bar.cget("value")), 3.0)
+        self.assertEqual((dlg.close_btn.cget("state"), dlg.stop_btn.cget("state")), ("normal", "disabled"))
+        self.assertEqual(dlg.done_calls, [self.model_file])
+        dlg.win.destroy()
+
+    def test_the_job_asks_for_every_layer_from_the_chosen_base_model(self):
+        dlg = self.open()
+        dlg.epochs_var.set(1)
+        dlg.base_var.set("yolo11m.pt")
+        dlg.sq_var.set(512)
+        self.run_to_end(dlg)
+        job = self.job()
+        self.assertEqual((job["kind"], job["init_weights"], job["imgsz"], job["epochs"], job["batch"], job["freeze"]),
+                         ("yolo", "yolo11m.pt", 512, 1, 16, 0))
+        self.assertEqual(job["classes"], config.class_manager.get_classes())
+        self.assertEqual(job["val_fraction"], 0.2)
+        self.assertTrue(job["scratch_dir"].endswith("dataset"))
+        self.assertTrue(job["out_dir"].endswith("yolo_run"))
+        dlg.win.destroy()
+
+    def test_freeze_is_passed_on_when_the_user_asks_for_it(self):
+        dlg = self.open()
+        dlg.epochs_var.set(1)
+        dlg.freeze_var.set(10)
+        self.run_to_end(dlg)
+        self.assertEqual(self.job()["freeze"], 10)
+        dlg.win.destroy()
+
+    def test_a_new_model_keeps_the_previous_one_after_asking(self):
+        with open(self.model_file, "wb") as f:
+            f.write(b"old model")
+        dlg = self.open()
+        dlg.epochs_var.set(1)
+        self.run_to_end(dlg)
+        self.assertTrue(self.rec.of("askyesno"), "asks before replacing a trained model")
+        self.assertEqual(self.read_bytes(self.prev_file), b"old model")
+        self.assertEqual(self.read_bytes(self.model_file), b"model-1")
+        dlg.win.destroy()
+
+    def test_declining_the_replacement_starts_nothing(self):
+        with open(self.model_file, "wb") as f:
+            f.write(b"old model")
+        dlg = self.open()
+        with mock.patch("utils.HeadTrainDialog.messagebox.askyesno", return_value=False):
+            dlg.save()
+        self.assertIsNone(dlg.proc)
+        self.assertEqual(self.read_bytes(self.model_file), b"old model")
+        dlg.win.destroy()
+
+    def test_continue_trains_on_from_the_model_already_here(self):
+        with open(self.model_file, "wb") as f:
+            f.write(b"old model")
+        dlg = self.open()
+        dlg.continue_var.set(True)
+        dlg.epochs_var.set(1)
+        before = len(self.rec.of("askyesno"))
+        self.run_to_end(dlg)
+        self.assertEqual(self.job()["init_weights"], self.model_file)
+        self.assertEqual(len(self.rec.of("askyesno")), before, "continuing replaces nothing, so nothing to ask")
+        dlg.win.destroy()
+
+    def test_a_trainer_error_is_shown_and_nothing_is_installed(self):
+        dlg = self.open()
+        with mock.patch.dict(os.environ, {"FAKE_TRAIN_MODE": "error"}):
+            self.run_to_end(dlg)
+        self.assertEqual(dlg.title_label.cget("text"), "Training failed")
+        self.assertIn("CUDA out of memory", dlg.status_label.cget("text"))
+        self.assertFalse(os.path.exists(self.model_file))
+        self.assertEqual(wc.get_assistant(WORKSPACE)["provider"], wc.PROVIDER_YOLO_WORLD, "nothing was selected")
+        dlg.win.destroy()
+
+    def test_a_crash_without_a_message_still_ends_cleanly(self):
+        dlg = self.open()
+        with mock.patch.dict(os.environ, {"FAKE_TRAIN_MODE": "crash"}):
+            self.run_to_end(dlg)
+        self.assertEqual(dlg.title_label.cget("text"), "Training ended unexpectedly")
+        self.assertIn("yolo_run/train.log", dlg.status_label.cget("text"))
+        self.assertFalse(os.path.exists(self.model_file))
+        dlg.win.destroy()
+
+    def test_stop_keeps_the_best_model_so_far(self):
+        dlg = self.open()
+        dlg.epochs_var.set(5)
+        with mock.patch.dict(os.environ, {"FAKE_TRAIN_MODE": "slow"}):
+            dlg.save()
+            self.assertTrue(pump_until(self.root, lambda: float(dlg.bar.cget("value")) >= 1, 20), "epoch 1 never came")
+            dlg._stop()
+            self.assertTrue(pump_until(self.root, lambda: dlg.finished, 20))
+        self.assertEqual(self.read_bytes(self.model_file), b"model-1")
+        self.assertIn("best model so far was kept", dlg.title_label.cget("text"))
+        self.assertEqual(wc.get_assistant(WORKSPACE)["provider"], wc.PROVIDER_CUSTOM)
+        dlg.win.destroy()
+
+    def test_the_head_run_still_has_a_table_too(self):
+        import sys
+        self.script_head = os.path.join(ctx.root, "fake_trainer.py")
+        with open(self.script_head, "w") as f:
+            f.write(FAKE_TRAINER)
+        self.command = lambda job_path: [sys.executable, "-u", self.script_head, job_path]
+        dlg = self.open(full=False)
+        dlg.epochs_var.set(2)
+        self.run_to_end(dlg)
+        self.assertEqual(len(dlg.table.get_children()), 2)
+        self.assertEqual([dlg.table.heading(c, "text") for c in dlg.table["columns"]],
+                         ["Epoch", "Loss", "Accuracy", "Macro-F1", "Time"])
+        dlg.win.destroy()
+
+    # ---------------------------------------------------------------- the pieces without a window
+    def test_the_default_command_runs_the_trainer_the_job_asks_for(self):
+        import json
+        from utils import HeadTrainDialog as htd
+        folder = os.path.join(ctx.root, "jobs")
+        os.makedirs(folder, exist_ok=True)
+        head, full, junk = (os.path.join(folder, n) for n in ("head.json", "full.json", "junk.json"))
+        with open(head, "w") as f:
+            json.dump({"classes": []}, f)
+        with open(full, "w") as f:
+            json.dump({"kind": "yolo"}, f)
+        with open(junk, "w") as f:
+            f.write("not json")
+        self.assertEqual(htd.default_command(head)[-2:], ["utils.head_train", head])
+        self.assertEqual(htd.default_command(full)[-2:], ["utils.yolo_train_job", full])
+        self.assertEqual(htd.default_command(junk)[-2], "utils.head_train")
+        self.assertEqual(htd.default_command(os.path.join(folder, "missing.json"))[-2], "utils.head_train")
+
+    def test_install_yolo_copies_the_best_model_and_keeps_the_old_one(self):
+        from utils import HeadTrainDialog as htd
+        best = os.path.join(ctx.root, "best_test.pt")
+        with open(best, "wb") as f:
+            f.write(b"new")
+        target = os.path.join(ctx.root, "installed", "modelAssistant.pt")
+        self.assertIsNone(htd.install_yolo(os.path.join(ctx.root, "missing.pt"), target))
+        self.assertIsNone(htd.install_yolo(None, target))
+        self.assertEqual(htd.install_yolo(best, target), target)
+        self.assertEqual(self.read_bytes(target), b"new")
+        with open(best, "wb") as f:
+            f.write(b"newer")
+        htd.install_yolo(best, target)
+        self.assertEqual(self.read_bytes(os.path.join(ctx.root, "installed", "modelAssistant.prev.pt")), b"new")
+        self.assertEqual(self.read_bytes(target), b"newer")
+
+    def test_the_start_button_of_the_annotation_window_passes_the_model_path_and_the_task(self):
+        # wired in AnnotationGUI._train_head: the window needs both to offer full training
+        with open(os.path.join(os.path.dirname(__file__), "..", "..", "utils", "AnnotationGUI.py"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn('model_path=model_path, task="seg" if state.annotation_mode == "polygon" else "detect"', text)
+
+
 if __name__ == "__main__":
     unittest.main()

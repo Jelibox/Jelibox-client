@@ -207,7 +207,7 @@ def train_model(args):
             project=model_folder,
             name="train_run",
             exist_ok=True,
-            device=0,
+            device=0 if torch.cuda.is_available() else "cpu",       # a PC without an NVIDIA GPU trains on its CPU
             amp=False,
             workers=1
         )

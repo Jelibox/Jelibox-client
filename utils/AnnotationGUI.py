@@ -3464,10 +3464,12 @@ class AnnotationGUI:
         state.training_running = False
 
     def _train_head(self):
-        """Custom head mode: Train fits a head on the frozen detector (not a whole YOLO model)."""
+        """Custom Model mode: Train fits a head on the frozen detector, or (a choice in its window) trains a
+        whole YOLO model with every layer, with the per-epoch results shown in that window."""
         image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
         folders = sorted({os.path.dirname(r['source']) for r in self._find_workspace_images(image_exts)})
-        open_head_training(self.root, folders or [input_folder], yolo_labels_folder, model_folder)
+        open_head_training(self.root, folders or [input_folder], yolo_labels_folder, model_folder,
+                           model_path=model_path, task="seg" if state.annotation_mode == "polygon" else "detect")
 
     # ----------------------------------------------------------
     #  Inference & misc actions

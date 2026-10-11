@@ -1,0 +1,235 @@
+"""Full YOLO training (utils/yolo_train_job.py): the scratch dataset, the events sent after every epoch and what is
+passed to Ultralytics. Ultralytics itself is faked, so no model is downloaded and nothing is trained."""
+import contextlib
+import io
+import json
+import os
+import sys
+import tempfile
+import types
+import unittest
+from unittest import mock
+
+from utils import yolo_train_job as yj
+
+CLASSES = ["cat", "dog"]
+
+
+class FakeTrainer:
+    def __init__(self, epoch, epochs, fitness, best_fitness, save_dir):
+        self.epoch, self.epochs, self.fitness, self.best_fitness, self.save_dir = epoch, epochs, fitness, best_fitness, save_dir
+        self.tloss = object()
+        self.metrics = {"metrics/precision(B)": 0.5 + epoch / 10, "metrics/recall(B)": 0.4 + epoch / 10,
+                        "metrics/mAP50(B)": fitness, "metrics/mAP50-95(B)": fitness / 2, "val/box_loss": 9.0}
+
+    def label_loss_items(self, tloss, prefix="train"):
+        return {f"{prefix}/box_loss": 1.0 - 0.1 * self.epoch, f"{prefix}/cls_loss": 0.5, f"{prefix}/dfl_loss": 0.9}
+
+
+class FakeYOLO:
+    """Stands in for ultralytics.YOLO: calls the registered callbacks the way a real run does."""
+    fitnesses = [0.2, 0.5, 0.4]
+    made = []
+
+    def __init__(self, weights):
+        self.weights, self.callbacks, self.kwargs = weights, {}, None
+        FakeYOLO.made.append(self)
+
+    def add_callback(self, event, fn):
+        self.callbacks.setdefault(event, []).append(fn)
+
+    def train(self, **kw):
+        self.kwargs = kw
+        save_dir = os.path.join(kw["project"], kw["name"])
+        os.makedirs(os.path.join(save_dir, "weights"), exist_ok=True)
+        with open(os.path.join(save_dir, "weights", "best.pt"), "wb") as f:
+            f.write(b"best")
+        self.trainer = types.SimpleNamespace(save_dir=save_dir)
+        for fn in self.callbacks.get("on_train_start", []):
+            fn(self.trainer)
+        best = -1.0
+        for e in range(kw["epochs"]):
+            fitness = self.fitnesses[e % len(self.fitnesses)]
+            best = max(best, fitness)
+            for fn in self.callbacks.get("on_fit_epoch_end", []):
+                fn(FakeTrainer(e, kw["epochs"], fitness, best, save_dir))
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        root = tempfile.mkdtemp()
+        self.images, self.labels, self.out = (os.path.join(root, n) for n in ("images", "labels", "out"))
+        os.makedirs(self.images)
+        os.makedirs(self.labels)
+        for i in range(1, 13):
+            name = f"img_{i:02d}"
+            with open(os.path.join(self.images, name + ".jpg"), "wb") as f:
+                f.write(b"jpg")
+            with open(os.path.join(self.labels, name + ".txt"), "w") as f:
+                f.write(f"{i % 2} 0.5 0.5 0.4 0.4\n")
+        FakeYOLO.made.clear()
+        FakeYOLO.fitnesses = [0.2, 0.5, 0.4]
+
+    def job(self, **kw):
+        job = {"kind": "yolo", "images_folders": [self.images], "labels_folder": self.labels, "classes": CLASSES,
+               "init_weights": "yolo11s.pt", "imgsz": 640, "epochs": 3, "batch": 8, "lr": 0.001, "freeze": 0,
+               "val_fraction": 0.2, "out_dir": self.out, "scratch_dir": os.path.join(self.out, "dataset"),
+               "workers": 1, "device": "cpu"}
+        job.update(kw)
+        return job
+
+    def run_job(self, job):
+        events = []
+        with mock.patch.object(yj, "load_yolo", lambda weights: FakeYOLO(weights)):
+            summary = yj.train(job, emit=lambda event, **f: events.append({"event": event, **f}))
+        return summary, events
+
+
+class DatasetTests(Base):
+    def test_labelled_images_are_copied_with_the_last_ones_as_validation(self):
+        job = self.job()
+        yaml_path, scratch, n_train, n_val, counts = yj.prepare_dataset(job)
+        self.assertEqual((n_train, n_val), (10, 2))
+        self.assertEqual(sorted(os.listdir(os.path.join(scratch, "val", "images"))), ["img_11.jpg", "img_12.jpg"])
+        self.assertEqual(sorted(os.listdir(os.path.join(scratch, "val", "labels"))), ["img_11.txt", "img_12.txt"])
+        self.assertEqual(len(os.listdir(os.path.join(scratch, "train", "images"))), 10)
+        self.assertEqual(sum(counts), 10)
+
+    def test_data_yaml_names_the_classes_and_the_two_folders(self):
+        yaml_path = yj.prepare_dataset(self.job(classes=["cat", "dog food"]))[0]
+        with open(yaml_path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("nc: 2", text)
+        self.assertIn('  0: "cat"', text)
+        self.assertIn('  1: "dog food"', text)
+        self.assertIn("train:", text)
+        self.assertIn("val:", text)
+
+    def test_a_scratch_copy_left_by_a_stopped_run_is_replaced(self):
+        job = self.job()
+        os.makedirs(job["scratch_dir"])
+        stale = os.path.join(job["scratch_dir"], "train", "images", "old.jpg")
+        os.makedirs(os.path.dirname(stale))
+        open(stale, "w").close()
+        yj.prepare_dataset(job)
+        self.assertFalse(os.path.exists(stale))
+
+    def test_too_few_labelled_images_is_refused(self):
+        for name in sorted(os.listdir(self.labels))[:5]:
+            os.remove(os.path.join(self.labels, name))
+        with self.assertRaisesRegex(ValueError, "Only 7 labelled images"):
+            yj.prepare_dataset(self.job())
+
+
+class TrainTests(Base):
+    def test_one_event_per_epoch_with_the_losses_and_the_metrics(self):
+        summary, events = self.run_job(self.job())
+        kinds = [e["event"] for e in events]
+        self.assertEqual(kinds, ["status", "status", "start", "epoch", "epoch", "epoch", "done"])
+        start = events[2]
+        self.assertEqual((start["kind"], start["train_images"], start["val_images"], start["epochs"]), ("yolo", 10, 2, 3))
+        self.assertEqual((start["device"], start["batch"], start["imgsz"], start["model"]), ("cpu", 8, [640, 640], "yolo11s.pt"))
+        first, second, third = events[3:6]
+        self.assertEqual((first["epoch"], first["epochs"]), (1, 3))
+        self.assertAlmostEqual(first["box_loss"], 1.0)
+        self.assertAlmostEqual(first["cls_loss"], 0.5)
+        self.assertAlmostEqual(first["dfl_loss"], 0.9)
+        self.assertAlmostEqual(first["precision"], 0.5)
+        self.assertAlmostEqual(first["map50"], 0.2)
+        self.assertAlmostEqual(first["map5095"], 0.1)
+        self.assertEqual([e["best"] for e in (first, second, third)], [True, True, False])
+        self.assertGreaterEqual(first["seconds"], 0)
+
+    def test_the_summary_points_at_the_best_weights(self):
+        summary, events = self.run_job(self.job())
+        self.assertEqual((summary["best_epoch"], summary["epochs_run"], summary["stopped"]), (2, 3, False))
+        self.assertTrue(summary["has_model"])
+        self.assertTrue(summary["weights"].endswith(os.path.join("train_run", "weights", "best.pt")))
+        self.assertTrue(os.path.isfile(summary["weights"]))
+        self.assertAlmostEqual(summary["map50"], 0.4)                  # the last epoch
+        self.assertEqual(events[-1]["event"], "done")
+        json.dumps(events)                                              # every event can go over stdout as JSON
+
+    def test_ultralytics_gets_every_layer_the_chosen_size_and_the_scratch_data(self):
+        self.run_job(self.job(freeze=0))
+        kw = FakeYOLO.made[0].kwargs
+        self.assertEqual(FakeYOLO.made[0].weights, "yolo11s.pt")
+        self.assertEqual((kw["epochs"], kw["imgsz"], kw["batch"], kw["optimizer"]), (3, 640, 8, "AdamW"))
+        self.assertEqual((kw["lr0"], kw["device"], kw["amp"], kw["plots"], kw["exist_ok"]), (0.001, "cpu", False, False, True))
+        self.assertIsNone(kw["freeze"], "0 means every layer is trained")
+        self.assertEqual((kw["project"], kw["name"]), (self.out, "train_run"))
+        self.assertTrue(kw["data"].endswith("data.yaml"))
+
+    def test_a_gpu_run_is_announced_as_cuda_not_as_a_bare_zero(self):
+        _, events = self.run_job(self.job(device=0))
+        self.assertEqual(events[2]["device"], "cuda")
+        self.assertEqual(FakeYOLO.made[0].kwargs["device"], 0)
+
+    def test_freeze_is_passed_on(self):
+        self.run_job(self.job(freeze=10))
+        self.assertEqual(FakeYOLO.made[0].kwargs["freeze"], 10)
+
+    def test_the_scratch_copy_is_removed_afterwards(self):
+        job = self.job()
+        self.run_job(job)
+        self.assertFalse(os.path.exists(job["scratch_dir"]))
+
+    def test_an_error_in_training_still_removes_the_scratch_copy(self):
+        job = self.job()
+        with mock.patch.object(yj, "load_yolo", side_effect=RuntimeError("boom")):
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                yj.train(job, emit=lambda *a, **k: None)
+        self.assertFalse(os.path.exists(job["scratch_dir"]))
+
+    def test_the_image_size_must_be_a_multiple_of_32(self):
+        with self.assertRaisesRegex(ValueError, "multiple of 32"):
+            self.run_job(self.job(imgsz=100))
+
+    def test_the_device_is_picked_automatically_when_the_job_names_none(self):
+        _, events = self.run_job(self.job(device=None))
+        gpu = types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: True))
+        cpu = types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: False))
+        with mock.patch.dict(sys.modules, {"torch": gpu}):
+            self.assertEqual(yj.pick_device(), 0)
+        with mock.patch.dict(sys.modules, {"torch": cpu}):
+            self.assertEqual(yj.pick_device(), "cpu")
+        with mock.patch.dict(sys.modules, {"torch": None}):               # not installed
+            self.assertEqual(yj.pick_device(), "cpu")
+
+
+class MainTests(Base):
+    def run_main(self, job):
+        path = os.path.join(self.out, "job.json")
+        os.makedirs(self.out, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(job, f)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = yj.main([path])
+        events = [json.loads(line[len(yj.PREFIX):]) for line in out.getvalue().splitlines() if line.startswith(yj.PREFIX)]
+        return code, events
+
+    def test_main_prints_the_events_as_prefixed_json_lines(self):
+        with mock.patch.object(yj, "load_yolo", lambda weights: FakeYOLO(weights)):
+            code, events = self.run_main(self.job())
+        self.assertEqual(code, 0)
+        self.assertEqual([e["event"] for e in events].count("epoch"), 3)
+
+    def test_main_reports_a_failure_as_an_error_event_and_a_non_zero_exit(self):
+        with mock.patch.object(yj, "load_yolo", side_effect=RuntimeError("no such model")):
+            code, events = self.run_main(self.job())
+        self.assertEqual(code, 1)
+        self.assertEqual(events[-1], {"event": "error", "message": "no such model"})
+
+    def test_main_needs_exactly_one_argument(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(yj.main([]), 2)
+
+    def test_the_module_imports_neither_torch_nor_ultralytics_at_the_top(self):
+        with open(yj.__file__, encoding="utf-8") as f:
+            top_level = [line for line in f.read().splitlines() if line.startswith(("import ", "from "))]
+        self.assertFalse([line for line in top_level if "torch" in line or "ultralytics" in line], top_level)
+
+
+if __name__ == "__main__":
+    unittest.main()

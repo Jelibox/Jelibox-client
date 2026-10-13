@@ -52,7 +52,7 @@ Pick a mode when Jelibox starts (and change it any time with the **Mode** button
 
 ### Bring any dataset in, safely
 
-**Add Workspace** scans a folder and all its subfolders for images plus Pascal VOC, YOLO or COCO annotations (or images alone) and shows what it found before it copies anything. An optional filename prefix renames images and labels in order. If the annotations use a class your workspace does not have, you are warned first and those objects are skipped instead of being mixed in.
+**Add Workspace** scans a folder and all its subfolders for images plus Pascal VOC, YOLO or COCO annotations (or images alone) and shows what it found before it copies anything. An optional filename prefix renames images and labels in order. Video files (`.mp4`, `.avi`, `.mov`, `.mkv`, `.webm`, ...) in the folder add a **Skip frames** box (10 by default): Jelibox saves one frame, skips the next N - 1, and so on, so every 10th frame becomes a picture (a 30 fps video gives 3 pictures per second; use 1 to keep every frame). The pictures start without annotations and the videos are not copied. If the annotations use a class your workspace does not have, you are warned first and those objects are skipped instead of being mixed in.
 
 <img src="assets/add-workspace.png" alt="The Add Workspace window with a scan result and a class warning" width="380">
 
@@ -75,7 +75,7 @@ Select a workspace and press **Analyze** for a dashboard of objects per class, s
 - Bounding box annotation for object detection and polygon annotation for segmentation, with undo / redo (`Ctrl+Z` / `Ctrl+Y`)
 - Four auto-label modes chosen on a front menu: **YOLO-World**, **LocateAnything**, **Custom Model** and **SAM 2 Dynamic** - see [Modes](#modes)
 - AI-assisted annotation with the **Infer** button (or `G`): on the current image, or on **every image of the dataset at once**
-- **Add Workspace** imports whole dataset folders (Pascal VOC, YOLO, COCO or images only) with an optional filename prefix
+- **Add Workspace** imports whole dataset folders (Pascal VOC, YOLO, COCO, images only, or video files cut into pictures with a **Skip frames** setting) with an optional filename prefix
 - **Analyze**: dataset dashboard, small-object warning with an adjustable limit, resize simulation, and removal of tiny objects
 - **Export Dataset** to YOLO, Pascal VOC or COCO with optional augmentation and a **Save to** folder of your choice
 - Model training from the annotation workspace, reading images straight from `datasetsInput/` (no duplicate copies)

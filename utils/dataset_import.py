@@ -39,6 +39,9 @@ from .workspace_manager import (
 from .file_handler import build_voc_xml, prettify_xml, _yolo_lines_from_annotations
 
 CLASS_LIST_FILENAMES = {"classes.txt", "obj.names"}
+VIDEO_EXTENSIONS = (".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg")
+DEFAULT_SKIP_FRAMES = 10
+MAX_SKIP_FRAMES = 10000
 
 
 # ============================================================
@@ -71,11 +74,13 @@ def scan_dataset_folder(root_folder):
         'coco': [path, ...],              # .json that look like COCO
         'yolo_classes_file': path or None,  # classes.txt / obj.names / data.yaml
         'duplicates': int,                # images whose file name another image already has (only one is kept)
+        'videos': [path, ...],            # video files; their frames are saved as pictures on import
       }
     """
     images, voc, yolo, coco = {}, {}, {}, []
     yolo_classes_file = None
     duplicates = 0
+    videos = []
 
     for path in _walk_files(root_folder):
         fname = os.path.basename(path)
@@ -86,6 +91,8 @@ def scan_dataset_folder(root_folder):
             if base in images:
                 duplicates += 1
             images[base] = path
+        elif ext in VIDEO_EXTENSIONS:
+            videos.append(path)
         elif ext == ".xml":
             voc[base] = path
         elif ext == ".txt":
@@ -101,8 +108,73 @@ def scan_dataset_folder(root_folder):
 
     return {
         "images": images, "voc": voc, "yolo": yolo, "coco": coco,
-        "yolo_classes_file": yolo_classes_file, "duplicates": duplicates,
+        "yolo_classes_file": yolo_classes_file, "duplicates": duplicates, "videos": sorted(videos),
     }
+
+
+# ============================================================
+#  Video files: every N-th frame becomes a picture
+# ============================================================
+
+def sanitize_skip_frames(value):
+    """The "Skip frames" number as an int (1 = keep every frame); ValueError with a message the user can act on."""
+    try:
+        skip = int(str(value).strip())
+    except (TypeError, ValueError):
+        skip = 0
+    if not 1 <= skip <= MAX_SKIP_FRAMES:
+        raise ValueError(f"Skip frames must be a whole number from 1 to {MAX_SKIP_FRAMES}.")
+    return skip
+
+
+def frames_to_save(total_frames, skip):
+    """How many pictures a video of `total_frames` gives when every `skip`-th frame is kept (the first one is)."""
+    return (total_frames + skip - 1) // skip if total_frames and total_frames > 0 else 0
+
+
+def probe_videos(paths):
+    """[{"path", "frames", "fps"}] for the video files, read from their headers (frames is 0 when unknown or when the
+    file cannot be opened). Nothing is decoded."""
+    import cv2
+    found = []
+    for path in paths:
+        frames, fps = 0, 0.0
+        cap = cv2.VideoCapture(path)
+        try:
+            if cap.isOpened():
+                frames = max(0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0))
+                fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        finally:
+            cap.release()
+        found.append({"path": path, "frames": frames, "fps": fps})
+    return found
+
+
+def extract_frames(video_path, dest_folder, name_for, skip, tick=None):
+    """Save every `skip`-th frame (the first, then each skip-th after it) of one video as a JPEG in `dest_folder`,
+    named `name_for(frame_index)` + ".jpg". `tick(saved)` is called after each picture. Returns how many were saved.
+    Raises ValueError when the video cannot be opened."""
+    import cv2
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        cap.release()
+        raise ValueError(f"Could not open the video {os.path.basename(video_path)} (is its codec supported?).")
+    saved = index = 0
+    try:
+        while cap.grab():                                   # skipped frames are not even decoded to an image
+            if index % skip == 0:
+                ok, frame = cap.retrieve()
+                if ok and frame is not None:
+                    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    if ok:
+                        buf.tofile(os.path.join(dest_folder, name_for(index) + ".jpg"))   # also for non-ASCII paths
+                        saved += 1
+                        if tick:
+                            tick(saved)
+            index += 1
+    finally:
+        cap.release()
+    return saved
 
 
 def _yolo_rows(path):
@@ -549,7 +621,8 @@ def _drop_unknown(boxes, polygons, fixed, skipped):
 #  Orchestrator
 # ============================================================
 
-def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None, classes=None):
+def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None, classes=None,
+                   skip_frames=DEFAULT_SKIP_FRAMES):
     """
     Import an external folder (any layout, searched recursively) as a new
     datasetsInput/<workspace>-<N> instance, converting whichever single
@@ -563,6 +636,10 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None,
 
     progress_cb(done, total, label), if given, is called repeatedly while
     images are copied and annotations converted.
+
+    Video files in the folder are cut into pictures: every `skip_frames`-th frame is saved as a JPEG next to the
+    images (named `<video>_f<frame>.jpg`, or `<prefix><number>` when a prefix is given). The pictures have no
+    annotations. The videos themselves are not copied.
 
     A workspace that already has classes keeps exactly those: annotations of any other class are left out and
     counted in the summary's "skipped". For a new workspace `classes` (optional) come first, in that order, and the
@@ -582,10 +659,11 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None,
         raise ValueError("This folder is already inside datasetsInput. Pick the original folder elsewhere on disk.")
 
     prefix = sanitize_filename_prefix(prefix)  # raises ValueError on bad chars
+    skip = sanitize_skip_frames(skip_frames)
 
     scan = scan_dataset_folder(source_folder)
-    if not scan["images"]:
-        raise ValueError("No images found in that folder (all subfolders were searched).")
+    if not scan["images"] and not scan["videos"]:
+        raise ValueError("No images or videos found in that folder (all subfolders were searched).")
 
     fmt = detect_dataset_format(scan)  # raises on conflicting formats
     rename_map = build_rename_map(scan["images"].keys(), prefix)
@@ -599,7 +677,9 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None,
     os.makedirs(yolo_dir, exist_ok=True)
 
     n_images = len(scan["images"])
-    total = n_images + (len(scan["voc"]) or len(scan["yolo"]) or len(scan["coco"]) or 0)
+    probes = probe_videos(scan["videos"]) if scan["videos"] else []
+    expected_frames = sum(frames_to_save(p["frames"], skip) for p in probes)
+    total = n_images + expected_frames + (len(scan["voc"]) or len(scan["yolo"]) or len(scan["coco"]) or 0)
     done = 0
 
     for base, path in scan["images"].items():
@@ -612,6 +692,41 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None,
 
     existing = existing_classes_for_workspace(workspace_name)
     locked = bool(existing)
+    frames_saved, videos_read, video_errors = 0, 0, []
+    used_names = set(rename_map.get(b, b) for b in scan["images"])
+    counter = {"n": n_images}
+    for probe in probes:
+        video = probe["path"]
+        stem = os.path.splitext(os.path.basename(video))[0]
+        expected = frames_to_save(probe["frames"], skip)
+
+        def name_for(index, stem=stem):
+            if prefix:
+                counter["n"] += 1
+                return f"{prefix}{counter['n']}"
+            name = f"{stem}_f{index:06d}"
+            while name in used_names:                       # same video name in two folders, or a clash with an image
+                name += "_v"
+            used_names.add(name)
+            return name
+
+        def tick(saved, expected=expected, video=video):
+            if progress_cb:
+                progress_cb(done + frames_saved + saved, total,
+                            f"Extracting frames from {os.path.basename(video)}... {saved}" + (f"/{expected}" if expected else ""))
+
+        try:
+            saved = extract_frames(video, dest_images, name_for, skip, tick)
+        except ValueError as exc:
+            video_errors.append(str(exc))
+            continue
+        frames_saved += saved
+        videos_read += 1
+    done += frames_saved
+    if not n_images and not frames_saved:
+        shutil.rmtree(dest_images, ignore_errors=True)
+        raise ValueError("No pictures could be read from the video files. " + " ".join(video_errors))
+
     class_order = list(existing) if locked else list(classes or [])
     skipped = {}
     annotated = 0
@@ -632,7 +747,11 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None,
     format_labels = {"voc": "Pascal VOC", "yolo": "YOLO", "coco": "COCO", None: None}
     return {
         "instance_name": instance_name,
-        "image_count": n_images,
+        "image_count": n_images + frames_saved,
+        "frames": frames_saved,
+        "videos": videos_read,
+        "video_errors": video_errors,
+        "skip_frames": skip,
         "annotated_count": annotated,
         "format": format_labels[fmt],
         "classes": class_order,

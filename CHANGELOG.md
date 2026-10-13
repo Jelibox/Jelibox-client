@@ -9,6 +9,12 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Added
+- **Video files in Add Workspace / Add Instance.** When the chosen folder contains videos (`.mp4`, `.avi`, `.mov`, `.mkv`, `.webm`, `.m4v`, `.wmv`, `.flv`, `.mpg`, `.mpeg`), a new **Skip frames** box appears (10 by default) with a plain explanation and a live estimate ("about 30 picture(s) from 1 video(s)"). Jelibox saves one frame, skips the next N - 1, and so on: with 10 every 10th frame becomes a JPEG picture next to the images (`<video>_f<frame>.jpg`, or `<prefix><number>` when a prefix is set), so a 30 fps video gives 3 pictures per second; 1 keeps every frame. The pictures start without annotations, the videos themselves are not copied, and a video that cannot be read is reported while the rest still imports. A folder with only videos is accepted.
+
+### Changed
+- The Add Workspace window scrolls when it is taller than the screen (a 12-inch laptop); Cancel and Create stay visible.
+
 ## [0.4.6] - 2026-10-11
 
 ### Added

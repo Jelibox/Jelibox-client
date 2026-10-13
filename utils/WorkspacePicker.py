@@ -25,7 +25,9 @@ from .workspace_manager import (list_workspaces, instance_path, count_images, DA
                                 existing_classes_for_workspace,
                                 workspace_stats, delete_instance, delete_workspace)
 from .dataset_import import (scan_dataset_folder, detect_dataset_format, import_dataset, scan_classes,
-                             yolo_classes_resolved, sanitize_filename_prefix)
+                             yolo_classes_resolved, sanitize_filename_prefix, sanitize_skip_frames, probe_videos,
+                             frames_to_save, DEFAULT_SKIP_FRAMES, MAX_SKIP_FRAMES)
+from .dialog_scroll import ScrollBody
 from . import collab
 from . import assistant_modes
 from . import relocate
@@ -663,8 +665,10 @@ class WorkspacePickerApp:
         tk.Label(hdr, text=title_text, font=('Segoe UI', 12, 'bold'),
                  bg=C_ACCENT, fg=C_ON_ACCENT).pack(side=tk.LEFT, padx=16, pady=10)
 
-        form = tk.Frame(dialog, bg=C_BASE, padx=24, pady=18)
-        form.pack(fill=tk.BOTH, expand=True)
+        # the form scrolls when it is taller than the screen (a 12-inch laptop); Cancel / Create stay visible
+        scroll = ScrollBody(dialog, C_BASE)
+        scroll.pack(fill=tk.BOTH, expand=True, padx=24, pady=(4, 0))
+        form = scroll.inner
 
         # Width-spacer trick: a childless widget's requested size is exactly
         # its configured width/height, so this alone forces form (and thus
@@ -673,19 +677,21 @@ class WorkspacePickerApp:
         # (Disabling pack_propagate would lock BOTH dimensions to whatever
         # form's size happened to be at that moment - here, before any of
         # its content existed - which is what was hiding the whole form.)
-        tk.Frame(form, bg=C_BASE, width=width, height=1).pack(side=tk.TOP)
+        tk.Frame(form, bg=C_BASE, width=width - 48, height=1).pack(side=tk.TOP)
 
         def section_label(text):
             tk.Label(form, text=text, font=('Segoe UI', 8, 'bold'),
                      bg=C_BASE, fg=C_TXT2, anchor='w').pack(fill=tk.X, pady=(14, 4))
 
         def hint_label(text):
-            tk.Label(form, text=text, font=('Segoe UI', 8), bg=C_BASE, fg=C_TXT3,
-                     anchor='w', justify=tk.LEFT, wraplength=width - 48).pack(fill=tk.X, pady=(3, 0))
+            lbl = tk.Label(form, text=text, font=('Segoe UI', 8), bg=C_BASE, fg=C_TXT3,
+                           anchor='w', justify=tk.LEFT, wraplength=width - 70)
+            lbl.pack(fill=tk.X, pady=(3, 0))
+            return lbl
 
         def status_label():
             lbl = tk.Label(form, text="", font=('Segoe UI', 8, 'bold'), bg=C_BASE,
-                            fg=C_TXT3, anchor='w', justify=tk.LEFT, wraplength=width - 48)
+                            fg=C_TXT3, anchor='w', justify=tk.LEFT, wraplength=width - 70)
             lbl.pack(fill=tk.X, pady=(3, 0))
             return lbl
 
@@ -694,7 +700,7 @@ class WorkspacePickerApp:
 
         # ---- state shared with on_create() ----
         state = {'folder': None, 'scan': None, 'format': 'unset', 'found': {}, 'auto_classes': '',
-                 'yolo_unnamed_classes': False}
+                 'yolo_unnamed_classes': False, 'probes': []}
 
         # ======== NAME (only for a brand-new workspace) ========
         name_var = tk.StringVar()
@@ -746,11 +752,50 @@ class WorkspacePickerApp:
 
         folder_status = status_label()
         skip_status = status_label()          # amber: objects the import would leave out
-        hint_label("Every subfolder is searched: images plus Pascal VOC (.xml), YOLO (.txt with "
-                   "classes.txt / obj.names / data.yaml) or COCO (.json).")
+        folder_hint = hint_label("Every subfolder is searched: images plus Pascal VOC (.xml), YOLO (.txt with "
+                                 "classes.txt / obj.names / data.yaml) or COCO (.json).")
+
+        # ======== SKIP FRAMES (appears when the folder has video files) ========
+        video_box = tk.Frame(form, bg=C_BASE)
+        tk.Label(video_box, text="SKIP FRAMES (VIDEO FILES)", font=('Segoe UI', 8, 'bold'), bg=C_BASE, fg=C_TXT2,
+                 anchor='w').pack(fill=tk.X, pady=(14, 4))
+        skip_row = tk.Frame(video_box, bg=C_BASE)
+        skip_row.pack(fill=tk.X)
+        skip_var = tk.StringVar(value=str(DEFAULT_SKIP_FRAMES))
+        skip_spin = tk.Spinbox(skip_row, from_=1, to=MAX_SKIP_FRAMES, textvariable=skip_var, width=7,
+                               font=('Segoe UI', 10), bg=C_CARD2, fg=C_TXT1, buttonbackground=C_CARD2, relief=tk.FLAT,
+                               highlightthickness=1, highlightbackground=C_BORDER, highlightcolor=C_ACCENT,
+                               insertbackground=C_ACCENT)
+        skip_spin.pack(side=tk.LEFT, ipady=3)
+        skip_estimate = tk.Label(skip_row, text="", bg=C_BASE, fg=C_GREEN, font=('Segoe UI', 8, 'bold'), anchor='w',
+                                 justify=tk.LEFT, wraplength=width - 70 - 100)
+        skip_estimate.pack(side=tk.LEFT, padx=10)
+        tk.Label(video_box, text="Video files were found in this folder. Jelibox turns each video into pictures: it "
+                                 "saves one frame, skips the next N - 1 frames, saves the next one, and so on "
+                                 "(N = the number above). 10 means every 10th frame is kept, so a 30 fps video gives "
+                                 "3 pictures per second. Use 1 to keep every frame. The videos themselves are not "
+                                 "copied, and the new pictures start without annotations.",
+                 font=('Segoe UI', 8), bg=C_BASE, fg=C_TXT3, anchor='w', justify=tk.LEFT,
+                 wraplength=width - 70).pack(fill=tk.X, pady=(4, 0))
+
+        def update_skip_estimate(*_):
+            probes = state['probes']
+            try:
+                skip = sanitize_skip_frames(skip_var.get())
+            except ValueError as e:
+                skip_estimate.config(text=f"✗ {e}", fg=C_RED)
+                return
+            pictures = sum(frames_to_save(p['frames'], skip) for p in probes)
+            unknown = sum(1 for p in probes if not p['frames'])
+            text = f"→ about {pictures} picture(s) from {len(probes)} video(s)"
+            if unknown:
+                text += f" ({unknown} video(s) with an unknown length are not counted)"
+            skip_estimate.config(text=text, fg=C_GREEN)
+
+        skip_var.trace_add('write', update_skip_estimate)
 
         def recenter():
-            dialog.update_idletasks()
+            scroll.fit(dialog, width)                   # the height follows the content, never more than the screen
             x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
             y = max(0, (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2) - 20)
             dialog.geometry(f"+{x}+{y}")
@@ -782,7 +827,8 @@ class WorkspacePickerApp:
             chosen = filedialog.askdirectory(title="Select dataset folder", parent=dialog)
             if not chosen:
                 return
-            state.update(folder=chosen, scan=None, format='unset', found={}, yolo_unnamed_classes=False)
+            state.update(folder=chosen, scan=None, format='unset', found={}, yolo_unnamed_classes=False, probes=[])
+            video_box.pack_forget()
             folder_var.set(chosen)
             set_status(folder_status, "Scanning...", C_TXT3)
             set_status(skip_status, "", C_TXT3)
@@ -791,12 +837,14 @@ class WorkspacePickerApp:
             scan = scan_dataset_folder(chosen)
             state['scan'] = scan
             n_images = len(scan['images'])
-            if n_images == 0:
+            n_videos = len(scan['videos'])
+            if n_images == 0 and n_videos == 0:
                 state['format'] = None
-                set_status(folder_status, "✗ No images found in this folder (every subfolder was searched).", C_RED)
+                set_status(folder_status, "✗ No images or videos found in this folder (every subfolder was searched).",
+                           C_RED)
                 return
             try:
-                fmt = detect_dataset_format(scan)
+                fmt = detect_dataset_format(scan) if n_images else None
             except ValueError as e:
                 state['format'] = 'conflict'
                 set_status(folder_status, f"✗ {e}", C_RED)
@@ -805,7 +853,9 @@ class WorkspacePickerApp:
             state['format'] = fmt
             state['found'] = found = scan_classes(scan, fmt) if fmt else {}
             color = C_GREEN
-            if fmt is None:
+            if n_images == 0:
+                text = ""
+            elif fmt is None:
                 text = f"✓ {n_images} image(s) found - no annotations detected, they will be added unannotated."
             elif fmt == 'yolo' and not yolo_classes_resolved(scan):
                 state['yolo_unnamed_classes'] = True
@@ -822,6 +872,15 @@ class WorkspacePickerApp:
                 color = C_AMBER
                 text += (f"\n⚠ {scan['duplicates']} image(s) have the same file name as another one in a different "
                          f"subfolder - only one image of each name is imported.")
+            if n_videos:
+                state['probes'] = probe_videos(scan['videos'])
+                if n_images == 0:
+                    text = f"✓ {n_videos} video(s) found and no images."
+                else:
+                    text += f"\n✓ {n_videos} video(s) found as well."
+                text += " Their frames become pictures, without annotations (see Skip frames below)."
+                video_box.pack(fill=tk.X, after=folder_hint)
+                update_skip_estimate()
             set_status(folder_status, text, color)
 
             # a new workspace gets the classes found in the annotations as a starting point (still editable)
@@ -873,13 +932,13 @@ class WorkspacePickerApp:
             if reuse_classes is not None:
                 preview = ", ".join(reuse_classes) if reuse_classes else "(no classes defined yet)"
                 tk.Label(classes_section, text=preview, font=('Segoe UI', 9, 'bold'),
-                         bg=C_BASE, fg=C_TXT1, anchor='w', wraplength=width - 48,
+                         bg=C_BASE, fg=C_TXT1, anchor='w', wraplength=width - 70,
                          justify=tk.LEFT).pack(fill=tk.X, ipady=4)
                 tk.Label(classes_section,
                          text="This workspace already has these classes - shared across "
                               "every instance, so they can't be changed here.",
                          font=('Segoe UI', 8), bg=C_BASE, fg=C_TXT3, anchor='w',
-                         wraplength=width - 48, justify=tk.LEFT).pack(fill=tk.X, pady=(3, 0))
+                         wraplength=width - 70, justify=tk.LEFT).pack(fill=tk.X, pady=(3, 0))
             else:
                 entry = tk.Entry(classes_section, textvariable=classes_var, font=('Segoe UI', 10),
                                   bg=C_CARD2, fg=C_TXT1, insertbackground=C_ACCENT, relief=tk.FLAT)
@@ -887,9 +946,9 @@ class WorkspacePickerApp:
                 tk.Label(classes_section,
                          text="Comma-separated names inside curly braces, e.g. {cat, dog, rabbit}.",
                          font=('Segoe UI', 8), bg=C_BASE, fg=C_TXT3, anchor='w',
-                         wraplength=width - 48, justify=tk.LEFT).pack(fill=tk.X, pady=(3, 0))
+                         wraplength=width - 70, justify=tk.LEFT).pack(fill=tk.X, pady=(3, 0))
                 status = tk.Label(classes_section, text="", font=('Segoe UI', 8, 'bold'),
-                                   bg=C_BASE, fg=C_TXT3, anchor='w', wraplength=width - 48,
+                                   bg=C_BASE, fg=C_TXT3, anchor='w', wraplength=width - 70,
                                    justify=tk.LEFT)
                 status.pack(fill=tk.X, pady=(3, 0))
                 classes_ui['status'] = status
@@ -906,7 +965,7 @@ class WorkspacePickerApp:
         prefix_entry.pack(fill=tk.X, ipady=6)
         prefix_default = 'Renames images and annotations in order - "test-" gives test-1, test-2, ... Blank keeps the names.'
         prefix_status = tk.Label(form, text=prefix_default, font=('Segoe UI', 8), bg=C_BASE, fg=C_TXT3,
-                                 anchor='w', justify=tk.LEFT, wraplength=width - 48)
+                                 anchor='w', justify=tk.LEFT, wraplength=width - 70)
         prefix_status.pack(fill=tk.X, pady=(3, 0))
 
         def on_prefix_change(*_):
@@ -943,8 +1002,8 @@ class WorkspacePickerApp:
             dialog.update()
 
         # ======== Buttons ========
-        btn_row = tk.Frame(form, bg=C_BASE)
-        btn_row.pack(fill=tk.X, pady=(18, 0))
+        btn_row = tk.Frame(dialog, bg=C_BASE)
+        btn_row.pack(side=tk.BOTTOM, fill=tk.X, padx=24, pady=(10, 16), before=scroll.frame)
 
         self._btn(btn_row, "✕  Cancel", dialog.destroy, C_CARD2, C_TXT2,
                   font_size=10).pack(side=tk.LEFT, ipady=8, ipadx=12)
@@ -969,9 +1028,16 @@ class WorkspacePickerApp:
                 return
             if state['format'] == 'conflict':
                 return                      # the specific error is already shown under the folder field
-            if not state['scan']['images']:
-                set_status(folder_status, "✗ No images found in this folder.", C_RED)
+            if not state['scan']['images'] and not state['scan']['videos']:
+                set_status(folder_status, "✗ No images or videos found in this folder.", C_RED)
                 return
+            skip_frames = DEFAULT_SKIP_FRAMES
+            if state['scan']['videos']:
+                try:
+                    skip_frames = sanitize_skip_frames(skip_var.get())
+                except ValueError as e:
+                    skip_estimate.config(text=f"✗ {e}", fg=C_RED)
+                    return
             try:
                 prefix = sanitize_filename_prefix(prefix_var.get())
             except ValueError as e:
@@ -1010,13 +1076,15 @@ class WorkspacePickerApp:
                         parent=dialog):
                     return
             # ---- do the import, with progress ----
-            form.pack_forget()
+            scroll.frame.pack_forget()
+            btn_row.pack_forget()
             progress_frame.pack(fill=tk.BOTH, expand=True)
             dialog.update()
 
             try:
                 result = import_dataset(state['folder'], target_name, prefix=prefix,
-                                        progress_cb=on_copy_progress, classes=classes_to_write)
+                                        progress_cb=on_copy_progress, classes=classes_to_write,
+                                        skip_frames=skip_frames)
             except (ValueError, OSError) as e:
                 dialog.destroy()
                 messagebox.showerror("Couldn't Add Workspace", str(e), parent=self.root)
@@ -1026,6 +1094,11 @@ class WorkspacePickerApp:
             self.expanded.add(target_name)
             self.refresh_workspaces()
             lines = [f'"{result["instance_name"]}" created with {result["image_count"]} image(s).']
+            if result['frames']:
+                lines.append(f'Video frames: {result["frames"]} picture(s) saved from {result["videos"]} video(s), '
+                             f'1 frame out of every {result["skip_frames"]}.')
+            if result['video_errors']:
+                lines.append("\n" + "\n".join(result['video_errors']))
             if result['format']:
                 lines.append(f'Annotations: {result["format"]}, {result["annotated_count"]} annotated image(s).')
             if result['classes']:
@@ -1034,7 +1107,7 @@ class WorkspacePickerApp:
             if skipped:
                 lines.append(f'\n{sum(skipped.values())} object(s) skipped - their class is not in this workspace: '
                              + ", ".join(f"{c} ({n})" for c, n in skipped.items()))
-            show = messagebox.showwarning if skipped else messagebox.showinfo
+            show = messagebox.showwarning if (skipped or result['video_errors']) else messagebox.showinfo
             show("Workspace Ready", "\n".join(lines), parent=self.root)
 
         self._btn(btn_row, create_label, on_create, C_ACCENT, C_ON_ACCENT,
@@ -1042,10 +1115,7 @@ class WorkspacePickerApp:
 
         dialog.bind('<Escape>', lambda e: dialog.destroy())
 
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
-        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
-        dialog.geometry(f"+{x}+{y}")
+        recenter()
 
     # ----------------------------------------------------------
     #  Shared progress popup (used by delete, which can touch a lot of files)

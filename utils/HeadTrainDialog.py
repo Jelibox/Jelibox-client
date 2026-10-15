@@ -409,7 +409,7 @@ class HeadTrainDialog(_Dialog):
         # the same engine as Export Dataset, so there is no export step.
         self.aug_card = self.card(body)
         self.label(self.aug_card, "AUGMENTATION", size=8, bold=True)
-        self.label(self.aug_card, "Add augmented copies of the training pictures (never of the validation ones). "
+        self.label(self.aug_card, "Add augmented copies of the training pictures (the validation and test ones only if you tick them in the picker). "
                                   "The ones Ultralytics already does while it trains are greyed out in the picker.",
                    size=8, fg=C_TXT3, pady=(2, 6))
         self.augment = AugmentChoice(self.aug_card, self.win, workspaceName, self._train_count)

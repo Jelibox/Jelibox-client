@@ -1298,6 +1298,19 @@ class MainWindowModeTests(unittest.TestCase):
         self.assertTrue(job["images_folders"])
         dlg.win.destroy()
 
+    def test_the_split_chosen_in_the_old_dialog_reaches_the_job(self):
+        self._clean_trained_model()
+        self.addCleanup(self._clean_trained_model)
+        split = {"val_fraction": 0.2, "test_fraction": 0.1, "shuffle": True}
+        cfg = {"epoch": 1, "batch": 4, "imgsz": 320, "freeze": 0, "lr0": 0.001, "weight_decay": 0.0005, "split": split}
+        dlg = self._plain_train(cfg=cfg)
+        self._wait(dlg)
+        with open(os.path.join(ctx.model_dir, "yolo_run", "job.json"), encoding="utf-8") as f:
+            job = __import__("json").load(f)
+        self.assertEqual((job["val_fraction"], job["test_fraction"], job["shuffle"]), (0.2, 0.1, True))
+        self.assertIn("split_seed", job)
+        dlg.win.destroy()
+
     def test_the_augmentation_chosen_in_the_old_dialog_reaches_the_job(self):
         from utils import augment_catalog as cat, augmentation as aug
         self._clean_trained_model()
@@ -1599,6 +1612,35 @@ class FullYoloTrainingTests(ModeGuiBase):
         self.assertIsNotNone(ask.call_args.kwargs["previous"], "the picker starts from the earlier picks")
         self.assertIn("Blur", dlg.augment.label.cget("text"))
         dlg.win.destroy()
+
+    def test_the_old_train_dialog_has_the_split_bar_and_returns_the_choice(self):
+        from utils.TrainingConfigDialog import TrainingConfigDialog
+        dialog = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
+                                      model_type="detect", model_folder=ctx.model_dir, workspace=WORKSPACE,
+                                      total_count=lambda: 50)
+        self.assertEqual((dialog.split.train_pct, dialog.split.valid_pct, dialog.split.test_pct), (70, 30, 0))
+        self.assertEqual(dialog.split.counts(), (35, 15, 0), "the old 70/30 is the default")
+        dialog.split.train_var.set("60")
+        dialog.split.valid_var.set("25")
+        dialog.shuffle_var.set(True)
+        with mock.patch("utils.AugmentationPanel.ask_augmentation", return_value=self._picked("blur", outputs=2)):
+            dialog.augment.button.invoke()
+        self.assertIn("grows from 30 to 60", dialog.augment.label.cget("text"), "60% of 50 pictures")
+        dialog.start()
+        self.assertEqual(dialog.result["split"], {"val_fraction": 0.25, "test_fraction": 0.15, "shuffle": True})
+        again = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
+                                     model_type="detect", model_folder=ctx.model_dir, total_count=lambda: 50)
+        again.split.valid_var.set("0")
+        with mock.patch("utils.TrainingConfigDialog.messagebox.showwarning") as warn:
+            again.start()
+        self.assertIsNone(again.result)
+        self.assertIn("at least 1", warn.call_args[0][1])
+        again.dialog.destroy()
+        plain = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
+                                     model_type="detect", model_folder=ctx.model_dir)
+        self.assertIsNone(plain.split)
+        plain.start()
+        self.assertNotIn("split", plain.result)
 
     def test_the_old_train_dialog_has_an_augment_row_and_returns_the_picks(self):
         from utils.TrainingConfigDialog import TrainingConfigDialog

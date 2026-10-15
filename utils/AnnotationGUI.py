@@ -2872,7 +2872,8 @@ class AnnotationGUI:
             model_type=model_type,
             model_folder=model_folder,
             workspace=workspaceName,
-            train_count=self._training_picture_count
+            train_count=self._training_picture_count,
+            total_count=self._labelled_picture_count
         )
         config = config_dialog.show()
 
@@ -2901,8 +2902,9 @@ class AnnotationGUI:
         job = build_yolo_job(
             images_folders=image_folders, labels_folder=yolo_labels_folder, classes=list(CLASSLIST),
             init_weights=init_model, imgsz=current_imgsz, epochs=current_epoch, batch=current_batch,
-            lr=config['lr0'], freeze=config['freeze'], weight_decay=config['weight_decay'], val_fraction=0.3,
-            out_dir=os.path.join(model_folder, "yolo_run"), augment=config.get('augment'))
+            lr=config['lr0'], freeze=config['freeze'], weight_decay=config['weight_decay'],
+            out_dir=os.path.join(model_folder, "yolo_run"), augment=config.get('augment'),
+            **{'val_fraction': 0.3, **(config.get('split') or {}), 'split_seed': int(time.time())})
 
         def finished(_installed):
             state.training_running = False
@@ -2916,6 +2918,13 @@ class AnnotationGUI:
             state.training_running = False
         else:
             state.training_process = dlg.proc.proc
+
+    def _labelled_picture_count(self):
+        """Pictures that have labels (what a training can use), for the split bar of the Train window."""
+        from . import head_data
+        image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
+        folders = sorted({os.path.dirname(r['source']) for r in self._find_workspace_images(image_exts)})
+        return len(head_data.labelled_pairs(folders or [input_folder], yolo_labels_folder))
 
     def _training_picture_count(self):
         """Pictures the plain Train button trains on before augmentation (labelled ones, 70% of them)."""

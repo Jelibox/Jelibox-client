@@ -58,7 +58,7 @@ def prepare_dataset(job, progress=None):
 def prepare(job, progress=None):
     """Copy the labelled images + their labels into <scratch>/{train,val}/{images,labels} and write data.yaml.
     With job["augment"] (an AugmentConfig as a dict) the training part also gets its augmented copies, made here with
-    the same engine as Export Dataset; the validation part is never touched.
+    the same engine as Export Dataset; the validation and test parts only when the config's `splits` names them.
     job["test_fraction"] (default 0) holds a test part back that training never sees; job["shuffle"] mixes the
     pictures before the split (by default the split is by position). Returns a dict: yaml, scratch, n_train (augmented
     copies included), n_val, n_test, counts (boxes per class in the training part). `progress(done, total, text)` is called after every picture."""
@@ -88,12 +88,12 @@ def prepare(job, progress=None):
         for image, label in items:
             name = os.path.basename(image)
             stem = os.path.splitext(name)[0]
-            if augmenter is None or split != "train" or augmenter.keeps_original(split):
+            if augmenter is None or augmenter.keeps_original(split):
                 shutil.copy2(image, os.path.join(images, name))
                 shutil.copy2(label, os.path.join(labels, stem + ".txt"))
                 written[split] += 1
-            if augmenter is not None and split == "train":
-                written[split] += _write_copies(augmenter, image, label, images, labels)
+            if augmenter is not None:
+                written[split] += _write_copies(augmenter, image, label, images, labels, split)
             done += 1
             if done == total or done % 5 == 0:
                 part = {"train": "training", "val": "validation", "test": "test"}[split]
@@ -118,11 +118,11 @@ def _augmenter(job):
         return None
     from .augmentation import Augmenter, config_from_dict
     config = config_from_dict(spec)
-    config.splits = ("train",)
+    config.splits = tuple(dict.fromkeys(("train",) + tuple(config.splits)))        # training is always augmented
     return Augmenter(config) if config.enabled else None
 
 
-def _write_copies(augmenter, image, label, images_dir, labels_dir):
+def _write_copies(augmenter, image, label, images_dir, labels_dir, split="train"):
     """Write the augmented copies of one training picture (labels moved with flips / turns); returns how many."""
     from .augment_geometry import yolo_label_text
     from .augmentation import write_image
@@ -130,7 +130,7 @@ def _write_copies(augmenter, image, label, images_dir, labels_dir):
     with open(label, encoding="utf-8") as f:
         text = f.read()
     made = 0
-    for suffix, picture, tf in augmenter.copies(image, "train"):
+    for suffix, picture, tf in augmenter.copies(image, split):
         try:
             write_image(os.path.join(images_dir, stem + suffix + ext), picture)
             with open(os.path.join(labels_dir, stem + suffix + ".txt"), "w", encoding="utf-8") as f:

@@ -255,6 +255,20 @@ class TileDialogTests(PanelTests):
             pump(self.root, 0.05)
 
 
+class AlsoAugmentTests(PanelTests):
+    def test_validation_and_test_are_ticked_off_and_become_splits(self):
+        panel = self.panel
+        panel.state["blur"].enabled = True
+        self.assertEqual(panel.get_config().splits, ("train",))
+        panel.valid_var.set(True)
+        self.assertEqual(panel.get_config().splits, ("train", "val"))
+        panel.test_var.set(True)
+        self.assertEqual(panel.get_config().splits, ("train", "val", "test"))
+        self.assertIn("validation and test", panel.detail.cget("text"))
+        panel.set_locked(True)
+        self.assertTrue(all(str(c.cget("state")) == "disabled" for c in panel.also_checks))
+
+
 class OutputsTests(PanelTests):
     def pick(self, key):
         dialog = self.tile_dialog(key)
@@ -339,6 +353,15 @@ class DialogTests(unittest.TestCase):
         dlg = self.open()
         self.button(dlg, "Cancel").invoke()
         self.assertIsNone(dlg.result)
+
+    def test_the_validation_choice_survives_the_dialog_and_comes_back(self):
+        dlg = self.open(splits=("train", "val"))
+        self.assertTrue(dlg.panel.valid_var.get())
+        self.assertFalse(dlg.panel.test_var.get())
+        dlg.panel.state["noise"].enabled = True
+        self.button(dlg, "OK").invoke()
+        self.assertEqual(dlg.result["splits"], ("train", "val"))
+        self.assertEqual(dlg.result["config"].splits, ("train", "val"))
 
     def test_ok_with_nothing_picked_gives_no_config(self):
         dlg = self.open()

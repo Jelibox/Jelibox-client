@@ -9,11 +9,15 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Added
+- **The Train / Valid / Test split is also in the plain Train button** (YOLO-World and the other modes): its Training Configuration window has the same colour bar, a held-back test part scored at the end, and the "Mix the pictures before splitting" option. The default stays the old 70 / 30 with no test part.
+- **Augment the validation (and test) pictures too.** The augmentation picker has an **Also augment** row with "the validation pictures" and "the test pictures" (off by default, because scores measured on real pictures are the honest ones). It works in the full YOLO training window, in the plain Train window and in Export Dataset; training is always augmented.
+
 ## [0.4.9] - 2026-10-15
 
 ### Added
-- **Train / Valid / Test split in the full YOLO training window**, the same colour bar as Export Dataset (drag the two handles or type the percentages, a chip per split with its picture count). The test part is held back: training never sees it, and when the run ends the best model is scored on it once (mAP50 and mAP50-95 are shown in the window). The split is by position by default (first pictures train, then validation, then test, so near-duplicate video frames do not leak between them); **Mix the pictures before splitting** makes it random. The head-only training keeps its validation box.
-
+- **Train / Valid / Test split in the full YOLO training window**, the same colour bar as Export Dataset (drag the two handles or type the percentages, a chip per split with its picture count). The test part is held back: training never sees it, and when the run ends the best model is scored on it once (mAP50 and mAP50-95 are shown in the window). The split is by position by default (first pictures train, then validation, then test, so near-duplicate video frames do not leak between them); **Mix the pictures before splitting** makes it random. The head-only training keeps its validation box.
+
 ### Changed
 - **The training window now shows the data preparation.** Before the first epoch it says what it is doing (Step 1/3 reading the labels, 2/3 splitting, 3/3 copying the pictures and making the augmented copies), with a progress bar, the number of pictures done and the time left, then "Starting Ultralytics ..." while it checks the pictures. The bar switches to epochs when training starts.
 

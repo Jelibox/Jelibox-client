@@ -17,10 +17,13 @@ class TrainingConfigDialog:
     # ─────────────────────────────────────────────────────────────
 
     def __init__(self, parent, default_epoch=100, default_batch=16,
-                 model_path=None, model_type="detect", model_folder=None, workspace=None, train_count=None):
+                 model_path=None, model_type="detect", model_folder=None, workspace=None, train_count=None,
+                 total_count=None):
         self.result        = None
         self.workspace     = workspace      # with it, the window shows an Augmentation row
         self.train_count   = train_count    # callable: training pictures before augmentation
+        self.total_count   = total_count    # callable: labelled pictures; with it the window has the split bar
+        self.split         = None
         self.model_path    = model_path
         self.model_type    = model_type
         self.model_folder  = model_folder
@@ -67,6 +70,7 @@ class TrainingConfigDialog:
         self._build_spinbox_row(content, "Freeze:",     "freeze_var", 0,            0,   100,  "layers (0 = none, 10 = backbone)")
         self._build_float_row(content,   "LR (lr0):",   "lr0_var",    0.001,        "AdamW start LR (1e-5 – 0.1)")
         self._build_float_row(content,   "Weight Decay:", "wd_var",   0.0005,       "AdamW weight decay (0 – 0.1)")
+        self._build_split_row(content)
         self._build_augment_row(content)
         self._build_hint_label(content)
         self._build_action_buttons(content)
@@ -132,6 +136,40 @@ class TrainingConfigDialog:
     def _build_separator(self, parent):
         tk.Frame(parent, bg=self.border, height=1).pack(fill=tk.X, pady=10)
 
+    def _build_split_row(self, parent):
+        """The Train / Valid / Test bar of Export Dataset (the test part is held back and scored at the end)."""
+        if self.total_count is None:
+            return
+        from .SplitBar import SplitBar
+        tk.Frame(parent, bg=self.border, height=1).pack(fill=tk.X, pady=10)
+        tk.Label(parent, text="Split:", font=("Segoe UI", 11, "bold"), bg=self.bg_dark, fg=self.fg_light,
+                 anchor="w").pack(fill=tk.X)
+        self.split = SplitBar(parent, bg=self.bg_dark, width=560, train=70, valid=30,
+                              on_change=lambda: self.augment and self.augment.refresh())
+        self.split.pack(fill=tk.X)
+        self.split.set_total(self.total_count())
+        self.shuffle_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(parent, text="Mix the pictures before splitting (random)", variable=self.shuffle_var,
+                       bg=self.bg_dark, fg=self.fg_light, selectcolor=self.bg_secondary,
+                       activebackground=self.bg_dark, activeforeground=self.fg_light, font=("Segoe UI", 9),
+                       anchor="w").pack(anchor="w", pady=(4, 0))
+        tk.Label(parent, text="By position by default: first pictures train, then validation, then test, so video "
+                              "frames that look alike do not leak between them. The test pictures are never used in "
+                              "training; the best model is scored on them at the end.", font=("Segoe UI", 8),
+                 bg=self.bg_dark, fg=self.fg_hint, justify=tk.LEFT, wraplength=560, anchor="w").pack(fill=tk.X)
+        tk.Frame(parent, bg=self.border, height=1).pack(fill=tk.X, pady=10)
+
+    def _train_pictures(self):
+        """Training pictures before augmentation: from the split bar when there is one."""
+        if self.split is not None:
+            from . import head_data
+            n = self.total_count()
+            if n < 2:
+                return n
+            pairs = [(i, i) for i in range(n)]
+            return len(head_data.split_three(pairs, self.split.valid_pct / 100, self.split.test_pct / 100)[0])
+        return self.train_count() if self.train_count else None
+
     def _build_augment_row(self, parent):
         """The Augmentation button (the same picker as Export Dataset, with Ultralytics' own greyed out)."""
         self.augment = None
@@ -142,7 +180,7 @@ class TrainingConfigDialog:
         row.pack(fill=tk.X, pady=6)
         tk.Label(row, text="Augment:", font=("Segoe UI", 11, "bold"), bg=self.bg_dark, fg=self.fg_light,
                  width=12, anchor="w").pack(side=tk.LEFT)
-        self.augment = AugmentChoice(row, self.dialog, self.workspace, self.train_count, bg=self.bg_dark, wrap=380)
+        self.augment = AugmentChoice(row, self.dialog, self.workspace, self._train_pictures, bg=self.bg_dark, wrap=380)
         self.augment.frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10)
 
     def _build_hint_label(self, parent):
@@ -502,6 +540,15 @@ class TrainingConfigDialog:
                 self.result['base_model'] = self.base_model_var.get()
             if self.augment is not None and self.augment.job_dict():
                 self.result['augment'] = self.augment.job_dict()
+            if self.split is not None:
+                if self.split.valid_pct < 1 or self.split.train_pct < 1:
+                    messagebox.showwarning("Invalid Input", "Give the training and the validation part at least 1 %!",
+                                           parent=self.dialog)
+                    self.result = None
+                    return
+                self.result['split'] = {'val_fraction': self.split.valid_pct / 100,
+                                        'test_fraction': self.split.test_pct / 100,
+                                        'shuffle': bool(self.shuffle_var.get())}
 
             self.dialog.destroy()
 

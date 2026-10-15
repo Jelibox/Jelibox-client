@@ -233,6 +233,26 @@ class AugmentTests(Base):
         self.assertEqual(sum(counts), 10, "the box counts are those of the real pictures")
         self.assertEqual(len(os.listdir(os.path.join(scratch, "train", "labels"))), 30)
 
+    def test_the_validation_part_is_augmented_too_when_asked(self):
+        job = self.job(augment=self.augment(["brightness"], splits=("train", "val")))
+        _yaml, scratch, n_train, n_val, _ = yj.prepare_dataset(job)
+        self.assertEqual((n_train, n_val), (30, 6), "2 validation pictures x (original + 2 copies)")
+        names = sorted(os.listdir(os.path.join(scratch, "val", "images")))
+        self.assertEqual(names, ["img_11.png", "img_11_aug1.png", "img_11_aug2.png", "img_12.png", "img_12_aug1.png",
+                                 "img_12_aug2.png"])
+        self.assertEqual(len(os.listdir(os.path.join(scratch, "val", "labels"))), 6)
+
+    def test_the_test_part_is_augmented_only_when_named(self):
+        for splits, expected in ((("train", "val"), 2), (("train", "val", "test"), 6)):
+            job = self.job(test_fraction=0.17, augment=self.augment(["brightness"], splits=splits))
+            res = yj.prepare(job)
+            self.assertEqual(res["n_test"], expected, splits)
+
+    def test_training_is_always_augmented_even_when_the_job_forgets_it(self):
+        spec = self.augment(["brightness"], splits=("val",))
+        _yaml, _scratch, n_train, n_val, _ = yj.prepare_dataset(self.job(augment=spec))
+        self.assertEqual((n_train, n_val), (30, 6))
+
     def test_without_the_original_only_the_copies_are_written(self):
         job = self.job(augment=self.augment(["brightness"], keep=False, outputs=2))
         _yaml, scratch, n_train, n_val, _ = yj.prepare_dataset(job)

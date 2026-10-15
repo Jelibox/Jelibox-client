@@ -267,13 +267,15 @@ class AugmentationPanel(tk.Frame):
     """The picker. `training=True` greys out the tiles Ultralytics already does and says so."""
 
     def __init__(self, parent, workspace, training=False, on_change=None, bg=C_CARD, state=None, outputs=None,
-                 keep_original=True, seed=None):
+                 keep_original=True, seed=None, splits=("train",)):
         super().__init__(parent, bg=bg)
         self.bg, self.workspace, self.training, self.on_change = bg, workspace, training, on_change
         self.state = state if state is not None else cat.default_state()
         self.outputs_var = tk.IntVar(value=outputs or cat.DEFAULT_OUTPUTS)
         self.keep_var = tk.BooleanVar(value=bool(keep_original))
         self.seed_var = tk.StringVar(value="" if seed is None else str(seed))
+        self.valid_var = tk.BooleanVar(value="val" in (splits or ()))
+        self.test_var = tk.BooleanVar(value="test" in (splits or ()))
         self.extra_line = None                       # callable -> text shown under the summary (e.g. dataset size)
         self.locked = False
         self._photos = []
@@ -312,6 +314,18 @@ class AugmentationPanel(tk.Frame):
                                        activeforeground=C_ACCENT, font=('Segoe UI', 9), bd=0, highlightthickness=0,
                                        cursor='hand2')
         self.keep_chk.pack(side=tk.LEFT, padx=22)
+        also = tk.Frame(self, bg=bg)
+        also.pack(fill=tk.X, pady=(6, 0))
+        tk.Label(also, text="Also augment", bg=bg, fg=C_TXT2, font=('Segoe UI', 9)).pack(side=tk.LEFT)
+        self.also_checks = []
+        for text, var in (("the validation pictures", self.valid_var), ("the test pictures", self.test_var)):
+            chk = tk.Checkbutton(also, text=text, variable=var, bg=bg, fg=C_TXT1, selectcolor=C_BASE,
+                                 activebackground=bg, activeforeground=C_ACCENT, font=('Segoe UI', 9), bd=0,
+                                 highlightthickness=0, cursor='hand2')
+            chk.pack(side=tk.LEFT, padx=(12, 0))
+            self.also_checks.append(chk)
+        tk.Label(also, text="(off keeps the scores honest: they are measured on real pictures)", bg=bg, fg=C_TXT3,
+                 font=('Segoe UI', 8)).pack(side=tk.LEFT, padx=12)
         seed = tk.Frame(self, bg=bg)
         seed.pack(fill=tk.X, pady=(6, 0))
         tk.Label(seed, text="Seed (optional)", bg=bg, fg=C_TXT2, font=('Segoe UI', 9)).pack(side=tk.LEFT)
@@ -327,7 +341,7 @@ class AugmentationPanel(tk.Frame):
         self.detail = tk.Label(self, text="", bg=bg, fg=C_TXT3, font=('Segoe UI', 8), anchor='w', justify=tk.LEFT,
                                wraplength=840)
         self.detail.pack(fill=tk.X)
-        for var in (self.outputs_var, self.keep_var, self.seed_var):
+        for var in (self.outputs_var, self.keep_var, self.seed_var, self.valid_var, self.test_var):
             var.trace_add("write", lambda *_: self.refresh_summary())
 
     # ------------------------------------------------------------ the preview picture
@@ -411,7 +425,7 @@ class AugmentationPanel(tk.Frame):
         """Lock the controls (the tiles open nothing) while an export runs."""
         self.locked = bool(locked)
         state = tk.DISABLED if locked else tk.NORMAL
-        for w in (self.keep_chk, self.seed_entry, self.spin, self.choose_btn):
+        for w in (self.keep_chk, self.seed_entry, self.spin, self.choose_btn, *self.also_checks):
             w.config(state=state)
         if locked:
             self.reset_btn.config(state=tk.DISABLED)
@@ -459,7 +473,11 @@ class AugmentationPanel(tk.Frame):
         """The AugmentConfig for the picks, or None when nothing is picked. ValueError for a bad seed."""
         if not self.picked():
             return None
-        return cat.to_config(self.state, self.outputs(), self.keep_var.get(), self.seed())
+        return cat.to_config(self.state, self.outputs(), self.keep_var.get(), self.seed(), self.splits())
+
+    def splits(self):
+        """The parts that get augmented: train always, validation and test when ticked."""
+        return ("train",) + (("val",) if self.valid_var.get() else ()) + (("test",) if self.test_var.get() else ())
 
     def refresh_summary(self):
         names = cat.summary(self.state)
@@ -476,6 +494,9 @@ class AugmentationPanel(tk.Frame):
                 detail = f"Each training image becomes {outputs} pictures: the original and {copies} augmented."
             else:
                 detail = f"Each training image is replaced by {outputs} augmented pictures."
+            if self.valid_var.get() or self.test_var.get():
+                parts = " and ".join(n for n, v in (("validation", self.valid_var), ("test", self.test_var)) if v.get())
+                detail += f" The {parts} pictures get the same treatment."
             extra = self.extra_line() if self.extra_line else ""
             self.detail.config(text=(detail + ("  " + extra if extra else "")))
         if self.on_change:
@@ -487,7 +508,7 @@ class AugmentationDialog(tk.Toplevel):
     """The picker in a window of its own (the Train windows open it from a button). OK keeps the picks."""
 
     def __init__(self, parent, workspace, training=True, state=None, outputs=None, keep_original=True, seed=None,
-                 extra_line=None):
+                 extra_line=None, splits=("train",)):
         super().__init__(parent)
         self.title("Augmentation")
         self.configure(bg=C_BASE)
@@ -502,7 +523,7 @@ class AugmentationDialog(tk.Toplevel):
         body = tk.Frame(self, bg=C_CARD, highlightbackground=C_BORDER, highlightthickness=1)
         body.pack(fill=tk.BOTH, expand=True, padx=18, pady=14)
         self.panel = AugmentationPanel(body, workspace, training=training, state=state, outputs=outputs,
-                                       keep_original=keep_original, seed=seed)
+                                       keep_original=keep_original, seed=seed, splits=splits)
         self.panel.extra_line = extra_line
         self.panel.pack(fill=tk.BOTH, expand=True, padx=14, pady=12)
         self.panel.refresh_summary()
@@ -528,7 +549,8 @@ class AugmentationDialog(tk.Toplevel):
             messagebox.showwarning("Augmentation", str(exc), parent=self)
             return
         self.result = {"config": config, "state": self.panel.state, "outputs": self.panel.outputs(),
-                       "keep_original": bool(self.panel.keep_var.get()), "seed": self.panel.seed()}
+                       "keep_original": bool(self.panel.keep_var.get()), "seed": self.panel.seed(),
+                       "splits": self.panel.splits()}
         self.destroy()
 
 
@@ -537,7 +559,8 @@ def ask_augmentation(parent, workspace, training=True, previous=None, extra_line
     "keep_original", "seed"}) or None when cancelled; `previous` is an earlier result, to start from its picks."""
     previous = previous or {}
     dlg = AugmentationDialog(parent, workspace, training, previous.get("state"), previous.get("outputs"),
-                             previous.get("keep_original", True), previous.get("seed"), extra_line)
+                             previous.get("keep_original", True), previous.get("seed"), extra_line,
+                             previous.get("splits", ("train",)))
     parent.wait_window(dlg)
     return dlg.result
 

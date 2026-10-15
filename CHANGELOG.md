@@ -9,8 +9,10 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Added
-- **The Train / Valid / Test split is also in the plain Train button** (YOLO-World and the other modes): its Training Configuration window has the same colour bar, a held-back test part scored at the end, and the "Mix the pictures before splitting" option. The default stays the old 70 / 30 with no test part.
+## [0.4.10] - 2026-10-15
+
+### Added
+- **The Train / Valid / Test split is also in the plain Train button** (YOLO-World and the other modes): its Training Configuration window has the same colour bar, a held-back test part scored at the end, and the "Mix the pictures before splitting" option. The default stays the old 70 / 30 with no test part.
 - **Augment the validation (and test) pictures too.** The augmentation picker has an **Also augment** row with "the validation pictures" and "the test pictures" (off by default, because scores measured on real pictures are the honest ones). It works in the full YOLO training window, in the plain Train window and in Export Dataset; training is always augmented.
 
 ## [0.4.9] - 2026-10-15
@@ -160,7 +162,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.9...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.10...HEAD
+[0.4.10]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.6...v0.4.7

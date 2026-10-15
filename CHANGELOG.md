@@ -9,6 +9,15 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Added
+- **Export Dataset redesigned.** One scrolling window with numbered sections: format and destination, **Train / Valid / Test split** (draggable colour bar, a chip per split with its picture count and percentage), **Preprocessing** and **Augmentation**, and a footer that always says what will be written ("Export: Train 1530 · Valid 437 · Test 218", augmented copies included).
+- **Preprocessing** in Export Dataset: **Auto-Orient** (on by default: the EXIF rotation tag is dropped and the picture saved upright) and **Resize** (**Stretch to** W x H, **Fit within** W x H keeping the shape, or **Fit with black edges** to an exact W x H). The boxes and polygons are recalculated with the same matrix, for YOLO, Pascal VOC and COCO, and for the augmented copies too. Your original pictures are never changed.
+- **Visual augmentation picker.** Every augmentation is a tile with a preview made from a picture of your workspace; click one to open its settings window with the original next to examples that follow the slider: Flip, 90° Rotate, Rotation, Shear, Grayscale, Hue, Saturation, Brightness, Exposure, Contrast, Blur, Motion Blur, Noise, Cutout and JPEG compression. **Outputs per training image** and **Keep the original as one of them** say how many pictures each training image becomes (with the original dropped, only the augmented pictures are written). The preview picture is the first picture of the workspace until you choose another with **Choose preview picture...**; the choice is kept in the workspace config and falls back to the first picture when the file is gone.
+- **Augmentation while training.** The full YOLO training window (Custom Model mode) and the Training Configuration window of the plain Train button have an **Augmentation** button with the same picker, so you can train on an augmented version of your data without exporting it first. The copies are made from the training pictures only (never the validation ones) in the run's scratch folder and removed afterwards. Flip, Rotation, Shear, Hue, Saturation and Brightness are greyed out there with a note that Ultralytics already does them while it trains.
+
+### Changed
+- Rotation and flips are separate settings, rotation takes any angle up to the limit you set, and the canvas grows instead of cropping.
+
 ## [0.4.7] - 2026-10-13
 
 ### Added

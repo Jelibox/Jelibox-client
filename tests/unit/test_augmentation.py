@@ -31,7 +31,7 @@ class OperationTests(unittest.TestCase):
             mag = aug.OPERATIONS[name]["default"]
             out, applied, _ = augment_image(self.img, cfg(**{name: (mag, 100)}), self.rng)
             self.assertEqual(applied, [name])
-            if name != "rotate":                      # rotation grows the canvas on purpose
+            if name not in aug.CHANGES_SIZE:          # rotation, a 90 degree turn and shear grow / swap the canvas on purpose
                 self.assertEqual(out.shape, self.img.shape, name)
             self.assertEqual(out.dtype, np.uint8, name)
 

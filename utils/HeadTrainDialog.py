@@ -21,6 +21,7 @@ from tkinter import ttk, messagebox, filedialog
 
 from . import head_data
 from . import workspace_config as wcfg
+from .AugmentationPanel import AugmentChoice
 from .ModeDialogs import _Dialog
 from .config import workspaceName, BASE_DIR
 from .theme import (C_BASE, C_CARD, C_CARD2, C_BORDER, C_ACCENT, C_AMBER, C_GREEN, C_RED, C_TXT1, C_TXT2, C_TXT3,
@@ -75,15 +76,19 @@ def build_job(*, images_folders, labels_folder, classes, weights, taps, imgsz, e
 
 
 def build_yolo_job(*, images_folders, labels_folder, classes, init_weights, imgsz, epochs, batch, lr, freeze,
-                   val_fraction, out_dir, workers=1, weight_decay=0.0005):
-    """The job file of a full YOLO training (see utils/yolo_train_job.py)."""
-    return {
+                   val_fraction, out_dir, workers=1, weight_decay=0.0005, augment=None):
+    """The job file of a full YOLO training (see utils/yolo_train_job.py). `augment` = an AugmentConfig as a dict
+    (augmentation.config_to_dict): the training pictures get those augmented copies before Ultralytics starts."""
+    job = {
         "kind": "yolo", "images_folders": list(images_folders), "labels_folder": labels_folder,
         "classes": list(classes), "init_weights": init_weights, "imgsz": int(imgsz), "epochs": int(epochs),
         "batch": int(batch), "lr": float(lr), "freeze": int(freeze), "val_fraction": float(val_fraction),
         "weight_decay": float(weight_decay), "out_dir": out_dir, "scratch_dir": os.path.join(out_dir, "dataset"),
         "workers": workers, "stop_file": stop_file_for(out_dir),
     }
+    if augment:
+        job["augment"] = augment
+    return job
 
 
 def install_head(run_dir, model_folder):
@@ -385,6 +390,18 @@ class HeadTrainDialog(_Dialog):
         self.size_note = self.label(card, "", size=8, fg=C_TXT3, pady=(6, 0))
         self.device_hint = self.label(card, "", size=8, fg=C_AMBER, pady=(2, 0))
         self._device_hint()
+
+        # Augmentation: full training only (the head trainer has its own flip switch). The copies are made here, with
+        # the same engine as Export Dataset, so there is no export step.
+        self.aug_card = self.card(body)
+        self.label(self.aug_card, "AUGMENTATION", size=8, bold=True)
+        self.label(self.aug_card, "Add augmented copies of the training pictures (never of the validation ones). "
+                                  "The ones Ultralytics already does while it trains are greyed out in the picker.",
+                   size=8, fg=C_TXT3, pady=(2, 6))
+        self.augment = AugmentChoice(self.aug_card, self.win, workspaceName, self._train_count)
+        self.augment.frame.pack(fill=tk.X)
+        self.aug_frame = self.aug_card.master
+        self.aug_frame.pack_forget()
         self._apply_kind()
 
     def _apply_kind(self):
@@ -410,6 +427,8 @@ class HeadTrainDialog(_Dialog):
             widget.grid() if not yolo else widget.grid_remove()
         for widget in self._yolo_cells:
             widget.grid() if yolo else widget.grid_remove()
+        if hasattr(self, "aug_frame"):
+            self.aug_frame.pack(fill=tk.X, pady=(0, 10)) if yolo else self.aug_frame.pack_forget()
         self.size_note.config(text=(
             "Ultralytics resizes every picture to a square of this size (640 is the usual choice) and uses its own "
             "augmentation (mosaic, flips, colour shifts)." if yolo else
@@ -439,6 +458,16 @@ class HeadTrainDialog(_Dialog):
             self.device_hint.config(text="No NVIDIA GPU is available to PyTorch here, so training runs on the CPU: "
                                          "expect minutes per epoch for the head, and much longer for a full model. "
                                          "Try fewer epochs first.")
+
+    def _train_count(self):
+        """Training pictures before augmentation, for the current validation share."""
+        if len(self.pairs) < 2:
+            return len(self.pairs)
+        try:
+            share = max(5, min(50, int(self.val_var.get())))
+        except (tk.TclError, ValueError):
+            share = 20
+        return len(head_data.split_contiguous(self.pairs, share / 100)[0])
 
     def _update_data_info(self):
         n = len(self.pairs)
@@ -568,7 +597,7 @@ class HeadTrainDialog(_Dialog):
         job = build_yolo_job(images_folders=self.images_folders, labels_folder=self.labels_folder,
                              classes=self.classes, init_weights=self.model_path if resume else base, imgsz=size,
                              epochs=epochs, batch=batch, lr=lr, freeze=freeze, val_fraction=share / 100,
-                             out_dir=self.yolo_dir)
+                             out_dir=self.yolo_dir, augment=self.augment.job_dict())
         os.makedirs(self.yolo_dir, exist_ok=True)
         shutil.rmtree(os.path.join(self.yolo_dir, RUN_NAME), ignore_errors=True)   # an older run must not pass for this one
         self._launch(job, "yolo", self.yolo_dir, epochs)

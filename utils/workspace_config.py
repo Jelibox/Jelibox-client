@@ -232,7 +232,10 @@ def _normalize(data):
 
     classes = data.get("classes")
     classes = [c for c in classes if isinstance(c, str)] if isinstance(classes, list) else []
-    return {"version": CONFIG_VERSION, "classes": classes, "label_assistant": assistant}
+    raw_preview = data.get("preview")
+    image = raw_preview.get("image") if isinstance(raw_preview, dict) else ""
+    preview = {"image": image if isinstance(image, str) else ""}       # the picture the augmentation previews use
+    return {"version": CONFIG_VERSION, "classes": classes, "label_assistant": assistant, "preview": preview}
 
 
 def load(workspace_name):
@@ -299,6 +302,19 @@ def set_classes(workspace_name, classes):
         holder["class_map"] = {k: v for k, v in holder["class_map"].items() if v in data["classes"]}
     save(workspace_name, data)
     return removed
+
+
+# ------------------------------------------------- augmentation preview picture
+def get_preview_image(workspace_name):
+    """The picture the user chose for the augmentation previews ("" = none: the first picture is used)."""
+    data = load(workspace_name) or _normalize({})
+    return data["preview"]["image"]
+
+
+def set_preview_image(workspace_name, image):
+    data = load(workspace_name) or _normalize({})
+    data["preview"]["image"] = image or ""
+    save(workspace_name, data)
 
 
 # -------------------------------------------------------------- assistant

@@ -1,5 +1,5 @@
-"""Flip / rotate for augmentation: one affine matrix moves the pixels *and* the
-annotations, so image and labels can't drift apart.
+"""Flip / rotate / shear for augmentation and Resize for the export's Preprocessing: one affine matrix moves the
+pixels *and* the annotations, so image and labels can't drift apart.
 
 Coordinates are image-edge coordinates (0..W, 0..H), the same convention the
 annotations use (a box covering the whole image is 0,0,W,H). Nothing is
@@ -19,56 +19,10 @@ import cv2
 import numpy as np
 
 
-class GeoTransform:
-    def __init__(self, src_w, src_h, flip_h=False, flip_v=False, angle=0.0):
-        self.src_w, self.src_h = int(src_w), int(src_h)
-        self.flip_h, self.flip_v, self.angle = bool(flip_h), bool(flip_v), float(angle)
+class _Affine:
+    """What the label writers need from a transform: its size before and after, and a way to move points / boxes.
+    Subclasses set src_w / src_h / dst_w / dst_h and `matrix` (3x3, image-edge coordinates)."""
 
-        flip = np.eye(3)
-        if self.flip_h:
-            flip[0] = [-1.0, 0.0, self.src_w]
-        if self.flip_v:
-            flip[1] = [0.0, -1.0, self.src_h]
-
-        a = math.radians(self.angle)
-        c, s = math.cos(a), math.sin(a)
-        cx, cy = self.src_w / 2.0, self.src_h / 2.0
-        # counter-clockwise on screen (y points down)
-        rot = np.array([[c, s, cx - c * cx - s * cy],
-                        [-s, c, cy + s * cx - c * cy],
-                        [0.0, 0.0, 1.0]])
-
-        # 1e-6: cos(90deg) is 6e-17, which must not cost an extra pixel row
-        self.dst_w = max(1, math.ceil(self.src_w * abs(c) + self.src_h * abs(s) - 1e-6))
-        self.dst_h = max(1, math.ceil(self.src_w * abs(s) + self.src_h * abs(c) - 1e-6))
-        move = np.eye(3)
-        move[0, 2] = self.dst_w / 2.0 - cx
-        move[1, 2] = self.dst_h / 2.0 - cy
-        self.matrix = move @ rot @ flip
-
-    @property
-    def is_rotated(self):
-        return abs(self.angle) > 1e-9
-
-    # ------------------------------------------------------------ pixels
-    def warp(self, img):
-        if not self.is_rotated:
-            if self.flip_h and self.flip_v:
-                return cv2.flip(img, -1)
-            if self.flip_h:
-                return cv2.flip(img, 1)
-            if self.flip_v:
-                return cv2.flip(img, 0)
-            return img
-        # cv2 puts pixel centres on integers, annotations put pixel edges there
-        half_in, half_out = np.eye(3), np.eye(3)
-        half_in[0, 2] = half_in[1, 2] = 0.5
-        half_out[0, 2] = half_out[1, 2] = -0.5
-        m = half_out @ self.matrix @ half_in
-        return cv2.warpAffine(img, m[:2], (self.dst_w, self.dst_h), flags=cv2.INTER_LINEAR,
-                              borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
-
-    # ------------------------------------------------------- annotations
     def points(self, pts):
         """[(x, y), ...] in source coordinates -> destination coordinates."""
         if not len(pts):
@@ -85,6 +39,126 @@ class GeoTransform:
         xs = [p[0] for p in moved]
         ys = [p[1] for p in moved]
         return min(xs), min(ys), max(xs), max(ys)
+
+
+class GeoTransform(_Affine):
+    """Flip, then rotate (counter-clockwise on screen), then shear about the centre. The canvas grows to keep every
+    pixel of the original (new corners are black); a shear and a 90 degree turn are just special cases."""
+
+    def __init__(self, src_w, src_h, flip_h=False, flip_v=False, angle=0.0, shear_x=0.0, shear_y=0.0):
+        self.src_w, self.src_h = int(src_w), int(src_h)
+        self.flip_h, self.flip_v, self.angle = bool(flip_h), bool(flip_v), float(angle)
+        self.shear_x, self.shear_y = float(shear_x), float(shear_y)
+
+        flip = np.eye(3)
+        if self.flip_h:
+            flip[0] = [-1.0, 0.0, self.src_w]
+        if self.flip_v:
+            flip[1] = [0.0, -1.0, self.src_h]
+
+        a = math.radians(self.angle)
+        c, s = math.cos(a), math.sin(a)
+        cx, cy = self.src_w / 2.0, self.src_h / 2.0
+        rot = np.array([[c, s, cx - c * cx - s * cy],
+                        [-s, c, cy + s * cx - c * cy],
+                        [0.0, 0.0, 1.0]])
+        shear = np.eye(3)
+        if self.is_sheared:
+            kx, ky = math.tan(math.radians(self.shear_x)), math.tan(math.radians(self.shear_y))
+            shear = np.array([[1.0, kx, -kx * cy], [ky, 1.0, -ky * cx], [0.0, 0.0, 1.0]])
+
+        before = shear @ rot @ flip
+        corners = before @ np.array([[0, self.src_w, self.src_w, 0], [0, 0, self.src_h, self.src_h], [1, 1, 1, 1]], float)
+        min_x, max_x = corners[0].min(), corners[0].max()
+        min_y, max_y = corners[1].min(), corners[1].max()
+        # 1e-6: cos(90deg) is 6e-17, which must not cost an extra pixel row
+        self.dst_w = max(1, math.ceil(max_x - min_x - 1e-6))
+        self.dst_h = max(1, math.ceil(max_y - min_y - 1e-6))
+        move = np.eye(3)
+        move[0, 2], move[1, 2] = -min_x, -min_y
+        self.matrix = move @ before
+
+    @property
+    def is_rotated(self):
+        return abs(self.angle) > 1e-9
+
+    @property
+    def is_sheared(self):
+        return abs(self.shear_x) > 1e-9 or abs(self.shear_y) > 1e-9
+
+    # ------------------------------------------------------------ pixels
+    def warp(self, img):
+        if not self.is_rotated and not self.is_sheared:
+            if self.flip_h and self.flip_v:
+                return cv2.flip(img, -1)
+            if self.flip_h:
+                return cv2.flip(img, 1)
+            if self.flip_v:
+                return cv2.flip(img, 0)
+            return img
+        # cv2 puts pixel centres on integers, annotations put pixel edges there
+        half_in, half_out = np.eye(3), np.eye(3)
+        half_in[0, 2] = half_in[1, 2] = 0.5
+        half_out[0, 2] = half_out[1, 2] = -0.5
+        m = half_out @ self.matrix @ half_in
+        return cv2.warpAffine(img, m[:2], (self.dst_w, self.dst_h), flags=cv2.INTER_LINEAR,
+                              borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+
+
+RESIZE_MODES = {
+    "stretch": "Stretch to",                       # exactly W x H, the picture is squeezed or stretched
+    "fit": "Fit within",                           # keeps the shape, the longer side reaches W or H
+    "letterbox": "Fit (black edges) in",           # keeps the shape inside exactly W x H, black bars fill the rest
+}
+
+
+class ResizeTransform(_Affine):
+    """The Resize of the export's Preprocessing step: the same matrix moves pixels and labels."""
+
+    def __init__(self, src_w, src_h, mode, width, height):
+        if mode not in RESIZE_MODES:
+            raise ValueError(f"Unknown resize mode {mode!r}")
+        self.src_w, self.src_h, self.mode = int(src_w), int(src_h), mode
+        width, height = max(1, int(width)), max(1, int(height))
+        if mode == "stretch":
+            self.new_w, self.new_h = width, height
+            self.dst_w, self.dst_h = width, height
+            self.pad_x = self.pad_y = 0
+        else:
+            scale = min(width / self.src_w, height / self.src_h)
+            self.new_w, self.new_h = max(1, round(self.src_w * scale)), max(1, round(self.src_h * scale))
+            if mode == "fit":
+                self.dst_w, self.dst_h = self.new_w, self.new_h
+                self.pad_x = self.pad_y = 0
+            else:
+                self.dst_w, self.dst_h = width, height
+                self.pad_x, self.pad_y = (width - self.new_w) // 2, (height - self.new_h) // 2
+        self.matrix = np.array([[self.new_w / self.src_w, 0.0, float(self.pad_x)],
+                                [0.0, self.new_h / self.src_h, float(self.pad_y)],
+                                [0.0, 0.0, 1.0]])
+
+    def warp(self, img):
+        shrinking = self.new_w * self.new_h < self.src_w * self.src_h
+        out = cv2.resize(img, (self.new_w, self.new_h),
+                         interpolation=cv2.INTER_AREA if shrinking else cv2.INTER_LINEAR)
+        if self.pad_x or self.pad_y or (self.dst_w, self.dst_h) != (self.new_w, self.new_h):
+            out = cv2.copyMakeBorder(out, self.pad_y, self.dst_h - self.new_h - self.pad_y, self.pad_x,
+                                     self.dst_w - self.new_w - self.pad_x, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        return out
+
+
+class ChainTransform(_Affine):
+    """`first`, then `second` (an augmentation, then the export's Resize): one matrix for the labels, both steps
+    for the pixels."""
+
+    def __init__(self, first, second):
+        self.first, self.second = first, second
+        self.src_w, self.src_h = first.src_w, first.src_h
+        self.dst_w, self.dst_h = second.dst_w, second.dst_h
+        self.matrix = second.matrix @ first.matrix
+
+    def warp(self, img):
+        return self.second.warp(self.first.warp(img))
 
 
 # ----------------------------------------------------------------------

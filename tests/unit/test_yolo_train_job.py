@@ -145,6 +145,72 @@ class DatasetTests(Base):
             yj.prepare_dataset(self.job())
 
 
+class AugmentTests(Base):
+    """job["augment"]: the training part of the scratch dataset also gets augmented copies (never the validation part)."""
+
+    def setUp(self):
+        super().setUp()
+        import cv2
+        import numpy as np
+        for name in os.listdir(self.images):                                   # real pictures, so they can be augmented
+            os.remove(os.path.join(self.images, name))
+        for i in range(1, 13):
+            cv2.imwrite(os.path.join(self.images, f"img_{i:02d}.png"),
+                        np.full((40, 60, 3), 20 * i, np.uint8))
+
+    def augment(self, ops, **kw):
+        from utils import augment_catalog as cat
+        from utils import augmentation as aug
+        state = cat.default_state()
+        for name in ops:
+            state[name].enabled = True
+        return aug.config_to_dict(cat.to_config(state, kw.pop("outputs", 3), kw.pop("keep", True), seed=1, **kw))
+
+    def test_the_training_part_grows_and_the_validation_part_does_not(self):
+        job = self.job(augment=self.augment(["brightness"]))
+        _yaml, scratch, n_train, n_val, counts = yj.prepare_dataset(job)
+        self.assertEqual((n_train, n_val), (30, 2))                            # 10 pictures x (original + 2 copies)
+        names = sorted(os.listdir(os.path.join(scratch, "train", "images")))
+        self.assertIn("img_01.png", names)
+        self.assertIn("img_01_aug2.png", names)
+        self.assertEqual(sorted(os.listdir(os.path.join(scratch, "val", "images"))), ["img_11.png", "img_12.png"])
+        self.assertEqual(sum(counts), 10, "the box counts are those of the real pictures")
+        self.assertEqual(len(os.listdir(os.path.join(scratch, "train", "labels"))), 30)
+
+    def test_without_the_original_only_the_copies_are_written(self):
+        job = self.job(augment=self.augment(["brightness"], keep=False, outputs=2))
+        _yaml, scratch, n_train, n_val, _ = yj.prepare_dataset(job)
+        names = os.listdir(os.path.join(scratch, "train", "images"))
+        self.assertEqual((n_train, len(names)), (20, 20))
+        self.assertNotIn("img_01.png", names)
+        self.assertEqual(sorted(os.listdir(os.path.join(scratch, "val", "images"))), ["img_11.png", "img_12.png"])
+
+    def test_a_flip_moves_the_label_with_the_picture(self):
+        label = os.path.join(self.labels, "img_01.txt")
+        with open(label, "w") as f:
+            f.write("0 0.25 0.5 0.2 0.4" + chr(10))
+        job = self.job(augment=self.augment(["flip_h"], outputs=2))
+        job["augment"]["ops"]["flip_h"]["probability"] = 100
+        _yaml, scratch, *_ = yj.prepare_dataset(job)
+        with open(os.path.join(scratch, "train", "labels", "img_01_aug1.txt")) as f:
+            parts = f.read().split()
+        self.assertEqual(parts[0], "0")
+        self.assertAlmostEqual(float(parts[1]), 0.75, places=3)
+        self.assertAlmostEqual(float(parts[2]), 0.5, places=3)
+
+    def test_no_augment_or_no_copies_changes_nothing(self):
+        for augment in (None, {}, self.augment(["brightness"], outputs=1)):
+            job = self.job(augment=augment) if augment is not None else self.job()
+            _yaml, scratch, n_train, n_val, _ = yj.prepare_dataset(job)
+            self.assertEqual((n_train, n_val), (10, 2))
+
+    def test_the_run_reports_the_grown_training_set(self):
+        job = self.job(augment=self.augment(["brightness"]))
+        _summary, events = self.run_job(job)
+        start = next(e for e in events if e["event"] == "start")
+        self.assertEqual((start["train_images"], start["val_images"]), (30, 2))
+
+
 class TrainTests(Base):
     def test_one_event_per_epoch_with_the_losses_and_the_metrics(self):
         summary, events = self.run_job(self.job())

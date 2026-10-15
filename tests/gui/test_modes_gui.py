@@ -1298,6 +1298,22 @@ class MainWindowModeTests(unittest.TestCase):
         self.assertTrue(job["images_folders"])
         dlg.win.destroy()
 
+    def test_the_augmentation_chosen_in_the_old_dialog_reaches_the_job(self):
+        from utils import augment_catalog as cat, augmentation as aug
+        self._clean_trained_model()
+        self.addCleanup(self._clean_trained_model)
+        state = cat.default_state()
+        state["contrast"].enabled = True
+        picked = aug.config_to_dict(cat.to_config(state, 2, False, seed=8))
+        cfg = {"epoch": 1, "batch": 4, "imgsz": 320, "freeze": 0, "lr0": 0.001, "weight_decay": 0.0005,
+               "augment": picked}
+        dlg = self._plain_train(cfg=cfg)
+        self._wait(dlg)
+        with open(os.path.join(ctx.model_dir, "yolo_run", "job.json"), encoding="utf-8") as f:
+            job = __import__("json").load(f)
+        self.assertEqual(job["augment"], picked)
+        dlg.win.destroy()
+
     def test_an_existing_model_is_trained_on_and_a_polygon_workspace_defaults_to_a_seg_model(self):
         self._clean_trained_model()
         self.addCleanup(self._clean_trained_model)
@@ -1477,6 +1493,79 @@ class FullYoloTrainingTests(ModeGuiBase):
         radios = [w.cget("text") for w in walk(dlg.win) if isinstance(w, tk.Radiobutton)]
         self.assertEqual(radios, ["Head only (fast)", "Full YOLO training (every layer)"])
         dlg.win.destroy()
+
+    # ---------------------------------------------------------------- augmentation
+    def _picked(self, *tiles_ops, outputs=3, keep=True):
+        """What ask_augmentation returns when the user picks these operations and presses OK."""
+        from utils import augment_catalog as cat
+        state = cat.default_state()
+        for name in tiles_ops:
+            state[name].enabled = True
+        return {"config": cat.to_config(state, outputs, keep, seed=4), "state": state, "outputs": outputs,
+                "keep_original": keep, "seed": 4}
+
+    def test_the_augmentation_row_belongs_to_full_training_only(self):
+        dlg = self.open(full=False)
+        self.assertFalse(dlg.aug_frame.winfo_ismapped())
+        dlg.kind_var.set("yolo")
+        dlg._apply_kind()
+        pump(self.root, 0.2)
+        self.assertTrue(dlg.aug_frame.winfo_ismapped())
+        self.assertIn("Ultralytics still applies its own", dlg.augment.label.cget("text"))
+        dlg.kind_var.set("head")
+        dlg._apply_kind()
+        pump(self.root, 0.2)
+        self.assertFalse(dlg.aug_frame.winfo_ismapped())
+        dlg.win.destroy()
+
+    def test_the_augmentation_picked_in_the_window_goes_into_the_job(self):
+        dlg = self.open()
+        with mock.patch("utils.AugmentationPanel.ask_augmentation", return_value=self._picked("blur", "noise")) as ask:
+            dlg.augment.button.invoke()
+        self.assertTrue(ask.call_args.kwargs["training"], "the picker greys out what Ultralytics already does")
+        text = dlg.augment.label.cget("text")
+        self.assertIn("Blur", text)
+        self.assertIn("Noise", text)
+        self.assertIn("grows from 10 to 30", text, "10 training pictures, each with 2 copies besides itself")
+        self.run_to_end(dlg)
+        aug = self.job()["augment"]
+        self.assertEqual((aug["copies"], aug["keep_original"], aug["splits"], aug["seed"]), (2, True, ["train"], 4))
+        self.assertTrue(aug["ops"]["blur"]["enabled"] and aug["ops"]["noise"]["enabled"])
+        self.assertFalse(aug["ops"]["flip_h"]["enabled"])
+        dlg.win.destroy()
+
+    def test_no_augmentation_means_no_augment_key_in_the_job(self):
+        dlg = self.open()
+        self.run_to_end(dlg)
+        self.assertNotIn("augment", self.job())
+        dlg.win.destroy()
+
+    def test_cancelling_the_picker_keeps_the_earlier_picks(self):
+        dlg = self.open()
+        with mock.patch("utils.AugmentationPanel.ask_augmentation", return_value=self._picked("blur")):
+            dlg.augment.button.invoke()
+        with mock.patch("utils.AugmentationPanel.ask_augmentation", return_value=None) as ask:
+            dlg.augment.button.invoke()
+        self.assertIsNotNone(ask.call_args.kwargs["previous"], "the picker starts from the earlier picks")
+        self.assertIn("Blur", dlg.augment.label.cget("text"))
+        dlg.win.destroy()
+
+    def test_the_old_train_dialog_has_an_augment_row_and_returns_the_picks(self):
+        from utils.TrainingConfigDialog import TrainingConfigDialog
+        dialog = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
+                                      model_type="detect", model_folder=ctx.model_dir, workspace=WORKSPACE,
+                                      train_count=lambda: 20)
+        with mock.patch("utils.AugmentationPanel.ask_augmentation", return_value=self._picked("exposure", outputs=4)):
+            dialog.augment.button.invoke()
+        self.assertIn("grows from 20 to 80", dialog.augment.label.cget("text"))
+        dialog.start()
+        self.assertEqual(dialog.result["augment"]["copies"], 3)
+        self.assertTrue(dialog.result["augment"]["ops"]["exposure"]["enabled"])
+        plain = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
+                                     model_type="detect", model_folder=ctx.model_dir)
+        self.assertIsNone(plain.augment, "without a workspace there is no augment row")
+        plain.start()
+        self.assertNotIn("augment", plain.result)
 
     def test_choosing_full_training_swaps_the_fields_and_choosing_head_swaps_them_back(self):
         dlg = self.open(full=False)

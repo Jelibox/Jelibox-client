@@ -51,7 +51,10 @@ def load_yolo(weights):
 
 def prepare_dataset(job):
     """Copy the labelled images + their labels into <scratch>/{train,val}/{images,labels} and write data.yaml.
-    Returns (yaml path, scratch folder, train count, val count, boxes per class in the training part)."""
+    With job["augment"] (an AugmentConfig as a dict) the training part also gets its augmented copies, made here with
+    the same engine as Export Dataset; the validation part is never touched.
+    Returns (yaml path, scratch folder, train count, val count, boxes per class in the training part); the train
+    count includes the augmented copies."""
     pairs = head_data.labelled_pairs(job["images_folders"], job["labels_folder"])
     if len(pairs) < head_data.MIN_LABELLED:
         raise ValueError(f"Only {len(pairs)} labelled images; at least {head_data.MIN_LABELLED} are needed.")
@@ -59,21 +62,59 @@ def prepare_dataset(job):
     classes = [str(c) for c in job["classes"]]
     scratch = job["scratch_dir"]
     shutil.rmtree(scratch, ignore_errors=True)                 # a stopped run leaves its copy behind
+    augmenter = _augmenter(job)
+    written = {"train": 0, "val": 0}
     for split, items in (("train", train_pairs), ("val", val_pairs)):
         images = os.path.join(scratch, split, "images")
         labels = os.path.join(scratch, split, "labels")
         os.makedirs(images)
         os.makedirs(labels)
         for image, label in items:
-            shutil.copy2(image, os.path.join(images, os.path.basename(image)))
-            shutil.copy2(label, os.path.join(labels, os.path.splitext(os.path.basename(image))[0] + ".txt"))
+            name = os.path.basename(image)
+            stem = os.path.splitext(name)[0]
+            if augmenter is None or split != "train" or augmenter.keeps_original(split):
+                shutil.copy2(image, os.path.join(images, name))
+                shutil.copy2(label, os.path.join(labels, stem + ".txt"))
+                written[split] += 1
+            if augmenter is not None and split == "train":
+                written[split] += _write_copies(augmenter, image, label, images, labels)
     yaml_path = os.path.join(scratch, "data.yaml")
     with open(yaml_path, "w", encoding="utf-8") as f:
         f.write(f"train: {json.dumps(os.path.abspath(os.path.join(scratch, 'train', 'images')))}\n")
         f.write(f"val: {json.dumps(os.path.abspath(os.path.join(scratch, 'val', 'images')))}\n")
         f.write(f"nc: {len(classes)}\n")
         f.write("names:\n" + "".join(f"  {i}: {json.dumps(name)}\n" for i, name in enumerate(classes)))
-    return yaml_path, scratch, len(train_pairs), len(val_pairs), head_data.class_counts(train_pairs, len(classes))
+    return yaml_path, scratch, written["train"], written["val"], head_data.class_counts(train_pairs, len(classes))
+
+
+def _augmenter(job):
+    """The Augmenter for job["augment"], or None when the job has none (or it makes no copies)."""
+    spec = job.get("augment")
+    if not spec:
+        return None
+    from .augmentation import Augmenter, config_from_dict
+    config = config_from_dict(spec)
+    config.splits = ("train",)
+    return Augmenter(config) if config.enabled else None
+
+
+def _write_copies(augmenter, image, label, images_dir, labels_dir):
+    """Write the augmented copies of one training picture (labels moved with flips / turns); returns how many."""
+    from .augment_geometry import yolo_label_text
+    from .augmentation import write_image
+    stem, ext = os.path.splitext(os.path.basename(image))
+    with open(label, encoding="utf-8") as f:
+        text = f.read()
+    made = 0
+    for suffix, picture, tf in augmenter.copies(image, "train"):
+        try:
+            write_image(os.path.join(images_dir, stem + suffix + ext), picture)
+            with open(os.path.join(labels_dir, stem + suffix + ".txt"), "w", encoding="utf-8") as f:
+                f.write(text if tf is None else yolo_label_text(text, tf))
+            made += 1
+        except (OSError, ValueError) as exc:
+            print(f"Could not write the augmented copy of {stem}: {exc}", flush=True)
+    return made
 
 
 def _metric(metrics, *names):

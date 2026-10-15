@@ -17,8 +17,10 @@ class TrainingConfigDialog:
     # ─────────────────────────────────────────────────────────────
 
     def __init__(self, parent, default_epoch=100, default_batch=16,
-                 model_path=None, model_type="detect", model_folder=None):
+                 model_path=None, model_type="detect", model_folder=None, workspace=None, train_count=None):
         self.result        = None
+        self.workspace     = workspace      # with it, the window shows an Augmentation row
+        self.train_count   = train_count    # callable: training pictures before augmentation
         self.model_path    = model_path
         self.model_type    = model_type
         self.model_folder  = model_folder
@@ -65,6 +67,7 @@ class TrainingConfigDialog:
         self._build_spinbox_row(content, "Freeze:",     "freeze_var", 0,            0,   100,  "layers (0 = none, 10 = backbone)")
         self._build_float_row(content,   "LR (lr0):",   "lr0_var",    0.001,        "AdamW start LR (1e-5 – 0.1)")
         self._build_float_row(content,   "Weight Decay:", "wd_var",   0.0005,       "AdamW weight decay (0 – 0.1)")
+        self._build_augment_row(content)
         self._build_hint_label(content)
         self._build_action_buttons(content)
 
@@ -128,6 +131,19 @@ class TrainingConfigDialog:
 
     def _build_separator(self, parent):
         tk.Frame(parent, bg=self.border, height=1).pack(fill=tk.X, pady=10)
+
+    def _build_augment_row(self, parent):
+        """The Augmentation button (the same picker as Export Dataset, with Ultralytics' own greyed out)."""
+        self.augment = None
+        if not self.workspace:
+            return
+        from .AugmentationPanel import AugmentChoice
+        row = tk.Frame(parent, bg=self.bg_dark)
+        row.pack(fill=tk.X, pady=6)
+        tk.Label(row, text="Augment:", font=("Segoe UI", 11, "bold"), bg=self.bg_dark, fg=self.fg_light,
+                 width=12, anchor="w").pack(side=tk.LEFT)
+        self.augment = AugmentChoice(row, self.dialog, self.workspace, self.train_count, bg=self.bg_dark, wrap=380)
+        self.augment.frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10)
 
     def _build_hint_label(self, parent):
         tk.Label(
@@ -484,6 +500,8 @@ class TrainingConfigDialog:
             # base_model hanya relevan jika tidak ada existing model
             if not self.existing_info:
                 self.result['base_model'] = self.base_model_var.get()
+            if self.augment is not None and self.augment.job_dict():
+                self.result['augment'] = self.augment.job_dict()
 
             self.dialog.destroy()
 

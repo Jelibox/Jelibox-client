@@ -397,10 +397,15 @@ class MainWindowTests(unittest.TestCase):
         os.makedirs(agui.yolo_labels_folder, exist_ok=True)
         os.makedirs(agui.vocdataset_folder, exist_ok=True)
         for name in ("img1", "img2", "img3"):
-            # the labels only exist for this test: other tests expect the images to open without annotations
+            # the labels only exist for this test: other tests expect the images to open without annotations. A file
+            # that was already there (another test's) is put back as it was, not left holding this test's label.
             for path in (os.path.join(agui.yolo_labels_folder, name + ".txt"),
                          os.path.join(agui.vocdataset_folder, name + ".xml")):
-                if not os.path.exists(path):
+                if os.path.exists(path):
+                    with open(path, "rb") as f:
+                        before = f.read()
+                    self.addCleanup(lambda p=path, b=before: open(p, "wb").write(b))
+                else:
                     self.addCleanup(lambda p=path: os.path.exists(p) and os.remove(p))
             with open(os.path.join(agui.yolo_labels_folder, name + ".txt"), "w") as f:
                 f.write("0 0.5 0.5 0.4 0.4\n")
@@ -646,42 +651,151 @@ class MainWindowTests(unittest.TestCase):
             app_settings.set("export_dir", None)
             self._close_export_dialog(dlg)
 
-    def test_export_dialog_augmentation_panel(self):
-        opened = []
-        real = tk.Toplevel
-        with mock.patch.object(tk, "Toplevel", side_effect=lambda *a, **k: opened.append(real(*a, **k)) or opened[-1]):
-            self.gui.show_export_dataset_dialog()
-        dlg = opened[0]
-        try:
-            pump(self.root, 0.2)
-            shown = lambda: " ".join(str(w.cget("text")) for w in walk(dlg)
-                                     if isinstance(w, (tk.Checkbutton, tk.Label)) and w.winfo_ismapped())
-            labels = shown()
-            self.assertIn("Augment exported images", labels)
-            self.assertNotIn("Brightness", labels)             # panel starts collapsed
-            toggle = next(w for w in walk(dlg) if isinstance(w, tk.Checkbutton)
-                          and "Augment exported images" in str(w.cget("text")))
-            toggle.invoke()
-            pump(self.root, 0.2)
-            labels = shown()
-            for op in ("Brightness", "Contrast", "Saturation", "Hue", "Blur", "Noise", "Grayscale", "JPEG compression", "Effect", "Value", "Chance"):
-                self.assertIn(op, labels)
-            self.assertLess(dlg.winfo_reqheight(), 800)
+    def _texts(self, dlg):
+        return " ".join(str(w.cget("text")) for w in walk(dlg) if isinstance(w, (tk.Checkbutton, tk.Label)))
 
-            tabs = next(w for w in walk(dlg) if isinstance(w, ttk.Notebook))
-            self.assertEqual(len(tabs.tabs()), 2)
-            self.assertIn("(2)", tabs.tab(0, "text"))           # brightness + blur are ticked by default
-            tabs.select(1)
-            pump(self.root, 0.2)
-            labels = shown()
-            for op in ("Flip horizontal", "Flip vertical", "Rotation"):
-                self.assertIn(op, labels)
-            rotation_box = next(w for w in walk(dlg) if isinstance(w, tk.Checkbutton)
-                                and w.cget("text") == "Rotation")
-            rotation_box.invoke()
-            self.assertIn("(1)", tabs.tab(1, "text"))
+    def test_export_dialog_has_the_roboflow_style_sections(self):
+        self._label_the_test_images()
+        dlg = self._open_export_dialog()
+        try:
+            text = self._texts(dlg)
+            for part in ("Format", "Save to", "Train / Valid / Test split", "Preprocessing", "Auto-Orient", "Resize",
+                         "Augmentation", "Flip", "Brightness", "Outputs per training image", "3 images",
+                         "Export:   Train 2   ·   Valid 1   ·   Test 0"):
+                self.assertIn(part, text)
+            self.assertLess(dlg.winfo_reqheight(), dlg.winfo_screenheight())
         finally:
-            dlg.destroy()
+            self._close_export_dialog(dlg)
+
+    def test_export_dialog_footer_counts_follow_the_split_and_the_augmentation(self):
+        self._label_the_test_images()
+        dlg = self._open_export_dialog()
+        try:
+            self.assertIn("Train 2   ·   Valid 1", self._texts(dlg))
+            state = self.gui_export_state(dlg)
+            state.panel.state["flip_h"].enabled = True
+            state.panel.outputs_var.set(3)
+            state.panel.keep_var.set(True)
+            pump(self.root, 0.1)
+            self.assertIn("Train 6", self._texts(dlg))                  # 2 images x (original + 2 copies)
+            state.panel.keep_var.set(False)
+            pump(self.root, 0.1)
+            self.assertIn("Train 6", self._texts(dlg))                  # 2 images x 3 augmented
+            state.panel.outputs_var.set(1)
+            pump(self.root, 0.1)
+            self.assertIn("Train 2", self._texts(dlg))                  # 1 augmented output replaces the original
+        finally:
+            self._close_export_dialog(dlg)
+
+    def gui_export_state(self, dlg):
+        from utils.ExportDatasetDialog import ExportDatasetDialog
+        import gc
+        return next(o for o in gc.get_objects() if isinstance(o, ExportDatasetDialog) and o.dialog is dlg)
+
+    def test_export_dialog_resize_is_checked_before_it_runs(self):
+        self._label_the_test_images()
+        dlg = self._open_export_dialog()
+        try:
+            me = self.gui_export_state(dlg)
+            me.resize_var.set(True)
+            me._resize_toggled()
+            me.width_var.set("8")
+            self.dialogs.calls[:] = [c for c in self.dialogs.calls if c[1] != "Export"]
+            self._export_button(dlg, "Export").invoke()
+            self.assertEqual(self.dialogs.last("showerror")[1], "Export")
+            self.assertIn("between 32 and 8192", self.dialogs.last("showerror")[2])
+        finally:
+            self._close_export_dialog(dlg)
+
+    def test_yolo_export_with_resize_writes_pictures_and_labels_in_the_new_size(self):
+        import cv2
+        from utils.export_preprocess import Preprocess
+        self._label_the_test_images()
+        target = self._target()
+        self.gui._export_yolo_dataset(target, 100, 0, (".png",), preprocess=Preprocess(True, ("stretch", 100, 100)))
+        for name in ("img1", "img2", "img3"):
+            self.assertEqual(cv2.imread(os.path.join(target, "train", "images", name + ".png")).shape[:2], (100, 100))
+            with open(os.path.join(target, "train", "labels", name + ".txt")) as f:
+                self.assertEqual(f.read().split(), "0 0.500000 0.500000 0.400000 0.400000".split())
+
+    def test_letterbox_export_keeps_the_boxes_on_the_objects(self):
+        import cv2
+        from utils.export_preprocess import Preprocess
+        self._label_the_test_images()
+        target = self._target()
+        self.gui._export_yolo_dataset(target, 100, 0, (".png",), preprocess=Preprocess(False, ("letterbox", 120, 120)))
+        # the 320x240 pictures become 120x90 with 15 px bars above and below: the centred box stays centred
+        with open(os.path.join(target, "train", "labels", "img1.txt")) as f:
+            cls, cx, cy, w, h = f.read().split()
+        self.assertAlmostEqual(float(cy), 0.5, places=3)
+        self.assertAlmostEqual(float(w), 0.4, places=3)
+        self.assertAlmostEqual(float(h), 0.4 * 90 / 120, places=3)
+
+    def test_voc_and_coco_exports_report_the_resized_size(self):
+        import json
+        import xml.etree.ElementTree as ET
+        from utils.export_preprocess import Preprocess
+        self._label_the_test_images()
+        pre = lambda: Preprocess(True, ("stretch", 160, 120))
+        target = self._target()
+        self.gui._export_voc_dataset(target, 100, 0, (".png",), preprocess=pre())
+        root = ET.parse(os.path.join(target, "train", "img1.xml")).getroot()
+        self.assertEqual((root.findtext("size/width"), root.findtext("size/height")), ("160", "120"))
+        self.assertEqual(root.findtext("object/bndbox/xmax"), "50")
+        target = self._target()
+        self.gui._export_coco_dataset(target, 100, 0, (".png",), preprocess=pre())
+        with open(os.path.join(target, "annotations", "instances_train.json"), encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual({(i["width"], i["height"]) for i in data["images"]}, {(160, 120)})
+        self.assertEqual(data["annotations"][0]["bbox"], [5.0, 5.0, 45.0, 45.0])
+
+    def test_resize_applies_to_augmented_copies_too(self):
+        import cv2
+        from utils.augmentation import AugmentConfig, Augmenter, OpSetting
+        from utils.export_preprocess import Preprocess
+        self._label_the_test_images()
+        pre = Preprocess(False, ("stretch", 100, 100))
+        aug = Augmenter(AugmentConfig(ops={"rotate": OpSetting(True, 30, 100)}, copies=1, splits=("train",), seed=3),
+                        post=pre.post)
+        target = self._target()
+        self.gui._export_yolo_dataset(target, 100, 0, (".png",), augment=aug, preprocess=pre)
+        for name in ("img1_aug1", "img2_aug1"):
+            self.assertEqual(cv2.imread(os.path.join(target, "train", "images", name + ".png")).shape[:2], (100, 100))
+            with open(os.path.join(target, "train", "labels", name + ".txt")) as f:
+                parts = f.read().split()
+            self.assertEqual(len(parts), 5)
+            self.assertTrue(all(0.0 <= float(v) <= 1.0 for v in parts[1:]))
+
+    def test_dropping_the_originals_leaves_only_the_augmented_pictures(self):
+        from utils.augmentation import AugmentConfig, Augmenter, OpSetting
+        self._label_the_test_images()
+        aug = Augmenter(AugmentConfig(ops={"brightness": OpSetting(True, 25, 100)}, copies=2, splits=("train",),
+                                      seed=5, keep_original=False))
+        for fmt, folder in (("yolo", ("train", "images")), ("voc", ("train",))):
+            target = self._target()
+            getattr(self.gui, f"_export_{fmt}_dataset")(target, 100, 0, (".png",), augment=aug)
+            names = sorted(n for n in os.listdir(os.path.join(target, *folder)) if n.endswith(".png"))
+            self.assertNotIn("img1.png", names)
+            self.assertEqual(len([n for n in names if n.startswith("img1_aug")]), 2)
+
+    def test_the_exif_rotation_is_dropped_by_auto_orient(self):
+        import cv2
+        from PIL import Image
+        from utils.export_preprocess import Preprocess, exif_orientation
+        folder = self._target()
+        path = os.path.join(folder, "turned.jpg")
+        img = Image.new("RGB", (60, 40), (200, 30, 30))
+        exif = Image.Exif()
+        exif[274] = 6                                       # "rotate 90 degrees clockwise to view"
+        img.save(path, exif=exif)
+        self.assertEqual(exif_orientation(path), 6)
+        out, tf = Preprocess(True, None).original(path)
+        self.assertIsNone(tf)
+        self.assertEqual(out.shape[:2], (60, 40))           # upright: now portrait
+        self.assertEqual(Preprocess(False, None).original(path), (None, None))
+        plain = os.path.join(folder, "plain.jpg")
+        Image.new("RGB", (60, 40)).save(plain)
+        self.assertEqual(Preprocess(True, None).original(plain), (None, None))
 
     def test_yolo_export_flips_and_rotates_labels_with_the_pictures(self):
         from utils.augmentation import AugmentConfig, Augmenter, OpSetting

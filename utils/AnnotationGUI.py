@@ -864,7 +864,7 @@ class AnnotationGUI:
         return annotations
 
     def _export_coco_dataset(self, target, train_pct, valid_pct, image_exts, progress_cb=None,
-                             augment=None):
+                             augment=None, preprocess=None):
         """Export indexed workspace images and VOC annotations as COCO JSON."""
         records = self._find_workspace_images(image_exts)
         if not records:
@@ -912,26 +912,37 @@ class AnnotationGUI:
                     if os.path.exists(destination):
                         output_name = f"{os.path.basename(os.path.dirname(record['source']))}_{record['filename']}"
                         destination = os.path.join(image_dir, output_name)
-                    shutil.copy2(record['source'], destination)
+                    keep = augment is None or augment.keeps_original(split_name)
+                    pre_img, pre_tf = preprocess.original(record['source']) if preprocess else (None, None)
+                    src_w, src_h = image_width, image_height
+                    if pre_img is not None:
+                        image_height, image_width = pre_img.shape[:2]
+                    if keep:
+                        if pre_img is not None:
+                            write_image(destination, pre_img)
+                        else:
+                            shutil.copy2(record['source'], destination)
                 except (OSError, ValueError) as exc:
                     print(f"[COCO] Skipping {record['source']}: {exc}")
                     continue
 
-                coco['images'].append({
-                    'id': image_id,
-                    'file_name': output_name,
-                    'width': image_width,
-                    'height': image_height
-                })
-
                 xml_path = os.path.join(xml_root, record['base'] + '.xml')
-                annotations = self._read_coco_annotations(
-                    xml_path, image_width, image_height, categories)
-                for annotation in annotations:
-                    annotation['id'] = annotation_id
-                    annotation['image_id'] = image_id
-                    coco['annotations'].append(annotation)
-                    annotation_id += 1
+                annotations = self._read_coco_annotations(xml_path, src_w, src_h, categories)
+                if keep:
+                    coco['images'].append({
+                        'id': image_id,
+                        'file_name': output_name,
+                        'width': image_width,
+                        'height': image_height
+                    })
+                    for annotation in annotations:
+                        shown = annotation if pre_tf is None else coco_annotation(annotation, pre_tf)
+                        shown['id'] = annotation_id
+                        shown['image_id'] = image_id
+                        coco['annotations'].append(shown)
+                        annotation_id += 1
+                else:
+                    image_id -= 1
 
                 # Photometric copies keep the exact same boxes/polygons
                 if augment is not None:
@@ -971,7 +982,7 @@ class AnnotationGUI:
         return target
 
     def _export_yolo_dataset(self, target, train_pct, valid_pct, image_exts, progress_cb=None,
-                             augment=None):
+                             augment=None, preprocess=None):
         """Export the workspace's YOLO labels as a train/val/test split, pulling
         source images straight from datasetsInput (never from a copied folder)."""
         records = self._find_workspace_images(image_exts)
@@ -1005,15 +1016,27 @@ class AnnotationGUI:
             os.makedirs(out_images, exist_ok=True)
             os.makedirs(out_labels, exist_ok=True)
             for img_src, lbl_name in split_pairs:
-                try:
-                    shutil.copy2(img_src, os.path.join(out_images, os.path.basename(img_src)))
-                except Exception:
-                    pass
-                try:
-                    shutil.copy2(os.path.join(yolo_labels_folder, lbl_name),
-                                 os.path.join(out_labels, lbl_name))
-                except Exception:
-                    pass
+                keep = augment is None or augment.keeps_original(split_name)
+                pre_img, pre_tf = preprocess.original(img_src) if preprocess else (None, None)
+                if keep:
+                    try:
+                        if pre_img is not None:
+                            write_image(os.path.join(out_images, os.path.basename(img_src)), pre_img)
+                        else:
+                            shutil.copy2(img_src, os.path.join(out_images, os.path.basename(img_src)))
+                    except Exception:
+                        pass
+                    try:
+                        label_path = os.path.join(yolo_labels_folder, lbl_name)
+                        if pre_tf is None:
+                            shutil.copy2(label_path, os.path.join(out_labels, lbl_name))
+                        else:
+                            with open(label_path, encoding='utf-8') as f:
+                                moved = yolo_label_text(f.read(), pre_tf)
+                            with open(os.path.join(out_labels, lbl_name), 'w', encoding='utf-8') as f:
+                                f.write(moved)
+                    except Exception:
+                        pass
 
                 # Augmented copies: photometric ones reuse the label as is, flips/rotations move it
                 if augment is not None:
@@ -1053,7 +1076,7 @@ class AnnotationGUI:
         return target
 
     def _export_voc_dataset(self, target, train_pct, valid_pct, image_exts, progress_cb=None,
-                            augment=None):
+                            augment=None, preprocess=None):
         """Export indexed workspace images and their VOC XML annotations."""
         images_found = [r['source'] for r in self._find_workspace_images(image_exts)]
 
@@ -1076,17 +1099,27 @@ class AnnotationGUI:
             out_dir = os.path.join(target, split_name)
             os.makedirs(out_dir, exist_ok=True)
             for img_path in imgs_list:
-                try:
-                    shutil.copy2(img_path, os.path.join(out_dir, os.path.basename(img_path)))
-                except Exception:
-                    pass
+                keep = augment is None or augment.keeps_original(split_name)
+                pre_img, pre_tf = preprocess.original(img_path) if preprocess else (None, None)
                 base = os.path.splitext(os.path.basename(img_path))[0]
                 xml_path = os.path.join(vocdataset_folder, base + '.xml')
-                if os.path.exists(xml_path):
+                if keep:
                     try:
-                        shutil.copy2(xml_path, os.path.join(out_dir, base + '.xml'))
+                        if pre_img is not None:
+                            write_image(os.path.join(out_dir, os.path.basename(img_path)), pre_img)
+                        else:
+                            shutil.copy2(img_path, os.path.join(out_dir, os.path.basename(img_path)))
                     except Exception:
                         pass
+                    if os.path.exists(xml_path):
+                        try:
+                            if pre_tf is None:
+                                shutil.copy2(xml_path, os.path.join(out_dir, base + '.xml'))
+                            else:
+                                voc_xml_write(xml_path, os.path.join(out_dir, base + '.xml'),
+                                              os.path.basename(img_path), pre_tf)
+                        except Exception:
+                            pass
 
                 # Augmented copies: same objects (moved with the image for flips/rotations)
                 if augment is not None:
@@ -1108,530 +1141,8 @@ class AnnotationGUI:
         return target
 
     def show_export_dataset_dialog(self):
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Export Dataset")
-        dialog.geometry("560x470")
-        dialog.configure(bg=C_BASE)
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.resizable(False, False)
-
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
-        y = max(0, (dialog.winfo_screenheight() // 2) - 330)
-        dialog.geometry(f"+{x}+{y}")
-
-        body = tk.Frame(dialog, bg=C_CARD, padx=12, pady=12)
-        body.pack(fill=tk.BOTH, expand=True)
-
-        # Format dropdown
-        tk.Label(body, text="Format:", bg=C_CARD, fg=C_TXT1).pack(anchor='w')
-        fmt_var = tk.StringVar(value='YOLO')
-        fmt_combo = ttk.Combobox(body, values=["YOLO", "Pascal VOC (XML)", "COCO"], state='readonly', font=('Segoe UI', 10))
-        fmt_combo.set('YOLO')
-        fmt_combo.pack(fill=tk.X, pady=(0,8))
-
-        # Where to save: the Jelibox folder (replaced on every export) or any folder, e.g. on an HDD, so a
-        # finished dataset is archived there and the SSD is not written to.
-        from . import app_settings
-        tk.Label(body, text="Save to:", bg=C_CARD, fg=C_TXT1).pack(anchor='w')
-        dest_row = tk.Frame(body, bg=C_CARD)
-        dest_row.pack(fill=tk.X)
-        saved_dir = app_settings.get('export_dir') or ''
-        # A remembered folder that is gone (an unplugged drive, say) is not used: the default takes over, and the
-        # setting stays so the folder is picked up again when the drive is back.
-        missing = {'path': saved_dir if saved_dir and not os.path.isdir(saved_dir) else ''}
-        dest_var = tk.StringVar(value='' if missing['path'] else saved_dir)
-        dest_shown = tk.StringVar()
-        tk.Label(dest_row, textvariable=dest_shown, bg=C_CARD2, fg=C_TXT1, anchor='w', padx=8, pady=4,
-                 font=('Segoe UI', 9)).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        dest_hint = tk.Label(body, text='', bg=C_CARD, fg=C_TXT3, anchor='w', justify=tk.LEFT, wraplength=520,
-                             font=('Segoe UI', 8))
-        dest_hint.pack(fill=tk.X, pady=(2, 8))
-
-        def refresh_dest():
-            chosen = dest_var.get().strip()
-            if chosen:
-                dest_shown.set(chosen)
-                nxt = export_module.next_version_name(chosen, workspaceName)
-                dest_hint.config(text=f'The next export goes into a new folder "{nxt}" inside it; '
-                                      f'nothing already there is touched.', fg=C_TXT3)
-            elif missing['path']:
-                dest_shown.set(f'Jelibox folder  ({export_dataset_folder})')
-                dest_hint.config(text=f'The folder you chose before was not found ({missing["path"]} - is the drive '
-                                      f'connected?), so the default folder is used. Connect it and reopen this '
-                                      f'window to use it again, or press Browse... for another one.', fg=C_AMBER)
-            else:
-                dest_shown.set(f'Jelibox folder  ({export_dataset_folder})')
-                dest_hint.config(text='The previous export of this workspace in that folder is replaced. '
-                                      'Choose another folder to keep every export.', fg=C_TXT3)
-
-        def browse_dest():
-            if export_state['active']:
-                return
-            start = dest_var.get().strip()
-            chosen = filedialog.askdirectory(title="Save the exported dataset in...", parent=dialog,
-                                             initialdir=start if os.path.isdir(start) else None)
-            if chosen:
-                missing['path'] = ''
-                dest_var.set(os.path.normpath(chosen))
-                app_settings.set('export_dir', dest_var.get())
-                refresh_dest()
-
-        def default_dest():
-            missing['path'] = ''
-            dest_var.set('')
-            app_settings.set('export_dir', None)
-            refresh_dest()
-
-        browse_btn = tk.Button(dest_row, text='Browse...', command=browse_dest, bg=C_CARD2, fg=C_TXT1)
-        browse_btn.pack(side=tk.LEFT, padx=(6, 0))
-        default_btn = tk.Button(dest_row, text='Default', command=default_dest, bg=C_CARD2, fg=C_TXT1)
-        default_btn.pack(side=tk.LEFT, padx=(6, 0))
-        refresh_dest()
-
-        # Split slider area (two separators define train/valid/test)
-        tk.Label(body, text="Split (Train / Valid / Test):", bg=C_CARD, fg=C_TXT1).pack(anchor='w')
-
-        slider_w = 460
-        slider_h = 60
-        slider_canvas = tk.Canvas(body, width=slider_w, height=slider_h, bg=C_CARD, highlightthickness=0)
-        slider_canvas.pack(pady=(4,8))
-
-        # initial separators (px)
-        left_x = int(slider_w * 0.7)
-        right_x = int(slider_w * 0.9)
-
-        bar_y = slider_h // 2
-        bar_h = 10
-        # draw bar
-        slider_canvas.create_rectangle(10, bar_y - bar_h//2, slider_w - 10, bar_y + bar_h//2, fill=C_CARD2, outline='')
-
-        handle_radius = 8
-        handle1 = slider_canvas.create_oval(left_x - handle_radius, bar_y - handle_radius,
-                                            left_x + handle_radius, bar_y + handle_radius,
-                                            fill=C_ACCENT, outline='')
-        handle2 = slider_canvas.create_oval(right_x - handle_radius, bar_y - handle_radius,
-                                            right_x + handle_radius, bar_y + handle_radius,
-                                            fill=C_ACCENT, outline='')
-
-        # percent labels above centers
-        train_lbl = slider_canvas.create_text(0, 12, text='', fill=C_TXT1, font=('Segoe UI', 9, 'bold'))
-        valid_lbl = slider_canvas.create_text(0, 12, text='', fill=C_TXT1, font=('Segoe UI', 9, 'bold'))
-        test_lbl = slider_canvas.create_text(0, 12, text='', fill=C_TXT1, font=('Segoe UI', 9, 'bold'))
-
-        def update_labels():
-            coords1 = slider_canvas.coords(handle1)
-            coords2 = slider_canvas.coords(handle2)
-            x1 = (coords1[0] + coords1[2]) / 2
-            x2 = (coords2[0] + coords2[2]) / 2
-            left = 10
-            right = slider_w - 10
-            total = right - left
-            train_pct = round(((x1 - left) / total) * 100)
-            valid_pct = round(((x2 - x1) / total) * 100)
-            test_pct = 100 - train_pct - valid_pct
-
-            # ensure bounds
-            if train_pct < 0:
-                train_pct = 0
-            if valid_pct < 0:
-                valid_pct = 0
-
-            # positions for labels (center of ranges)
-            train_cx = left + (x1 - left) / 2
-            valid_cx = x1 + (x2 - x1) / 2
-            test_cx = x2 + (right - x2) / 2
-
-            slider_canvas.coords(train_lbl, train_cx, 12)
-            slider_canvas.coords(valid_lbl, valid_cx, 12)
-            slider_canvas.coords(test_lbl, test_cx, 12)
-
-            slider_canvas.itemconfig(train_lbl, text=f"{train_pct}%")
-            slider_canvas.itemconfig(valid_lbl, text=f"{valid_pct}%")
-            slider_canvas.itemconfig(test_lbl, text=f"{test_pct}%")
-
-            train_var.set(str(train_pct))
-            valid_var.set(str(valid_pct))
-            test_var.set(str(test_pct))
-
-        # Dragging logic
-        drag_data = {'item': None}
-        export_state = {'active': False}
-
-        def on_press(event):
-            if export_state['active']:
-                return
-            item = slider_canvas.find_closest(event.x, event.y)[0]
-            if item in (handle1, handle2):
-                drag_data['item'] = item
-
-        def on_release(event):
-            drag_data['item'] = None
-
-        def on_motion(event):
-            item = drag_data.get('item')
-            if not item:
-                return
-            x = event.x
-            left = 10
-            right = slider_w - 10
-            # enforce ordering
-            coords1 = slider_canvas.coords(handle1)
-            coords2 = slider_canvas.coords(handle2)
-            x1 = (coords1[0] + coords1[2]) / 2
-            x2 = (coords2[0] + coords2[2]) / 2
-            min_gap = 4
-            if item == handle1:
-                x = max(left, min(x, x2 - min_gap))
-                slider_canvas.coords(handle1, x - handle_radius, bar_y - handle_radius, x + handle_radius, bar_y + handle_radius)
-            else:
-                x = min(right, max(x, x1 + min_gap))
-                slider_canvas.coords(handle2, x - handle_radius, bar_y - handle_radius, x + handle_radius, bar_y + handle_radius)
-            update_labels()
-
-        slider_canvas.bind('<Button-1>', on_press)
-        slider_canvas.bind('<B1-Motion>', on_motion)
-        slider_canvas.bind('<ButtonRelease-1>', on_release)
-
-        # numeric readouts / spinboxes
-        readout_row = tk.Frame(body, bg=C_CARD)
-        readout_row.pack(fill=tk.X)
-
-        # Use StringVar to avoid Tcl numeric parsing errors when user types invalid numeric strings
-        train_var = tk.StringVar(value=str(round((left_x - 10) / (slider_w - 20) * 100)))
-        valid_var = tk.StringVar(value=str(round((right_x - left_x) / (slider_w - 20) * 100)))
-        test_var = tk.StringVar(value='0')
-
-        def safe_to_int(s):
-            if s is None:
-                return 0
-            # keep only digits
-            s2 = ''.join(ch for ch in str(s) if ch.isdigit())
-            if s2 == '':
-                return 0
-            try:
-                return int(s2)
-            except Exception:
-                return 0
-
-        def on_spin_change(*a):
-            t = max(0, min(100, safe_to_int(train_var.get())))
-            v = max(0, min(100 - t, safe_to_int(valid_var.get())))
-            train_var.set(str(t))
-            valid_var.set(str(v))
-            test_var.set(str(100 - t - v))
-            # update handles
-            left = 10
-            right = slider_w - 10
-            total = right - left
-            new_x1 = left + (t / 100.0) * total
-            new_x2 = new_x1 + (v / 100.0) * total
-            slider_canvas.coords(handle1, new_x1 - handle_radius, bar_y - handle_radius, new_x1 + handle_radius, bar_y + handle_radius)
-            slider_canvas.coords(handle2, new_x2 - handle_radius, bar_y - handle_radius, new_x2 + handle_radius, bar_y + handle_radius)
-            update_labels()
-
-        tk.Label(readout_row, text='Train %', bg=C_CARD, fg=C_TXT2).grid(row=0, column=0, padx=6)
-        tk.Label(readout_row, text='Valid %', bg=C_CARD, fg=C_TXT2).grid(row=0, column=1, padx=6)
-        tk.Label(readout_row, text='Test %', bg=C_CARD, fg=C_TXT2).grid(row=0, column=2, padx=6)
-
-        sb_train = tk.Spinbox(readout_row, from_=0, to=100, textvariable=train_var, width=6, command=on_spin_change)
-        sb_valid = tk.Spinbox(readout_row, from_=0, to=100, textvariable=valid_var, width=6, command=on_spin_change)
-        sb_train.grid(row=1, column=0, padx=6)
-        sb_valid.grid(row=1, column=1, padx=6)
-        tk.Label(readout_row, textvariable=test_var, bg=C_CARD, fg=C_TXT1, width=6).grid(row=1, column=2, padx=6)
-
-        # initialize labels
-        update_labels()
-
-        # Ensure typing into spinboxes updates values immediately
-        try:
-            train_var.trace_add('write', lambda *a: on_spin_change())
-            valid_var.trace_add('write', lambda *a: on_spin_change())
-        except Exception:
-            train_var.trace('w', lambda *a: on_spin_change())
-            valid_var.trace('w', lambda *a: on_spin_change())
-
-        # ---- Augmentation (photometric) ---------------------------------
-        aug_enabled = tk.BooleanVar(value=False)
-        aug_widgets = []          # everything that must lock while exporting
-        aug_op_vars = {}          # op name -> (enabled, magnitude, probability) tk variables
-        base_height, panel_height = 470, 370
-
-        aug_panel = tk.Frame(body, bg=C_CARD)
-
-        def toggle_aug_panel():
-            if aug_enabled.get():
-                aug_panel.pack(fill=tk.X, after=aug_toggle, pady=(2, 0))
-                height = base_height + panel_height
-            else:
-                aug_panel.pack_forget()
-                height = base_height
-            top = max(0, (dialog.winfo_screenheight() - height) // 2 - 20)
-            dialog.geometry(f"560x{height}+{dialog.winfo_x()}+{top}")
-
-        aug_toggle = tk.Checkbutton(
-            body, text="Augment exported images (random, after the split)",
-            variable=aug_enabled, command=toggle_aug_panel, bg=C_CARD, fg=C_TXT1,
-            selectcolor=C_CARD2, activebackground=C_CARD, activeforeground=C_TXT1,
-            anchor='w', font=('Segoe UI', 9, 'bold'))
-        aug_toggle.pack(fill=tk.X, pady=(6, 0))
-        aug_widgets.append(aug_toggle)
-
-        aug_tabs = ttk.Notebook(aug_panel)
-        aug_tabs.pack(fill=tk.X, pady=(2, 0))
-        tab_frames = {}
-        tab_titles = {'color': 'Color & quality', 'geometry': 'Flip & rotate'}
-        next_row = {}
-        for group in tab_titles:
-            grid = tk.Frame(aug_tabs, bg=C_CARD, padx=4, pady=4)
-            aug_tabs.add(grid, text=tab_titles[group])
-            for col, text in ((0, 'Effect'), (1, 'Value'), (3, 'Chance')):
-                tk.Label(grid, text=text, bg=C_CARD, fg=C_TXT2, anchor='w',
-                         font=('Segoe UI', 9, 'bold')).grid(row=0, column=col, sticky='w', padx=(4, 8))
-            grid.grid_columnconfigure(0, minsize=170)
-            grid.grid_columnconfigure(1, minsize=62)
-            grid.grid_columnconfigure(2, minsize=44)
-            tab_frames[group] = grid
-            next_row[group] = 1
-
-        def refresh_tab_titles(*_):
-            for index, group in enumerate(tab_titles):
-                count = sum(1 for n, (on_, _m, _p) in aug_op_vars.items()
-                            if augmentation.OPERATIONS[n]['group'] == group and on_.get())
-                aug_tabs.tab(index, text=tab_titles[group] + (f'  ({count})' if count else ''))
-
-        for op_name, spec in augmentation.OPERATIONS.items():
-            grid, row = tab_frames[spec['group']], next_row[spec['group']]
-            next_row[spec['group']] += 1
-            on = tk.BooleanVar(value=op_name in ('brightness', 'blur'))
-            mag = tk.StringVar(value=str(spec['default']))
-            prob = tk.StringVar(value='50')
-            aug_op_vars[op_name] = (on, mag, prob)
-            on.trace_add('write', refresh_tab_titles)
-            cb = tk.Checkbutton(grid, text=spec['label'], variable=on, anchor='w',
-                                bg=C_CARD, fg=C_TXT1, selectcolor=C_CARD2,
-                                activebackground=C_CARD, activeforeground=C_TXT1)
-            cb.grid(row=row, column=0, sticky='w')
-            aug_widgets.append(cb)
-            lo, hi = spec['range']
-            if hi > 0:
-                sm = tk.Spinbox(grid, from_=lo, to=hi, textvariable=mag, width=5)
-                sm.grid(row=row, column=1, sticky='w', padx=(4, 0))
-                aug_widgets.append(sm)
-                tk.Label(grid, text=spec['unit'], bg=C_CARD, fg=C_TXT3,
-                         anchor='w').grid(row=row, column=2, sticky='w', padx=(2, 8))
-            else:
-                tk.Label(grid, text=spec.get('fixed_note', '-'), bg=C_CARD, fg=C_TXT3,
-                         anchor='w').grid(row=row, column=1, columnspan=2, sticky='w', padx=(4, 0))
-            sp = tk.Spinbox(grid, from_=1, to=100, textvariable=prob, width=5)
-            sp.grid(row=row, column=3, sticky='w', padx=(4, 0))
-            aug_widgets.append(sp)
-            tk.Label(grid, text='%', bg=C_CARD, fg=C_TXT3).grid(row=row, column=4, sticky='w', padx=(2, 0))
-        refresh_tab_titles()
-
-        aug_opts = tk.Frame(aug_panel, bg=C_CARD)
-        aug_opts.pack(fill=tk.X, pady=(8, 0))
-        copies_var = tk.StringVar(value='1')
-        seed_var = tk.StringVar(value='')
-        aug_valid = tk.BooleanVar(value=False)
-        aug_test = tk.BooleanVar(value=False)
-        tk.Label(aug_opts, text='Copies per image', bg=C_CARD, fg=C_TXT1, anchor='w'
-                 ).grid(row=0, column=0, sticky='w', padx=(4, 6))
-        sc = tk.Spinbox(aug_opts, from_=1, to=10, textvariable=copies_var, width=5)
-        sc.grid(row=0, column=1, sticky='w')
-        tk.Label(aug_opts, text='Seed (optional)', bg=C_CARD, fg=C_TXT1, anchor='w'
-                 ).grid(row=0, column=2, sticky='w', padx=(18, 6))
-        se = tk.Entry(aug_opts, textvariable=seed_var, width=9)
-        se.grid(row=0, column=3, sticky='w')
-        tk.Label(aug_opts, text='Also augment (train always is)', bg=C_CARD, fg=C_TXT1, anchor='w'
-                 ).grid(row=1, column=0, columnspan=2, sticky='w', padx=(4, 6), pady=(3, 0))
-        also = tk.Frame(aug_opts, bg=C_CARD)
-        also.grid(row=1, column=2, columnspan=2, sticky='w', pady=(3, 0))
-        cv_ = tk.Checkbutton(also, text='Valid', variable=aug_valid, bg=C_CARD, fg=C_TXT1,
-                             selectcolor=C_CARD2, activebackground=C_CARD, activeforeground=C_TXT1)
-        cv_.pack(side=tk.LEFT)
-        ct_ = tk.Checkbutton(also, text='Test', variable=aug_test, bg=C_CARD, fg=C_TXT1,
-                             selectcolor=C_CARD2, activebackground=C_CARD, activeforeground=C_TXT1)
-        ct_.pack(side=tk.LEFT, padx=(8, 0))
-        aug_widgets.extend([sc, se, cv_, ct_])
-
-        def build_augment_config():
-            """Read the panel into an AugmentConfig; returns (config, error message)."""
-            ops = {}
-            for op_name, (on, mag, prob) in aug_op_vars.items():
-                spec = augmentation.OPERATIONS[op_name]
-                lo, hi = spec['range']
-                magnitude = max(lo, min(hi, safe_to_int(mag.get()))) if hi > 0 else spec['default']
-                probability = max(1, min(100, safe_to_int(prob.get())))
-                ops[op_name] = augmentation.OpSetting(on.get(), magnitude, probability)
-            if not any(s.enabled for s in ops.values()):
-                return None, 'Tick at least one augmentation, or untick "Augment exported images".'
-            seed_text = seed_var.get().strip()
-            if seed_text and not seed_text.lstrip('-').isdigit():
-                return None, 'Seed must be a whole number (or empty).'
-            splits = ['train'] + (['val'] if aug_valid.get() else []) + (['test'] if aug_test.get() else [])
-            cfg = augmentation.AugmentConfig(
-                ops=ops,
-                copies=max(1, min(10, safe_to_int(copies_var.get()))),
-                splits=tuple(splits),
-                seed=int(seed_text) if seed_text else None)
-            return cfg, None
-
-        status_lbl = tk.Label(body, text='', bg=C_CARD, fg=C_TXT1)
-        status_lbl.pack(fill=tk.X, pady=(8,0))
-
-        progress_bar = ttk.Progressbar(body, orient='horizontal', mode='determinate', maximum=100)
-        progress_bar.pack(fill=tk.X, pady=(4,0))
-
-        dialog.geometry(f"560x{base_height}")
-
-        def set_ui_locked(locked):
-            export_state['active'] = locked
-            state = 'disabled' if locked else 'readonly'
-            fmt_combo.config(state=state)
-            browse_btn.config(state='disabled' if locked else 'normal')
-            default_btn.config(state='disabled' if locked else 'normal')
-            for w in aug_widgets:
-                w.config(state='disabled' if locked else 'normal')
-            sb_train.config(state='disabled' if locked else 'normal')
-            sb_valid.config(state='disabled' if locked else 'normal')
-            export_btn.config(state='disabled' if locked else 'normal')
-            close_btn.config(state='disabled' if locked else 'normal')
-
-        def on_dialog_close():
-            if export_state['active']:
-                return
-            dialog.destroy()
-
-        dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
-
-        def do_export_dataset():
-            if export_state['active']:
-                return
-
-            fmt = fmt_combo.get()
-            t = safe_to_int(train_var.get())
-            v = safe_to_int(valid_var.get())
-            te = 100 - t - v
-            if t + v + te != 100:
-                messagebox.showerror('Invalid Split', 'Train+Valid+Test must equal 100%', parent=dialog)
-                return
-
-            image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
-
-            augmenter = None
-            seed = None
-            if aug_enabled.get():
-                aug_config, problem = build_augment_config()
-                if problem:
-                    messagebox.showerror('Augmentation', problem, parent=dialog)
-                    return
-                augmenter = Augmenter(aug_config)
-                seed = aug_config.seed
-
-            fmt_name = fmt
-            chosen = dest_var.get().strip() or None
-            fallback_note = ''
-            if chosen and not os.path.isdir(chosen):
-                # the drive was unplugged after the folder was picked: back to the default folder
-                missing['path'] = chosen
-                dest_var.set('')
-                refresh_dest()
-                fallback_note = f'\n\nThe folder you chose ({chosen}) was not found, so the default folder was used.'
-                chosen = None
-            export_target, replace = export_module.plan_export_target(export_dataset_folder, chosen, workspaceName, fmt_name)
-            if chosen:
-                needed = export_module.files_size(r['source'] for r in self._find_workspace_images(image_exts))
-                problem = export_module.check_destination(chosen, needed)
-                if problem:
-                    messagebox.showerror('Save to', problem, parent=dialog)
-                    return
-
-            set_ui_locked(True)
-            progress_bar['value'] = 0
-            status_lbl.config(text='Preparing export...')
-            # Force an immediate repaint so the locked/0% state is visible right away,
-            # instead of only appearing once the (possibly very fast) worker finishes.
-            dialog.update_idletasks()
-
-            last_pct = {'value': -1}
-
-            def progress_cb(current, total, message=None):
-                def update():
-                    pct = int((current / total) * 100) if total else 0
-                    progress_bar['value'] = pct
-                    status_lbl.config(text=message or f'Exporting... {pct}%')
-                    # Small/fast exports can finish within a single Tk event-loop
-                    # iteration, so queued updates never get painted before the
-                    # completion dialog takes over. Force a repaint whenever the
-                    # displayed percentage actually changes so progress is visible
-                    # without adding per-file overhead on large datasets.
-                    if pct != last_pct['value']:
-                        last_pct['value'] = pct
-                        progress_bar.update_idletasks()
-                self.root.after(0, update)
-
-            def worker():
-                try:
-                    target = export_target
-                    # The default folder is replaced on every export; a folder the user chose is only added to.
-                    try:
-                        if replace and os.path.exists(target):
-                            # Safety: ensure target is inside project folder to avoid accidental deletes
-                            proj_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-                            abs_target = os.path.abspath(target)
-                            if abs_target.startswith(proj_root):
-                                shutil.rmtree(abs_target)
-                            else:
-                                # If target is outside project, don't auto-delete; just create subfolder with timestamp
-                                target = os.path.join(target, f'export_{int(time.time())}')
-                        os.makedirs(target, exist_ok=True)
-                    except Exception:
-                        os.makedirs(target, exist_ok=True)
-
-                    if seed is not None:
-                        random.seed(seed)       # makes the train/val/test shuffle repeatable too
-
-                    if fmt == 'YOLO':
-                        self._export_yolo_dataset(target, t, v, image_exts, progress_cb, augment=augmenter)
-                    elif 'Pascal' in fmt or 'XML' in fmt:
-                        self._export_voc_dataset(target, t, v, image_exts, progress_cb, augment=augmenter)
-                    elif fmt == 'COCO':
-                        self._export_coco_dataset(target, t, v, image_exts, progress_cb, augment=augmenter)
-                    else:
-                        raise ValueError(f'Unknown format: {fmt}')
-
-                    extra = fallback_note
-                    if augmenter is not None:
-                        extra += f'\n\nAugmented copies added: {augmenter.created}'
-                        if augmenter.skipped:
-                            extra += f' ({augmenter.skipped} skipped: no effect fired)'
-
-                    def on_success():
-                        set_ui_locked(False)
-                        progress_bar['value'] = 100
-                        status_lbl.config(text=f'Export completed to: {target}')
-                        messagebox.showinfo('Export Completed', f'Dataset exported to:\n{target}{extra}', parent=dialog)
-                    self.root.after(0, on_success)
-
-                except Exception as e:
-                    err = str(e)
-                    def on_error():
-                        set_ui_locked(False)
-                        progress_bar['value'] = 0
-                        status_lbl.config(text='Export failed')
-                        messagebox.showerror('Export Failed', f'Error during export:\n{err}', parent=dialog)
-                    self.root.after(0, on_error)
-
-            threading.Thread(target=worker, daemon=True).start()
-
-        btn_row = tk.Frame(body, bg=C_CARD)
-        btn_row.pack(fill=tk.X, pady=(8,0))
-        export_btn = tk.Button(btn_row, text='Export', command=do_export_dataset, bg=C_ACCENT, fg=C_ON_ACCENT)
-        export_btn.pack(side=tk.RIGHT, padx=6)
-        close_btn = tk.Button(btn_row, text='Close', command=on_dialog_close, bg=C_CARD2, fg=C_TXT1)
-        close_btn.pack(side=tk.RIGHT, padx=(0,6))
+        from .ExportDatasetDialog import ExportDatasetDialog
+        return ExportDatasetDialog(self, workspaceName, export_dataset_folder, yolo_labels_folder)
 
     # ----------------------------------------------------------
     #  Add / Delete class dialogs
@@ -3359,7 +2870,9 @@ class AnnotationGUI:
             default_batch=BATCH,
             model_path=model_path,
             model_type=model_type,
-            model_folder=model_folder
+            model_folder=model_folder,
+            workspace=workspaceName,
+            train_count=self._training_picture_count
         )
         config = config_dialog.show()
 
@@ -3389,7 +2902,7 @@ class AnnotationGUI:
             images_folders=image_folders, labels_folder=yolo_labels_folder, classes=list(CLASSLIST),
             init_weights=init_model, imgsz=current_imgsz, epochs=current_epoch, batch=current_batch,
             lr=config['lr0'], freeze=config['freeze'], weight_decay=config['weight_decay'], val_fraction=0.3,
-            out_dir=os.path.join(model_folder, "yolo_run"))
+            out_dir=os.path.join(model_folder, "yolo_run"), augment=config.get('augment'))
 
         def finished(_installed):
             state.training_running = False
@@ -3403,6 +2916,14 @@ class AnnotationGUI:
             state.training_running = False
         else:
             state.training_process = dlg.proc.proc
+
+    def _training_picture_count(self):
+        """Pictures the plain Train button trains on before augmentation (labelled ones, 70% of them)."""
+        from . import head_data
+        image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
+        folders = sorted({os.path.dirname(r['source']) for r in self._find_workspace_images(image_exts)})
+        pairs = head_data.labelled_pairs(folders or [input_folder], yolo_labels_folder)
+        return len(head_data.split_contiguous(pairs, 0.3)[0]) if len(pairs) >= 2 else len(pairs)
 
     def _train_head(self):
         """Custom Model mode: Train fits a head on the frozen detector, or (a choice in its window) trains a

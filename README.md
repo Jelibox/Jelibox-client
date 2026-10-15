@@ -64,7 +64,7 @@ Select a workspace and press **Analyze** for a dashboard of objects per class, s
 
 ### Export augmented, and keep it where you want
 
-**Export Dataset** writes YOLO, Pascal VOC or COCO with a train / valid / test split. Optional augmentation (brightness, contrast, saturation, hue, blur, noise, grayscale, JPEG compression, flips and rotation) moves boxes and polygons together with the picture, keeps your originals, and can be made repeatable with a seed. **Save to** lets you export to any folder, for example an HDD, so finished datasets stay off your SSD: each export becomes a new `<workspace>-v<N>` folder and nothing is ever overwritten.
+**Export Dataset** writes YOLO, Pascal VOC or COCO with a train / valid / test split. **Preprocessing** (Auto-Orient, Resize) and a visual **augmentation** picker work like Roboflow's: every augmentation (flip, 90° rotate, rotation, shear, grayscale, hue, saturation, brightness, exposure, contrast, blur, motion blur, noise, cutout, JPEG) is a tile with a preview from your own pictures, and clicking it opens a settings window with examples. Boxes and polygons move together with the picture, you choose how many outputs each training image becomes, and a seed makes it repeatable. The same picker is in the full YOLO **Train** window, so you can train on an augmented version without exporting (the augmentations Ultralytics already does are greyed out there). **Save to** lets you export to any folder, for example an HDD, so finished datasets stay off your SSD: each export becomes a new `<workspace>-v<N>` folder and nothing is ever overwritten.
 
 <img src="assets/export.png" alt="The Export Dataset window with the Save to folder and the augmentation options" width="420">
 

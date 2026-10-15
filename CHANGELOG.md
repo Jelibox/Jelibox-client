@@ -9,10 +9,12 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Added
-- **Train / Valid / Test split in the full YOLO training window**, the same colour bar as Export Dataset (drag the two handles or type the percentages, a chip per split with its picture count). The test part is held back: training never sees it, and when the run ends the best model is scored on it once (mAP50 and mAP50-95 are shown in the window). The split is by position by default (first pictures train, then validation, then test, so near-duplicate video frames do not leak between them); **Mix the pictures before splitting** makes it random. The head-only training keeps its validation box.
+## [0.4.9] - 2026-10-15
 
-### Changed
+### Added
+- **Train / Valid / Test split in the full YOLO training window**, the same colour bar as Export Dataset (drag the two handles or type the percentages, a chip per split with its picture count). The test part is held back: training never sees it, and when the run ends the best model is scored on it once (mAP50 and mAP50-95 are shown in the window). The split is by position by default (first pictures train, then validation, then test, so near-duplicate video frames do not leak between them); **Mix the pictures before splitting** makes it random. The head-only training keeps its validation box.
+
+### Changed
 - **The training window now shows the data preparation.** Before the first epoch it says what it is doing (Step 1/3 reading the labels, 2/3 splitting, 3/3 copying the pictures and making the augmented copies), with a progress bar, the number of pictures done and the time left, then "Starting Ultralytics ..." while it checks the pictures. The bar switches to epochs when training starts.
 
 ## [0.4.8] - 2026-10-15
@@ -154,7 +156,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.8...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.9...HEAD
+[0.4.9]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.5...v0.4.6

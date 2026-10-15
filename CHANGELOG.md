@@ -9,7 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Fixed
+## [0.4.11] - 2026-10-15
+
+### Fixed
 - **The Train windows no longer freeze ("not responding") on big datasets.** Counting the labelled pictures meant opening every label file, which took about a minute for 10,000 pictures on a cold disk, and the plain Train window did it again at every click in the augmentation picker. The result is now remembered (a `.label_cache.json` next to the labels folder, checked by file size and date), counted once per window, and warmed up in the background a moment after the annotation window opens. The window itself also opens in about half a second instead of eight: the boxes-per-class numbers come from the same cache instead of re-reading every label (and no longer again at every split change), and the "no GPU" check, which has to load PyTorch, runs aside and shows its line when ready.
 
 ## [0.4.10] - 2026-10-15
@@ -165,7 +167,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.10...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.11...HEAD
+[0.4.11]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.10...v0.4.11
 [0.4.10]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.7...v0.4.8

@@ -101,6 +101,23 @@ def split_contiguous(pairs, val_fraction=0.2):
     return pairs[:len(pairs) - n_val], pairs[len(pairs) - n_val:]
 
 
+def split_three(pairs, val_fraction=0.2, test_fraction=0.0, shuffle=False, seed=None):
+    """(train, val, test). By position (the default) they are three blocks in this order: the first pictures train, then
+    the validation block, then the test block, so near-duplicate video frames do not leak between them; with `shuffle`
+    the pictures are mixed first. Train and validation get at least one picture; test may be empty."""
+    if len(pairs) < 2:
+        raise ValueError("Need at least 2 labelled images to split into train and validation.")
+    items = list(pairs)
+    if shuffle:
+        import random
+        random.Random(seed).shuffle(items)
+    n = len(items)
+    n_test = min(n - 2, int(round(n * test_fraction))) if test_fraction > 0 else 0
+    n_val = min(n - n_test - 1, max(1, int(round(n * val_fraction))))
+    n_train = n - n_val - n_test
+    return items[:n_train], items[n_train:n_train + n_val], items[n_train + n_val:]
+
+
 def class_counts(pairs, n_classes):
     counts = [0] * n_classes
     for _, label in pairs:

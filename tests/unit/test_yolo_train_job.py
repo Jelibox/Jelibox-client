@@ -51,6 +51,12 @@ class FakeYOLO:
         for fn in self.callbacks.get(event, []):
             fn(trainer)
 
+    val_calls = []
+
+    def val(self, **kw):
+        FakeYOLO.val_calls.append(kw)
+        return types.SimpleNamespace(box=types.SimpleNamespace(map50=0.61, map=0.33, mp=0.7, mr=0.5))
+
     def train(self, **kw):
         self.kwargs = kw
         save_dir = os.path.join(kw["project"], kw["name"])
@@ -145,6 +151,56 @@ class DatasetTests(Base):
             yj.prepare_dataset(self.job())
 
 
+class SplitTests(Base):
+    """A held-back test part (job["test_fraction"]) and the choice of mixing the pictures first."""
+
+    def test_split_three_is_three_blocks_in_order_by_default(self):
+        from utils import head_data
+        pairs = [(f"i{i}", f"l{i}") for i in range(10)]
+        train, val, test = head_data.split_three(pairs, 0.2, 0.1)
+        self.assertEqual((len(train), len(val), len(test)), (7, 2, 1))
+        self.assertEqual(train + val + test, pairs, "by position: train first, then validation, then test")
+        self.assertEqual(head_data.split_three(pairs, 0.2)[2], [], "no test part unless asked")
+        self.assertEqual(len(head_data.split_three(pairs, 0.9, 0.9)[0]), 1, "train and validation keep one each")
+
+    def test_shuffle_mixes_but_never_loses_a_picture_and_the_seed_repeats_it(self):
+        from utils import head_data
+        pairs = [(f"i{i}", f"l{i}") for i in range(20)]
+        a = head_data.split_three(pairs, 0.2, 0.1, shuffle=True, seed=3)
+        b = head_data.split_three(pairs, 0.2, 0.1, shuffle=True, seed=3)
+        self.assertEqual(a, b)
+        self.assertEqual(sorted(sum(a, [])), sorted(pairs))
+        self.assertNotEqual(a[0], pairs[:14])
+
+    def test_the_test_part_is_copied_aside_and_named_in_the_yaml(self):
+        res = yj.prepare(self.job(test_fraction=0.17))
+        self.assertEqual((res["n_train"], res["n_val"], res["n_test"]), (8, 2, 2))
+        self.assertEqual(sorted(os.listdir(os.path.join(res["scratch"], "test", "images"))), ["img_11.jpg", "img_12.jpg"])
+        with open(res["yaml"], encoding="utf-8") as f:
+            self.assertIn("test:", f.read())
+        self.assertEqual(yj.prepare_dataset(self.job())[2:4], (10, 2), "the old five values are still there")
+
+    def test_the_best_model_is_scored_on_the_test_part_at_the_end(self):
+        FakeYOLO.val_calls.clear()
+        summary, events = self.run_job(self.job(test_fraction=0.17))
+        self.assertEqual(len(FakeYOLO.val_calls), 1)
+        self.assertEqual(FakeYOLO.val_calls[0]["split"], "test")
+        self.assertEqual((summary["test_images"], summary["test_map50"], summary["test_map5095"]), (2, 0.61, 0.33))
+        self.assertTrue(any("never seen" in e.get("text", "") for e in events if e["event"] == "status"))
+        self.assertEqual(next(e for e in events if e["event"] == "start")["test_images"], 2)
+
+    def test_no_test_part_means_no_evaluation_and_a_failing_one_does_not_fail_the_run(self):
+        FakeYOLO.val_calls.clear()
+        summary, _ = self.run_job(self.job())
+        self.assertEqual(FakeYOLO.val_calls, [])
+        self.assertNotIn("test_map50", summary)
+        with mock.patch.object(FakeYOLO, "val", side_effect=RuntimeError("no memory")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            summary, _ = self.run_job(self.job(test_fraction=0.17))
+        self.assertNotIn("test_map50", summary)
+        self.assertTrue(summary["has_model"])
+
+
 class AugmentTests(Base):
     """job["augment"]: the training part of the scratch dataset also gets augmented copies (never the validation part)."""
 
@@ -204,6 +260,25 @@ class AugmentTests(Base):
             _yaml, scratch, n_train, n_val, _ = yj.prepare_dataset(job)
             self.assertEqual((n_train, n_val), (10, 2))
 
+    def test_the_preparation_reports_its_progress_picture_by_picture(self):
+        calls = []
+        job = self.job(augment=self.augment(["brightness"]))
+        yj.prepare_dataset(job, lambda done, total, text: calls.append((done, total, text)))
+        self.assertIn("Reading the labels", calls[0][2])
+        self.assertTrue(any("Splitting: 10 to train, 2 to validate" in c[2] for c in calls))
+        steps = [c for c in calls if c[2].startswith("Step 3/3")]
+        self.assertEqual((steps[-1][0], steps[-1][1]), (12, 12), "ends on the last picture")
+        self.assertIn("augmented copies", steps[-1][2])
+        self.assertEqual([c[0] for c in steps], sorted(c[0] for c in steps), "never goes backwards")
+
+    def test_the_run_sends_prepare_events_before_it_starts(self):
+        _summary, events = self.run_job(self.job(augment=self.augment(["brightness"])))
+        names = [e["event"] for e in events]
+        self.assertIn("prepare", names)
+        self.assertLess(max(i for i, n in enumerate(names) if n == "prepare"), names.index("start"))
+        texts = " ".join(e.get("text", "") for e in events if e["event"] == "status")
+        self.assertIn("Starting Ultralytics", texts)
+
     def test_the_run_reports_the_grown_training_set(self):
         job = self.job(augment=self.augment(["brightness"]))
         _summary, events = self.run_job(job)
@@ -214,12 +289,12 @@ class AugmentTests(Base):
 class TrainTests(Base):
     def test_one_event_per_epoch_with_the_losses_and_the_metrics(self):
         summary, events = self.run_job(self.job())
-        kinds = [e["event"] for e in events]
-        self.assertEqual(kinds, ["status", "status", "start", "epoch", "epoch", "epoch", "done"])
-        start = events[2]
+        kinds = [e["event"] for e in events if e["event"] != "prepare"]
+        self.assertEqual(kinds, ["status", "status", "status", "start", "epoch", "epoch", "epoch", "done"])
+        start = next(e for e in events if e["event"] == "start")
         self.assertEqual((start["kind"], start["train_images"], start["val_images"], start["epochs"]), ("yolo", 10, 2, 3))
         self.assertEqual((start["device"], start["batch"], start["imgsz"], start["model"]), ("cpu", 8, [640, 640], "yolo11s.pt"))
-        first, second, third = events[3:6]
+        first, second, third = [e for e in events if e["event"] == "epoch"]
         self.assertEqual((first["epoch"], first["epochs"]), (1, 3))
         self.assertAlmostEqual(first["box_loss"], 1.0)
         self.assertAlmostEqual(first["cls_loss"], 0.5)
@@ -252,7 +327,7 @@ class TrainTests(Base):
 
     def test_a_gpu_run_is_announced_as_cuda_not_as_a_bare_zero(self):
         _, events = self.run_job(self.job(device=0))
-        self.assertEqual(events[2]["device"], "cuda")
+        self.assertEqual(next(e for e in events if e["event"] == "start")["device"], "cuda")
         self.assertEqual(FakeYOLO.made[0].kwargs["device"], 0)
 
     def test_freeze_is_passed_on(self):

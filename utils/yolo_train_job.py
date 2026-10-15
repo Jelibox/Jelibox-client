@@ -49,22 +49,38 @@ def load_yolo(weights):
     return YOLO(weights)
 
 
-def prepare_dataset(job):
+def prepare_dataset(job, progress=None):
+    """The legacy 5-tuple of `prepare` (see there)."""
+    r = prepare(job, progress)
+    return r["yaml"], r["scratch"], r["n_train"], r["n_val"], r["counts"]
+
+
+def prepare(job, progress=None):
     """Copy the labelled images + their labels into <scratch>/{train,val}/{images,labels} and write data.yaml.
     With job["augment"] (an AugmentConfig as a dict) the training part also gets its augmented copies, made here with
     the same engine as Export Dataset; the validation part is never touched.
-    Returns (yaml path, scratch folder, train count, val count, boxes per class in the training part); the train
-    count includes the augmented copies."""
+    job["test_fraction"] (default 0) holds a test part back that training never sees; job["shuffle"] mixes the
+    pictures before the split (by default the split is by position). Returns a dict: yaml, scratch, n_train (augmented
+    copies included), n_val, n_test, counts (boxes per class in the training part). `progress(done, total, text)` is called after every picture."""
+    say = progress or (lambda done, total, text: None)
+    say(0, 0, "Step 1/3  Reading the labels ...")
     pairs = head_data.labelled_pairs(job["images_folders"], job["labels_folder"])
     if len(pairs) < head_data.MIN_LABELLED:
         raise ValueError(f"Only {len(pairs)} labelled images; at least {head_data.MIN_LABELLED} are needed.")
-    train_pairs, val_pairs = head_data.split_contiguous(pairs, float(job.get("val_fraction", 0.2)))
+    train_pairs, val_pairs, test_pairs = head_data.split_three(
+        pairs, float(job.get("val_fraction", 0.2)), float(job.get("test_fraction", 0.0)), bool(job.get("shuffle")),
+        job.get("split_seed"))
     classes = [str(c) for c in job["classes"]]
     scratch = job["scratch_dir"]
     shutil.rmtree(scratch, ignore_errors=True)                 # a stopped run leaves its copy behind
     augmenter = _augmenter(job)
-    written = {"train": 0, "val": 0}
-    for split, items in (("train", train_pairs), ("val", val_pairs)):
+    written = {"train": 0, "val": 0, "test": 0}
+    total, done = len(pairs), 0
+    how = "copying and making augmented copies" if augmenter is not None else "copying"
+    held = f", {len(test_pairs)} to test" if test_pairs else ""
+    say(0, total, f"Step 2/3  Splitting: {len(train_pairs)} to train, {len(val_pairs)} to validate{held}")
+    parts = [("train", train_pairs), ("val", val_pairs)] + ([("test", test_pairs)] if test_pairs else [])
+    for split, items in parts:
         images = os.path.join(scratch, split, "images")
         labels = os.path.join(scratch, split, "labels")
         os.makedirs(images)
@@ -78,13 +94,21 @@ def prepare_dataset(job):
                 written[split] += 1
             if augmenter is not None and split == "train":
                 written[split] += _write_copies(augmenter, image, label, images, labels)
+            done += 1
+            if done == total or done % 5 == 0:
+                part = {"train": "training", "val": "validation", "test": "test"}[split]
+                say(done, total, f"Step 3/3  Preparing the pictures, {how}:  {done} / {total}  ({part} part)  -  "
+                                 f"{written['train'] + written['val']} files written")
     yaml_path = os.path.join(scratch, "data.yaml")
     with open(yaml_path, "w", encoding="utf-8") as f:
         f.write(f"train: {json.dumps(os.path.abspath(os.path.join(scratch, 'train', 'images')))}\n")
         f.write(f"val: {json.dumps(os.path.abspath(os.path.join(scratch, 'val', 'images')))}\n")
+        if test_pairs:
+            f.write(f"test: {json.dumps(os.path.abspath(os.path.join(scratch, 'test', 'images')))}" + chr(10))
         f.write(f"nc: {len(classes)}\n")
         f.write("names:\n" + "".join(f"  {i}: {json.dumps(name)}\n" for i, name in enumerate(classes)))
-    return yaml_path, scratch, written["train"], written["val"], head_data.class_counts(train_pairs, len(classes))
+    return {"yaml": yaml_path, "scratch": scratch, "n_train": written["train"], "n_val": written["val"],
+            "n_test": written["test"], "counts": head_data.class_counts(train_pairs, len(classes))}
 
 
 def _augmenter(job):
@@ -117,6 +141,22 @@ def _write_copies(augmenter, image, label, images_dir, labels_dir):
     return made
 
 
+def _evaluate_test(job, yaml_path, best_path, n_test, device, emit):
+    """Score the best model on the held-back test pictures; {} (and a log line) when that cannot be done."""
+    if not os.path.isfile(best_path):
+        return {}
+    emit("status", text=f"Evaluating the best model on the {n_test} test pictures it has never seen ...")
+    try:
+        result = load_yolo(best_path).val(data=yaml_path, split="test", imgsz=int(job["imgsz"]), device=device,
+                                          batch=int(job["batch"]), plots=False, workers=int(job.get("workers", 1)))
+        box = result.box
+        return {"test_images": n_test, "test_map50": float(box.map50), "test_map5095": float(box.map),
+                "test_precision": float(box.mp), "test_recall": float(box.mr)}
+    except Exception as exc:
+        print(f"The test evaluation failed: {exc}", flush=True)
+        return {}
+
+
 def _metric(metrics, *names):
     for name in names:
         if name in metrics and metrics[name] is not None:
@@ -137,7 +177,9 @@ def train(job, emit=emit):
         device = pick_device()
 
     emit("status", text="Preparing the training images ...")
-    yaml_path, scratch, n_train, n_val, counts = prepare_dataset(job)
+    prepared = prepare(job, lambda done, total, text: emit("prepare", done=done, total=total, text=text))
+    yaml_path, scratch, counts = prepared["yaml"], prepared["scratch"], prepared["counts"]
+    n_train, n_val, n_test = prepared["n_train"], prepared["n_val"], prepared["n_test"]
     try:
         emit("status", text="Loading the model ...")
         model = load_yolo(job["init_weights"])
@@ -146,7 +188,7 @@ def train(job, emit=emit):
         best = {"fitness": -1.0, "epoch": 0, "last": {}}
 
         def on_train_start(trainer):
-            emit("start", kind="yolo", train_images=n_train, val_images=n_val, classes=classes, counts=counts,
+            emit("start", kind="yolo", train_images=n_train, val_images=n_val, test_images=n_test, classes=classes, counts=counts,
                  epochs=epochs, device="cuda" if device == 0 else str(device), batch=int(job["batch"]), imgsz=[imgsz, imgsz],
                  model=os.path.basename(str(job["init_weights"])), freeze=int(job.get("freeze", 0)))
 
@@ -187,6 +229,8 @@ def train(job, emit=emit):
         model.add_callback("on_train_batch_end", finish_early)
         model.add_callback("on_fit_epoch_end", on_epoch_end)
         model.add_callback("on_fit_epoch_end", finish_early)
+        emit("status", text="Starting Ultralytics: it checks every picture and label first, which can take a minute "
+                            "before the first epoch shows up ...")
         model.train(data=yaml_path, epochs=epochs, imgsz=imgsz, batch=int(job["batch"]), optimizer="AdamW",
                     lr0=float(job["lr"]), weight_decay=float(job.get("weight_decay", 0.0005)),
                     freeze=int(job.get("freeze") or 0) or None, project=out, name=RUN_NAME,
@@ -194,7 +238,8 @@ def train(job, emit=emit):
         save_dir = str(getattr(getattr(model, "trainer", None), "save_dir", "") or os.path.join(out, RUN_NAME))
         best_path = os.path.join(save_dir, "weights", "best.pt")
         last = best["last"]
-        summary = dict(best_epoch=best["epoch"], best_fitness=max(best["fitness"], 0.0), epochs_run=last.get("epoch", 0),
+        test = _evaluate_test(job, yaml_path, best_path, n_test, device, emit) if n_test else {}
+        summary = dict(**test, best_epoch=best["epoch"], best_fitness=max(best["fitness"], 0.0), epochs_run=last.get("epoch", 0),
                        stopped=asked["early"], out_dir=out, weights=best_path, has_model=os.path.isfile(best_path),
                        classes=classes, map50=last.get("map50"), map5095=last.get("map5095"))
         emit("done", **summary)

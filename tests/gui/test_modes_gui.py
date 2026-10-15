@@ -1526,12 +1526,62 @@ class FullYoloTrainingTests(ModeGuiBase):
         text = dlg.augment.label.cget("text")
         self.assertIn("Blur", text)
         self.assertIn("Noise", text)
-        self.assertIn("grows from 10 to 30", text, "10 training pictures, each with 2 copies besides itself")
+        self.assertIn("grows from 9 to 27", text, "9 training pictures (70% of 12), each with 2 copies besides itself")
         self.run_to_end(dlg)
         aug = self.job()["augment"]
         self.assertEqual((aug["copies"], aug["keep_original"], aug["splits"], aug["seed"]), (2, True, ["train"], 4))
         self.assertTrue(aug["ops"]["blur"]["enabled"] and aug["ops"]["noise"]["enabled"])
         self.assertFalse(aug["ops"]["flip_h"]["enabled"])
+        dlg.win.destroy()
+
+    def test_the_preparing_phase_shows_what_is_going_on_with_a_bar(self):
+        dlg = self.open()
+        dlg.save()
+        dlg._handle('@@ {"event": "prepare", "done": 20, "total": 40, "text": "Step 3/3  Preparing the pictures"}')
+        self.assertEqual(dlg.title_label.cget("text"), "Preparing the data ...")
+        self.assertIn("Step 3/3", dlg.status_label.cget("text"))
+        self.assertEqual((float(dlg.bar.cget("maximum")), float(dlg.bar.cget("value"))), (40.0, 20.0))
+        self.assertIn("20 of 40 pictures", dlg.stats_label.cget("text"))
+        pump_until(self.root, lambda: dlg.finished, 30)
+        self.assertEqual(dlg.title_label.cget("text"), "Training finished", "back to training once it starts and ends")
+        dlg.win.destroy()
+
+    def test_the_full_training_has_the_split_bar_and_the_head_keeps_its_box(self):
+        dlg = self.open()
+        self.assertTrue(dlg.split_box.winfo_ismapped())
+        self.assertFalse(dlg.val_row.winfo_ismapped())
+        self.assertEqual((dlg.split.train_pct, dlg.split.valid_pct, dlg.split.test_pct), (70, 20, 10))
+        self.assertIn("9 to train, 2 to validate, 1 to test", dlg.data_info.cget("text"))
+        dlg.split.train_var.set("50")
+        dlg.split.valid_var.set("30")
+        pump(self.root, 0.1)
+        self.assertIn("6 to train, 4 to validate, 2 to test", dlg.data_info.cget("text"))
+        dlg.kind_var.set("head")
+        dlg._apply_kind()
+        pump(self.root, 0.2)
+        self.assertFalse(dlg.split_box.winfo_ismapped())
+        self.assertTrue(dlg.val_row.winfo_ismapped())
+        self.assertNotIn("test", dlg.data_info.cget("text"))
+        dlg.win.destroy()
+
+    def test_the_split_chosen_in_the_bar_goes_into_the_job(self):
+        dlg = self.open()
+        dlg.split.train_var.set("60")
+        dlg.split.valid_var.set("30")
+        dlg.shuffle_var.set(True)
+        self.run_to_end(dlg)
+        job = self.job()
+        self.assertEqual((job["val_fraction"], round(job["test_fraction"], 2), job["shuffle"]), (0.3, 0.1, True))
+        self.assertIn("split_seed", job)
+        dlg.win.destroy()
+
+    def test_a_split_without_validation_pictures_is_refused(self):
+        dlg = self.open()
+        dlg.split.valid_var.set("0")
+        with mock.patch("utils.HeadTrainDialog.messagebox.showwarning") as warn:
+            dlg.save()
+        self.assertIn("validation", warn.call_args[0][1])
+        self.assertIsNone(dlg.proc)
         dlg.win.destroy()
 
     def test_no_augmentation_means_no_augment_key_in_the_job(self):

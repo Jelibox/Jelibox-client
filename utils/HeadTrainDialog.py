@@ -22,6 +22,7 @@ from tkinter import ttk, messagebox, filedialog
 from . import head_data
 from . import workspace_config as wcfg
 from .AugmentationPanel import AugmentChoice
+from .SplitBar import SplitBar
 from .ModeDialogs import _Dialog
 from .config import workspaceName, BASE_DIR
 from .theme import (C_BASE, C_CARD, C_CARD2, C_BORDER, C_ACCENT, C_AMBER, C_GREEN, C_RED, C_TXT1, C_TXT2, C_TXT3,
@@ -76,7 +77,8 @@ def build_job(*, images_folders, labels_folder, classes, weights, taps, imgsz, e
 
 
 def build_yolo_job(*, images_folders, labels_folder, classes, init_weights, imgsz, epochs, batch, lr, freeze,
-                   val_fraction, out_dir, workers=1, weight_decay=0.0005, augment=None):
+                   val_fraction, out_dir, workers=1, weight_decay=0.0005, augment=None, test_fraction=0.0, shuffle=False,
+                   split_seed=None):
     """The job file of a full YOLO training (see utils/yolo_train_job.py). `augment` = an AugmentConfig as a dict
     (augmentation.config_to_dict): the training pictures get those augmented copies before Ultralytics starts."""
     job = {
@@ -88,6 +90,11 @@ def build_yolo_job(*, images_folders, labels_folder, classes, init_weights, imgs
     }
     if augment:
         job["augment"] = augment
+    if test_fraction:
+        job["test_fraction"] = float(test_fraction)
+    if shuffle:
+        job["shuffle"] = True
+        job["split_seed"] = split_seed
     return job
 
 
@@ -290,7 +297,7 @@ class HeadTrainDialog(_Dialog):
         card = self.card(body)
         self.label(card, "DATA", size=8, bold=True)
         self.data_info = self.label(card, "", size=9, fg=C_TXT1, pady=(4, 0))
-        row = tk.Frame(card, bg=C_CARD)
+        row = self.val_row = tk.Frame(card, bg=C_CARD)
         row.pack(fill=tk.X, pady=(6, 0))
         tk.Label(row, text="Validation share (last images)", bg=C_CARD, fg=C_TXT2, font=('Segoe UI', 9), width=28,
                  anchor='w').pack(side=tk.LEFT)
@@ -298,8 +305,15 @@ class HeadTrainDialog(_Dialog):
         self.spin(row, self.val_var, 5, 50).pack(side=tk.LEFT)
         tk.Label(row, text="%", bg=C_CARD, fg=C_TXT3, font=('Segoe UI', 9)).pack(side=tk.LEFT, padx=4)
         self.val_var.trace_add("write", lambda *_: self._update_data_info())
-        self.label(card, "The split is by position, not random: video frames are near-duplicates, and a random split "
-                         "would score the model on pictures it has practically seen.", size=8, fg=C_TXT3, pady=(4, 0))
+        # the full YOLO training has the same Train / Valid / Test bar as Export Dataset instead of that box
+        self.split_box = tk.Frame(card, bg=C_CARD)
+        self.split = SplitBar(self.split_box, bg=C_CARD, on_change=self._update_data_info, width=self.WIDTH - 90)
+        self.split.pack(fill=tk.X)
+        self.shuffle_var = tk.BooleanVar(value=False)
+        self.check(self.split_box, "Mix the pictures before splitting (random)", self.shuffle_var).pack(anchor='w', pady=(6, 0))
+        self.shuffle_var.trace_add("write", lambda *_: self._update_data_info())
+        self.split_note = self.label(card, "", size=8, fg=C_TXT3, pady=(4, 0))
+        self.split.set_total(len(self.pairs))
         self.classes_note = self.label(card, "", size=8, fg=C_AMBER, pady=(2, 0))
         self._update_data_info()
 
@@ -427,6 +441,14 @@ class HeadTrainDialog(_Dialog):
             widget.grid() if not yolo else widget.grid_remove()
         for widget in self._yolo_cells:
             widget.grid() if yolo else widget.grid_remove()
+        if hasattr(self, "split_box"):
+            if yolo:
+                self.val_row.pack_forget()
+                self.split_box.pack(fill=tk.X, pady=(6, 0), after=self.data_info)
+            else:
+                self.split_box.pack_forget()
+                self.val_row.pack(fill=tk.X, pady=(6, 0), after=self.data_info)
+            self._update_data_info()
         if hasattr(self, "aug_frame"):
             self.aug_frame.pack(fill=tk.X, pady=(0, 10)) if yolo else self.aug_frame.pack_forget()
         self.size_note.config(text=(
@@ -459,10 +481,27 @@ class HeadTrainDialog(_Dialog):
                                          "expect minutes per epoch for the head, and much longer for a full model. "
                                          "Try fewer epochs first.")
 
+    def _split_sizes(self):
+        """(train, valid, test) pictures for the current choice: the bar for a full training, the box for the head."""
+        n = len(self.pairs)
+        if n < 2:
+            return n, 0, 0
+        if self.kind_var.get() == "yolo":
+            train, val, test = head_data.split_three(self.pairs, self.split.valid_pct / 100, self.split.test_pct / 100)
+            return len(train), len(val), len(test)
+        try:
+            share = max(5, min(50, int(self.val_var.get())))
+        except (tk.TclError, ValueError):
+            share = 20
+        train, val = head_data.split_contiguous(self.pairs, share / 100)
+        return len(train), len(val), 0
+
     def _train_count(self):
-        """Training pictures before augmentation, for the current validation share."""
+        """Training pictures before augmentation, for the current split."""
         if len(self.pairs) < 2:
             return len(self.pairs)
+        if hasattr(self, "split_box"):
+            return self._split_sizes()[0]
         try:
             share = max(5, min(50, int(self.val_var.get())))
         except (tk.TclError, ValueError):
@@ -471,13 +510,9 @@ class HeadTrainDialog(_Dialog):
 
     def _update_data_info(self):
         n = len(self.pairs)
-        try:
-            share = max(5, min(50, int(self.val_var.get())))
-        except (tk.TclError, ValueError):
-            share = 20
         if n >= 2:
-            train, val = head_data.split_contiguous(self.pairs, share / 100)
-            text = f"{n} labelled images: {len(train)} to train, {len(val)} to validate."
+            train, val, test = self._split_sizes()
+            text = f"{n} labelled images: {train} to train, {val} to validate" + (f", {test} to test." if test else ".")
         else:
             text = f"{n} labelled images."
         counts = head_data.class_counts(self.pairs, len(self.classes))
@@ -490,6 +525,16 @@ class HeadTrainDialog(_Dialog):
         if unused and used:
             notes.append("No examples yet for: " + ", ".join(unused) + " (it will not learn them).")
         self.classes_note.config(text="  ".join(notes))
+        if hasattr(self, "split_note"):
+            yolo = self.kind_var.get() == "yolo"
+            by = ("mixed at random" if self.shuffle_var.get() else
+                  "by position: the first pictures train, then the validation block, then the test block")
+            self.split_note.config(text=(
+                f"The split is {by}. Video frames are near-duplicates, so a random mix scores the model on pictures it "
+                f"has practically seen; the test pictures are never used in training and are scored once at the end."
+                if yolo else
+                "The split is by position, not random: video frames are near-duplicates, and a random split would "
+                "score the model on pictures it has practically seen."))
 
     def _update_taps(self):
         taps, known = head_data.taps_for(self.weights_var.get())
@@ -579,7 +624,11 @@ class HeadTrainDialog(_Dialog):
             freeze = int(self.freeze_var.get())
             if not 0 <= freeze <= 100:
                 raise ValueError("Freeze must be between 0 and 100 layers.")
-            epochs, batch, lr, share = self._read_common()
+            epochs, batch, lr, _share = self._read_common()
+            if self.split.valid_pct < 1:
+                raise ValueError("Give the validation part at least 1 %: the training needs pictures to score itself on.")
+            if self.split.train_pct < 1:
+                raise ValueError("Give the training part at least 1 %.")
         except (ValueError, tk.TclError) as exc:
             self._warn(exc)
             return
@@ -596,7 +645,9 @@ class HeadTrainDialog(_Dialog):
             return
         job = build_yolo_job(images_folders=self.images_folders, labels_folder=self.labels_folder,
                              classes=self.classes, init_weights=self.model_path if resume else base, imgsz=size,
-                             epochs=epochs, batch=batch, lr=lr, freeze=freeze, val_fraction=share / 100,
+                             epochs=epochs, batch=batch, lr=lr, freeze=freeze,
+                             val_fraction=self.split.valid_pct / 100, test_fraction=self.split.test_pct / 100,
+                             shuffle=self.shuffle_var.get(), split_seed=int(time.time()),
                              out_dir=self.yolo_dir, augment=self.augment.job_dict())
         os.makedirs(self.yolo_dir, exist_ok=True)
         shutil.rmtree(os.path.join(self.yolo_dir, RUN_NAME), ignore_errors=True)   # an older run must not pass for this one
@@ -729,9 +780,13 @@ class HeadTrainDialog(_Dialog):
         kind = ev.get("event")
         if kind == "status":
             self.status_label.config(text=ev.get("text", ""))
+        elif kind == "prepare":
+            self._prepare(ev)
         elif kind == "start":
             self.total_epochs = ev["epochs"]
-            self.bar.config(maximum=ev["epochs"])
+            self.bar.config(maximum=ev["epochs"], value=0)
+            self.stats_label.config(text=" " + chr(10) + " " + chr(10) + " ")
+            self.title_label.config(text="Training the model ..." if self.active_kind == "yolo" else "Training the head ...")
             if self.active_kind == "yolo":
                 self.status_label.config(
                     text=f"{ev['train_images']} images to train, {ev['val_images']} to validate  -  "
@@ -751,6 +806,18 @@ class HeadTrainDialog(_Dialog):
         elif kind == "error":
             self.error = ev.get("message", "unknown error")
             self._log("ERROR: " + self.error)
+
+    def _prepare(self, ev):
+        """Copying / augmenting the pictures before the training: say what is going on, with a bar and a time left."""
+        self.title_label.config(text="Preparing the data ...")
+        self.status_label.config(text=ev.get("text", ""))
+        total, done = int(ev.get("total") or 0), int(ev.get("done") or 0)
+        if total:
+            self.bar.config(maximum=total, value=done)
+            spent = time.time() - self.started_at
+            left = f", about {_fmt_time(spent / done * (total - done))} left" if done >= 5 else ""
+            self.stats_label.config(text=f"{done} of {total} pictures   ({_fmt_time(spent)} elapsed{left})" + chr(10) +
+                                         "Training starts when this is done." + chr(10) + " ")
 
     def _epoch(self, ev):
         self.epoch_seconds.append(ev["seconds"])
@@ -855,6 +922,9 @@ class HeadTrainDialog(_Dialog):
         else:
             use = (f"Saved as {shown} and selected as My trained model. YOLO-World mode uses it: press Mode, choose "
                    f"YOLO-World, then press G.")
+        if self.result and self.result.get("test_map50") is not None:
+            use = (f"Test ({self.result.get('test_images')} pictures never used in training): mAP50 "
+                   f"{self.result['test_map50']:.3f}, mAP50-95 {self.result.get('test_map5095') or 0:.3f}." + chr(10) + use)
         if error is not None:
             self.title_label.config(text="Training failed", fg=C_RED)
             self.status_label.config(text=error, fg=C_RED)

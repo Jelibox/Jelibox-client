@@ -1615,9 +1615,10 @@ class FullYoloTrainingTests(ModeGuiBase):
 
     def test_the_old_train_dialog_has_the_split_bar_and_returns_the_choice(self):
         from utils.TrainingConfigDialog import TrainingConfigDialog
+        counted = mock.Mock(return_value=50)              # counting the labelled pictures can take a while
         dialog = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
                                       model_type="detect", model_folder=ctx.model_dir, workspace=WORKSPACE,
-                                      total_count=lambda: 50)
+                                      total_count=counted)
         self.assertEqual((dialog.split.train_pct, dialog.split.valid_pct, dialog.split.test_pct), (70, 30, 0))
         self.assertEqual(dialog.split.counts(), (35, 15, 0), "the old 70/30 is the default")
         dialog.split.train_var.set("60")
@@ -1626,6 +1627,7 @@ class FullYoloTrainingTests(ModeGuiBase):
         with mock.patch("utils.AugmentationPanel.ask_augmentation", return_value=self._picked("blur", outputs=2)):
             dialog.augment.button.invoke()
         self.assertIn("grows from 30 to 60", dialog.augment.label.cget("text"), "60% of 50 pictures")
+        self.assertEqual(counted.call_count, 1, "asked once, not again at every change in the picker")
         dialog.start()
         self.assertEqual(dialog.result["split"], {"val_fraction": 0.25, "test_fraction": 0.15, "shuffle": True})
         again = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),

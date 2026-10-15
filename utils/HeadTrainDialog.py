@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -471,15 +472,33 @@ class HeadTrainDialog(_Dialog):
                               highlightthickness=0, cursor='hand2')
 
     def _device_hint(self):
-        try:
-            import torch
-            on_gpu = torch.cuda.is_available()
-        except Exception:
-            return
-        if not on_gpu:
-            self.device_hint.config(text="No NVIDIA GPU is available to PyTorch here, so training runs on the CPU: "
-                                         "expect minutes per epoch for the head, and much longer for a full model. "
-                                         "Try fewer epochs first.")
+        """Say when there is no GPU. Importing PyTorch takes seconds, so it is done aside (plain Python, no Tk) and
+        the window opens at once; the line appears when the answer is in."""
+        answer = {}
+
+        def probe():
+            try:
+                import torch
+                answer["gpu"] = bool(torch.cuda.is_available())
+            except Exception:
+                answer["gpu"] = None
+        threading.Thread(target=probe, daemon=True).start()
+
+        def check():
+            if not self.win.winfo_exists():
+                return
+            if "gpu" not in answer:
+                self.win.after(200, check)
+            elif answer["gpu"] is False:
+                self._show_no_gpu()
+        self.win.after(200, check)
+
+    def _show_no_gpu(self):
+        self.device_hint.config(text="No NVIDIA GPU is available to PyTorch here, so training runs on the CPU: "
+                                     "expect minutes per epoch for the head, and much longer for a full model. "
+                                     "Try fewer epochs first.")
+        if hasattr(self, "scroll") and getattr(self, "_built", False):
+            self.fit()
 
     def _split_sizes(self):
         """(train, valid, test) pictures for the current choice: the bar for a full training, the box for the head."""
@@ -515,7 +534,9 @@ class HeadTrainDialog(_Dialog):
             text = f"{n} labelled images: {train} to train, {val} to validate" + (f", {test} to test." if test else ".")
         else:
             text = f"{n} labelled images."
-        counts = head_data.class_counts(self.pairs, len(self.classes))
+        if getattr(self, "_box_counts", None) is None:          # the labels do not change while this window is open
+            self._box_counts = head_data.class_counts(self.pairs, len(self.classes))
+        counts = self._box_counts
         used = [f"{c} {k}" for c, k in zip(self.classes, counts) if k]
         self.data_info.config(text=text + ("\nBoxes per class: " + ", ".join(used) if used else ""))
         notes = []

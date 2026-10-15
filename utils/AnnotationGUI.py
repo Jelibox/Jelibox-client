@@ -126,6 +126,7 @@ class AnnotationGUI:
 
         self.root.update_idletasks()
         self.root.after(100, self.initial_load)
+        self.root.after(1500, self._warm_label_cache)
 
         self.bind_shortcuts()
 
@@ -2918,6 +2919,15 @@ class AnnotationGUI:
             state.training_running = False
         else:
             state.training_process = dlg.proc.proc
+
+    def _warm_label_cache(self):
+        """Read the label files in the background (plain file work, no Tk), so the Train windows open at once: on
+        some disks reading ten thousand small files takes a minute."""
+        from . import head_data
+        image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
+        folders = sorted({os.path.dirname(r['source']) for r in self._find_workspace_images(image_exts)})
+        threading.Thread(target=head_data.labelled_pairs, args=(folders or [input_folder], yolo_labels_folder),
+                         daemon=True).start()
 
     def _labelled_picture_count(self):
         """Pictures that have labels (what a training can use), for the split bar of the Train window."""

@@ -147,7 +147,8 @@ class TrainingConfigDialog:
         self.split = SplitBar(parent, bg=self.bg_dark, width=560, train=70, valid=30,
                               on_change=lambda: self.augment and self.augment.refresh())
         self.split.pack(fill=tk.X)
-        self.split.set_total(self.total_count())
+        self.total_n = self.total_count()          # asked once: counting the labelled pictures can take a while
+        self.split.set_total(self.total_n)
         self.shuffle_var = tk.BooleanVar(value=False)
         tk.Checkbutton(parent, text="Mix the pictures before splitting (random)", variable=self.shuffle_var,
                        bg=self.bg_dark, fg=self.fg_light, selectcolor=self.bg_secondary,
@@ -163,7 +164,7 @@ class TrainingConfigDialog:
         """Training pictures before augmentation: from the split bar when there is one."""
         if self.split is not None:
             from . import head_data
-            n = self.total_count()
+            n = self.total_n
             if n < 2:
                 return n
             pairs = [(i, i) for i in range(n)]

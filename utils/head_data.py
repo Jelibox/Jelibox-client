@@ -9,8 +9,10 @@ The split is by position, not random: frames of a video are almost the same pict
 near-duplicates on both sides and the validation score looks better than it is. The last part of the (sorted)
 images becomes validation.
 """
+import json
 import os
 import re
+import threading
 
 IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
 MIN_LABELLED = 10
@@ -79,16 +81,63 @@ def read_label_rows(path):
     return rows
 
 
+CACHE_NAME = ".label_cache.json"          # next to the labels folder: {label file name: [mtime_ns, size, has rows, boxes per class]}
+_cache_lock = threading.Lock()
+_box_counts = {}                          # label path -> {class id: boxes}, filled by labelled_pairs for class_counts
+
+
+def _read_cache(labels_dir):
+    try:
+        with open(os.path.join(os.path.dirname(os.path.normpath(labels_dir)), CACHE_NAME), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_cache(labels_dir, cache):
+    path = os.path.join(os.path.dirname(os.path.normpath(labels_dir)), CACHE_NAME)
+    try:
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass                                   # a read-only folder just means no cache
+
+
 def labelled_pairs(images_folders, labels_dir):
-    """[(image path, label path)] of the images that have at least one label row, in natural name order."""
+    """[(image path, label path)] of the images that have at least one label row, in natural name order.
+
+    Opening ten thousand small files takes a minute on some disks, so what was read is remembered (by file size and
+    modification time) in a small cache file: the next call only looks at the files' dates."""
     images = index_images(images_folders)
     pairs = []
     if os.path.isdir(labels_dir):
-        for name in os.listdir(labels_dir):
-            base, ext = os.path.splitext(name)
-            path = os.path.join(labels_dir, name)
-            if ext.lower() == ".txt" and base in images and read_label_rows(path):
-                pairs.append((images[base], path))
+        with _cache_lock:                      # one scan at a time: the background warm-up and a window may overlap
+            cache = _read_cache(labels_dir)
+            fresh, changed = {}, False
+            for entry in os.scandir(labels_dir):
+                base, ext = os.path.splitext(entry.name)
+                if ext.lower() != ".txt" or base not in images:
+                    continue
+                try:
+                    st = entry.stat()
+                except OSError:
+                    continue
+                hit = cache.get(entry.name)
+                if hit and len(hit) >= 4 and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+                    has_rows, per_class = bool(hit[2]), {int(k): v for k, v in hit[3].items()}
+                else:
+                    rows, changed = read_label_rows(entry.path), True
+                    has_rows, per_class = bool(rows), {}
+                    for cls, *_ in rows:
+                        per_class[cls] = per_class.get(cls, 0) + 1
+                _box_counts[entry.path] = per_class
+                fresh[entry.name] = [st.st_mtime_ns, st.st_size, has_rows, {str(k): v for k, v in per_class.items()}]
+                if has_rows:
+                    pairs.append((images[base], entry.path))
+            if changed or len(fresh) != len(cache):
+                _write_cache(labels_dir, fresh)
     pairs.sort(key=lambda p: _natural(os.path.basename(p[0])))
     return pairs
 
@@ -121,7 +170,12 @@ def split_three(pairs, val_fraction=0.2, test_fraction=0.0, shuffle=False, seed=
 def class_counts(pairs, n_classes):
     counts = [0] * n_classes
     for _, label in pairs:
-        for cls, *_ in read_label_rows(label):
+        per_class = _box_counts.get(label)
+        if per_class is None:                  # a label that labelled_pairs did not scan (or changed since)
+            per_class = {}
+            for cls, *_ in read_label_rows(label):
+                per_class[cls] = per_class.get(cls, 0) + 1
+        for cls, n in per_class.items():
             if 0 <= cls < n_classes:
-                counts[cls] += 1
+                counts[cls] += n
     return counts

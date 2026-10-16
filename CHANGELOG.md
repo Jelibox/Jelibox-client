@@ -9,7 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Fixed
+## [0.4.12] - 2026-10-16
+
+### Fixed
 - **Pictures with nothing in them are no longer thrown away when training.** A full YOLO training used only the pictures that have at least one box, so the "null" pictures you saved empty were not in the split at all and the model never learned what is NOT there (a workspace of 10,250 pictures trained on 7,821). They are now used as background pictures: a **Use the N pictures with nothing in them as background** box (on by default when there are some) in both Train windows, counted in the Train / Valid / Test split, split and augmented like the rest, and written with an empty label. Pictures that were never annotated (no label file) are still left out, because they may contain objects. The first time, the label cache is rebuilt once (it now also remembers which files are empty).
 
 ## [0.4.11] - 2026-10-15
@@ -170,7 +172,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.11...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.12...HEAD
+[0.4.12]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.11...v0.4.12
 [0.4.11]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.10...v0.4.11
 [0.4.10]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.8...v0.4.9

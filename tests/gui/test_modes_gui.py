@@ -1597,6 +1597,77 @@ class FullYoloTrainingTests(ModeGuiBase):
         self.assertIsNone(dlg.proc)
         dlg.win.destroy()
 
+    def _add_null_pictures(self, how_many=4):
+        """Pictures saved with nothing in them: an empty label file next to the picture (plus 2 never annotated)."""
+        import cv2
+        import numpy as np
+
+        def remove():
+            for folder in (self.images, self.labels):
+                for f in os.listdir(folder):
+                    if f.startswith("null_"):
+                        os.remove(os.path.join(folder, f))
+        self.addCleanup(remove)                                # the folder is shared with the other tests
+        for i in range(how_many + 2):
+            name = f"null_{i:02d}"
+            cv2.imwrite(os.path.join(self.images, name + ".png"), np.full((40, 60, 3), 90, np.uint8))
+            if i < how_many:                                   # reviewed, nothing in it
+                open(os.path.join(self.labels, name + ".txt"), "w").close()
+        return how_many
+
+    def test_pictures_saved_with_nothing_in_them_are_offered_as_background(self):
+        nulls = self._add_null_pictures(4)
+        dlg = self.open()
+        self.assertEqual(len(dlg.pairs), 12, "the pictures with boxes")
+        self.assertEqual(len(dlg.background), nulls, "the 2 never annotated ones are not background")
+        self.assertTrue(dlg.bg_var.get())
+        self.assertIn("12 labelled images + 4 with nothing in them (background)", dlg.data_info.cget("text"))
+        self.assertEqual(dlg.split.total, 16)
+        text = " ".join(str(w.cget("text")) for w in walk(dlg.win) if isinstance(w, tk.Checkbutton))
+        self.assertIn("4 pictures with nothing in them as background", text)
+        dlg.bg_var.set(False)
+        self.assertEqual(dlg.split.total, 12)
+        self.assertNotIn("background", dlg.data_info.cget("text"))
+        dlg.bg_var.set(True)
+        self.run_to_end(dlg)
+        self.assertTrue(self.job()["background"])
+        dlg.win.destroy()
+
+    def test_background_can_be_switched_off_and_a_workspace_without_it_has_no_box(self):
+        self._add_null_pictures(3)
+        dlg = self.open()
+        dlg.bg_var.set(False)
+        self.run_to_end(dlg)
+        self.assertNotIn("background", self.job())
+        dlg.win.destroy()
+        for name in os.listdir(self.labels):
+            if name.startswith("null_"):
+                os.remove(os.path.join(self.labels, name))
+        dlg = self.open()
+        self.assertEqual(len(dlg.background), 0)
+        text = " ".join(str(w.cget("text")) for w in walk(dlg.win) if isinstance(w, tk.Checkbutton))
+        self.assertNotIn("as background", text)
+        dlg.win.destroy()
+
+    def test_the_old_train_dialog_offers_the_background_pictures_too(self):
+        from utils.TrainingConfigDialog import TrainingConfigDialog
+        dialog = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
+                                      model_type="detect", model_folder=ctx.model_dir, workspace=WORKSPACE,
+                                      total_count=lambda: 50, background_count=lambda: 10)
+        self.assertEqual(dialog.split.total, 60, "50 with boxes + 10 with nothing in them")
+        dialog.bg_var.set(False)
+        dialog._background_toggled()
+        self.assertEqual(dialog.split.total, 50)
+        dialog.bg_var.set(True)
+        dialog._background_toggled()
+        dialog.start()
+        self.assertTrue(dialog.result["split"]["background"])
+        none = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
+                                    model_type="detect", model_folder=ctx.model_dir, total_count=lambda: 50,
+                                    background_count=lambda: 0)
+        none.start()
+        self.assertFalse(none.result["split"]["background"])
+
     def test_no_augmentation_means_no_augment_key_in_the_job(self):
         dlg = self.open()
         self.run_to_end(dlg)
@@ -1629,7 +1700,8 @@ class FullYoloTrainingTests(ModeGuiBase):
         self.assertIn("grows from 30 to 60", dialog.augment.label.cget("text"), "60% of 50 pictures")
         self.assertEqual(counted.call_count, 1, "asked once, not again at every change in the picker")
         dialog.start()
-        self.assertEqual(dialog.result["split"], {"val_fraction": 0.25, "test_fraction": 0.15, "shuffle": True})
+        self.assertEqual(dialog.result["split"], {"val_fraction": 0.25, "test_fraction": 0.15, "shuffle": True,
+                                                  "background": False})
         again = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
                                      model_type="detect", model_folder=ctx.model_dir, total_count=lambda: 50)
         again.split.valid_var.set("0")

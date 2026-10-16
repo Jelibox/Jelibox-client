@@ -59,14 +59,20 @@ def prepare(job, progress=None):
     """Copy the labelled images + their labels into <scratch>/{train,val}/{images,labels} and write data.yaml.
     With job["augment"] (an AugmentConfig as a dict) the training part also gets its augmented copies, made here with
     the same engine as Export Dataset; the validation and test parts only when the config's `splits` names them.
+    job["background"] adds the pictures saved with no object in them (an empty label file) as background pictures: they
+    are split and augmented like the others and teach the model what is not there.
     job["test_fraction"] (default 0) holds a test part back that training never sees; job["shuffle"] mixes the
     pictures before the split (by default the split is by position). Returns a dict: yaml, scratch, n_train (augmented
     copies included), n_val, n_test, counts (boxes per class in the training part). `progress(done, total, text)` is called after every picture."""
     say = progress or (lambda done, total, text: None)
     say(0, 0, "Step 1/3  Reading the labels ...")
-    pairs = head_data.labelled_pairs(job["images_folders"], job["labels_folder"])
+    pairs, empty = head_data.scan_labels(job["images_folders"], job["labels_folder"])
     if len(pairs) < head_data.MIN_LABELLED:
         raise ValueError(f"Only {len(pairs)} labelled images; at least {head_data.MIN_LABELLED} are needed.")
+    n_background = 0
+    if job.get("background") and empty:                        # pictures saved with no object: negatives
+        pairs = sorted(pairs + empty, key=lambda p: head_data._natural(os.path.basename(p[0])))
+        n_background = len(empty)
     train_pairs, val_pairs, test_pairs = head_data.split_three(
         pairs, float(job.get("val_fraction", 0.2)), float(job.get("test_fraction", 0.0)), bool(job.get("shuffle")),
         job.get("split_seed"))
@@ -108,7 +114,8 @@ def prepare(job, progress=None):
         f.write(f"nc: {len(classes)}\n")
         f.write("names:\n" + "".join(f"  {i}: {json.dumps(name)}\n" for i, name in enumerate(classes)))
     return {"yaml": yaml_path, "scratch": scratch, "n_train": written["train"], "n_val": written["val"],
-            "n_test": written["test"], "counts": head_data.class_counts(train_pairs, len(classes))}
+            "n_test": written["test"], "n_background": n_background,
+            "counts": head_data.class_counts(train_pairs, len(classes))}
 
 
 def _augmenter(job):
@@ -180,6 +187,7 @@ def train(job, emit=emit):
     prepared = prepare(job, lambda done, total, text: emit("prepare", done=done, total=total, text=text))
     yaml_path, scratch, counts = prepared["yaml"], prepared["scratch"], prepared["counts"]
     n_train, n_val, n_test = prepared["n_train"], prepared["n_val"], prepared["n_test"]
+    n_background = prepared["n_background"]
     try:
         emit("status", text="Loading the model ...")
         model = load_yolo(job["init_weights"])
@@ -188,7 +196,8 @@ def train(job, emit=emit):
         best = {"fitness": -1.0, "epoch": 0, "last": {}}
 
         def on_train_start(trainer):
-            emit("start", kind="yolo", train_images=n_train, val_images=n_val, test_images=n_test, classes=classes, counts=counts,
+            emit("start", kind="yolo", train_images=n_train, val_images=n_val, test_images=n_test, background_images=n_background,
+                 classes=classes, counts=counts,
                  epochs=epochs, device="cuda" if device == 0 else str(device), batch=int(job["batch"]), imgsz=[imgsz, imgsz],
                  model=os.path.basename(str(job["init_weights"])), freeze=int(job.get("freeze", 0)))
 

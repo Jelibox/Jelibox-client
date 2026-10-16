@@ -201,6 +201,46 @@ class SplitTests(Base):
         self.assertTrue(summary["has_model"])
 
 
+class BackgroundTests(Base):
+    """Pictures saved with nothing in them (an empty label file) are background pictures: negatives for the model."""
+
+    def setUp(self):
+        super().setUp()
+        for i in range(4):                                                      # reviewed, nothing in it
+            open(os.path.join(self.images, f"null_{i}.jpg"), "wb").write(b"jpg")
+            open(os.path.join(self.labels, f"null_{i}.txt"), "w").close()
+        for i in range(2):                                                      # never annotated: no label file
+            open(os.path.join(self.images, f"todo_{i}.jpg"), "wb").write(b"jpg")
+
+    def test_they_are_left_out_unless_the_job_asks_for_them(self):
+        _y, scratch, n_train, n_val, _ = yj.prepare_dataset(self.job())
+        self.assertEqual(n_train + n_val, 12)
+
+    def test_with_background_they_are_split_copied_and_given_an_empty_label(self):
+        res = yj.prepare(self.job(background=True))
+        self.assertEqual((res["n_train"] + res["n_val"], res["n_background"]), (16, 4))
+        names = sorted(os.listdir(os.path.join(res["scratch"], "train", "images"))
+                       + os.listdir(os.path.join(res["scratch"], "val", "images")))
+        self.assertEqual(len([n for n in names if n.startswith("null_")]), 4)
+        self.assertFalse(any(n.startswith("todo_") for n in names), "never annotated: not a negative")
+        empty = [f for sp in ("train", "val") for f in os.listdir(os.path.join(res["scratch"], sp, "labels"))
+                 if f.startswith("null_")]
+        self.assertEqual(len(empty), 4)
+        self.assertLessEqual(sum(res["counts"]), 12, "boxes come from the labelled pictures only")
+
+    def test_the_minimum_counts_pictures_with_boxes_not_the_background(self):
+        for name in sorted(os.listdir(self.labels))[:5]:
+            if not name.startswith("null_"):
+                os.remove(os.path.join(self.labels, name))
+        with self.assertRaisesRegex(ValueError, "Only 7 labelled images"):
+            yj.prepare(self.job(background=True))
+
+    def test_the_run_reports_how_many_background_pictures_it_uses(self):
+        _s, events = self.run_job(self.job(background=True))
+        start = next(e for e in events if e["event"] == "start")
+        self.assertEqual((start["train_images"] + start["val_images"], start["background_images"]), (16, 4))
+
+
 class AugmentTests(Base):
     """job["augment"]: the training part of the scratch dataset also gets augmented copies (never the validation part)."""
 

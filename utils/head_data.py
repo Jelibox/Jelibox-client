@@ -105,13 +105,27 @@ def _write_cache(labels_dir, cache):
         pass                                   # a read-only folder just means no cache
 
 
-def labelled_pairs(images_folders, labels_dir):
-    """[(image path, label path)] of the images that have at least one label row, in natural name order.
+def _is_blank(path, size):
+    """True for a label file with nothing in it: the picture was looked at and has no object."""
+    if size == 0:
+        return True
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return not f.read().strip()
+    except OSError:
+        return False
+
+
+def scan_labels(images_folders, labels_dir):
+    """([(image, label)] with at least one box, [(image, label)] whose label file is empty), both in natural name order.
+
+    The empty ones are pictures the user looked at and saved with no object in them (a "null" picture): they teach a
+    detector what is NOT there. A picture with no label file at all was never annotated and is in neither list.
 
     Opening ten thousand small files takes a minute on some disks, so what was read is remembered (by file size and
     modification time) in a small cache file: the next call only looks at the files' dates."""
     images = index_images(images_folders)
-    pairs = []
+    pairs, empty = [], []
     if os.path.isdir(labels_dir):
         with _cache_lock:                      # one scan at a time: the background warm-up and a window may overlap
             cache = _read_cache(labels_dir)
@@ -125,21 +139,30 @@ def labelled_pairs(images_folders, labels_dir):
                 except OSError:
                     continue
                 hit = cache.get(entry.name)
-                if hit and len(hit) >= 4 and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
-                    has_rows, per_class = bool(hit[2]), {int(k): v for k, v in hit[3].items()}
+                if hit and len(hit) >= 5 and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+                    has_rows, per_class, blank = bool(hit[2]), {int(k): v for k, v in hit[3].items()}, bool(hit[4])
                 else:
                     rows, changed = read_label_rows(entry.path), True
                     has_rows, per_class = bool(rows), {}
                     for cls, *_ in rows:
                         per_class[cls] = per_class.get(cls, 0) + 1
+                    blank = not has_rows and _is_blank(entry.path, st.st_size)
                 _box_counts[entry.path] = per_class
-                fresh[entry.name] = [st.st_mtime_ns, st.st_size, has_rows, {str(k): v for k, v in per_class.items()}]
+                fresh[entry.name] = [st.st_mtime_ns, st.st_size, has_rows, {str(k): v for k, v in per_class.items()}, blank]
                 if has_rows:
                     pairs.append((images[base], entry.path))
+                elif blank:
+                    empty.append((images[base], entry.path))
             if changed or len(fresh) != len(cache):
                 _write_cache(labels_dir, fresh)
     pairs.sort(key=lambda p: _natural(os.path.basename(p[0])))
-    return pairs
+    empty.sort(key=lambda p: _natural(os.path.basename(p[0])))
+    return pairs, empty
+
+
+def labelled_pairs(images_folders, labels_dir):
+    """[(image path, label path)] of the images that have at least one label row, in natural name order."""
+    return scan_labels(images_folders, labels_dir)[0]
 
 
 def split_contiguous(pairs, val_fraction=0.2):

@@ -18,11 +18,12 @@ class TrainingConfigDialog:
 
     def __init__(self, parent, default_epoch=100, default_batch=16,
                  model_path=None, model_type="detect", model_folder=None, workspace=None, train_count=None,
-                 total_count=None):
+                 total_count=None, background_count=None):
         self.result        = None
         self.workspace     = workspace      # with it, the window shows an Augmentation row
         self.train_count   = train_count    # callable: training pictures before augmentation
         self.total_count   = total_count    # callable: labelled pictures; with it the window has the split bar
+        self.background_count = background_count   # callable: pictures saved with nothing in them (null pictures)
         self.split         = None
         self.model_path    = model_path
         self.model_type    = model_type
@@ -147,8 +148,17 @@ class TrainingConfigDialog:
         self.split = SplitBar(parent, bg=self.bg_dark, width=560, train=70, valid=30,
                               on_change=lambda: self.augment and self.augment.refresh())
         self.split.pack(fill=tk.X)
-        self.total_n = self.total_count()          # asked once: counting the labelled pictures can take a while
+        self.positives_n = self.total_count()      # asked once: counting the labelled pictures can take a while
+        self.background_n = self.background_count() if self.background_count else 0
+        self.bg_var = tk.BooleanVar(value=self.background_n > 0)
+        self.total_n = self.positives_n + (self.background_n if self.bg_var.get() else 0)
         self.split.set_total(self.total_n)
+        if self.background_n:
+            tk.Checkbutton(parent, text=f"Use the {self.background_n} pictures with nothing in them as background "
+                                        f"(they teach the model what is NOT there)", variable=self.bg_var,
+                           command=self._background_toggled, bg=self.bg_dark, fg=self.fg_light,
+                           selectcolor=self.bg_secondary, activebackground=self.bg_dark,
+                           activeforeground=self.fg_light, font=("Segoe UI", 9), anchor="w").pack(anchor="w", pady=(4, 0))
         self.shuffle_var = tk.BooleanVar(value=False)
         tk.Checkbutton(parent, text="Mix the pictures before splitting (random)", variable=self.shuffle_var,
                        bg=self.bg_dark, fg=self.fg_light, selectcolor=self.bg_secondary,
@@ -159,6 +169,12 @@ class TrainingConfigDialog:
                               "training; the best model is scored on them at the end.", font=("Segoe UI", 8),
                  bg=self.bg_dark, fg=self.fg_hint, justify=tk.LEFT, wraplength=560, anchor="w").pack(fill=tk.X)
         tk.Frame(parent, bg=self.border, height=1).pack(fill=tk.X, pady=10)
+
+    def _background_toggled(self):
+        self.total_n = self.positives_n + (self.background_n if self.bg_var.get() else 0)
+        self.split.set_total(self.total_n)
+        if self.augment is not None:
+            self.augment.refresh()
 
     def _train_pictures(self):
         """Training pictures before augmentation: from the split bar when there is one."""
@@ -549,7 +565,8 @@ class TrainingConfigDialog:
                     return
                 self.result['split'] = {'val_fraction': self.split.valid_pct / 100,
                                         'test_fraction': self.split.test_pct / 100,
-                                        'shuffle': bool(self.shuffle_var.get())}
+                                        'shuffle': bool(self.shuffle_var.get()),
+                                        'background': bool(self.background_n) and bool(self.bg_var.get())}
 
             self.dialog.destroy()
 

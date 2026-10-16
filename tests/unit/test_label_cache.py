@@ -70,6 +70,28 @@ class LabelCacheTests(unittest.TestCase):
         path = os.path.join(self.labels, "p2.txt")
         self.assertEqual(head_data.class_counts([("x", path)], 2), [1, 0])
 
+    def test_a_picture_saved_with_nothing_in_it_is_background_and_one_never_annotated_is_neither(self):
+        # setUp: p3 has an empty label file. p6 has no label file, p7 only a line that cannot be read.
+        for name in ("p6", "p7"):
+            open(os.path.join(self.images, name + ".jpg"), "wb").close()
+        with open(os.path.join(self.labels, "p7.txt"), "w") as f:
+            f.write("this is not a label")
+        with open(os.path.join(self.labels, "p0.txt"), "a") as f:
+            f.write(chr(10))
+        pairs, empty = head_data.scan_labels([self.images], self.labels)
+        self.assertEqual([os.path.basename(i) for i, _ in pairs], ["p0.jpg", "p1.jpg", "p2.jpg", "p4.jpg", "p5.jpg"])
+        self.assertEqual([os.path.basename(i) for i, _ in empty], ["p3.jpg"], "p6 was never annotated, p7 is damaged")
+        self.assertEqual(head_data.labelled_pairs([self.images], self.labels), pairs, "the old call is unchanged")
+
+    def test_whitespace_only_counts_as_empty_and_the_answer_comes_from_the_cache(self):
+        with open(os.path.join(self.labels, "p3.txt"), "w") as f:
+            f.write("  " + chr(10) + chr(10))
+        self.assertEqual([os.path.basename(i) for i, _ in head_data.scan_labels([self.images], self.labels)[1]],
+                         ["p3.jpg"])
+        with mock.patch.object(head_data, "_is_blank", side_effect=AssertionError("a file was opened")), \
+                mock.patch.object(head_data, "read_label_rows", side_effect=AssertionError("a file was opened")):
+            self.assertEqual(len(head_data.scan_labels([self.images], self.labels)[1]), 1)
+
     def test_the_pairs_are_the_same_as_without_a_cache(self):
         first = head_data.labelled_pairs([self.images], self.labels)
         again = head_data.labelled_pairs([self.images], self.labels)

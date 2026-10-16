@@ -79,7 +79,7 @@ def build_job(*, images_folders, labels_folder, classes, weights, taps, imgsz, e
 
 def build_yolo_job(*, images_folders, labels_folder, classes, init_weights, imgsz, epochs, batch, lr, freeze,
                    val_fraction, out_dir, workers=1, weight_decay=0.0005, augment=None, test_fraction=0.0, shuffle=False,
-                   split_seed=None):
+                   split_seed=None, background=False):
     """The job file of a full YOLO training (see utils/yolo_train_job.py). `augment` = an AugmentConfig as a dict
     (augmentation.config_to_dict): the training pictures get those augmented copies before Ultralytics starts."""
     job = {
@@ -91,6 +91,8 @@ def build_yolo_job(*, images_folders, labels_folder, classes, init_weights, imgs
     }
     if augment:
         job["augment"] = augment
+    if background:
+        job["background"] = True
     if test_fraction:
         job["test_fraction"] = float(test_fraction)
     if shuffle:
@@ -256,7 +258,7 @@ class HeadTrainDialog(_Dialog):
         self.error = None
         self.active_kind = "head"            # what the run in progress (or the last one) is
         self.active_dir = self.run_dir
-        self.pairs = head_data.labelled_pairs(self.images_folders, self.labels_folder)
+        self.pairs, self.background = head_data.scan_labels(self.images_folders, self.labels_folder)
         super().__init__(parent)
         self._built = True
         self.win.title("Train model" if preset else "Train custom model")
@@ -310,11 +312,16 @@ class HeadTrainDialog(_Dialog):
         self.split_box = tk.Frame(card, bg=C_CARD)
         self.split = SplitBar(self.split_box, bg=C_CARD, on_change=self._update_data_info, width=self.WIDTH - 90)
         self.split.pack(fill=tk.X)
+        self.bg_var = tk.BooleanVar(value=bool(self.background))
+        if self.background:
+            self.check(self.split_box, f"Use the {len(self.background)} pictures with nothing in them as background "
+                                       f"(they teach the model what is NOT there)", self.bg_var).pack(anchor='w', pady=(6, 0))
+            self.bg_var.trace_add("write", lambda *_: self._update_data_info())
         self.shuffle_var = tk.BooleanVar(value=False)
         self.check(self.split_box, "Mix the pictures before splitting (random)", self.shuffle_var).pack(anchor='w', pady=(6, 0))
         self.shuffle_var.trace_add("write", lambda *_: self._update_data_info())
         self.split_note = self.label(card, "", size=8, fg=C_TXT3, pady=(4, 0))
-        self.split.set_total(len(self.pairs))
+        self.split.set_total(len(self.pairs) + (len(self.background) if self.bg_var.get() else 0))
         self.classes_note = self.label(card, "", size=8, fg=C_AMBER, pady=(2, 0))
         self._update_data_info()
 
@@ -506,7 +513,8 @@ class HeadTrainDialog(_Dialog):
         if n < 2:
             return n, 0, 0
         if self.kind_var.get() == "yolo":
-            train, val, test = head_data.split_three(self.pairs, self.split.valid_pct / 100, self.split.test_pct / 100)
+            pool = self.pairs + (self.background if self.bg_var.get() else [])
+            train, val, test = head_data.split_three(pool, self.split.valid_pct / 100, self.split.test_pct / 100)
             return len(train), len(val), len(test)
         try:
             share = max(5, min(50, int(self.val_var.get())))
@@ -531,7 +539,12 @@ class HeadTrainDialog(_Dialog):
         n = len(self.pairs)
         if n >= 2:
             train, val, test = self._split_sizes()
-            text = f"{n} labelled images: {train} to train, {val} to validate" + (f", {test} to test." if test else ".")
+            extra = (f" + {len(self.background)} with nothing in them (background)"
+                     if self.kind_var.get() == "yolo" and self.bg_var.get() and self.background else "")
+            text = (f"{n} labelled images{extra}: {train} to train, {val} to validate"
+                    + (f", {test} to test." if test else "."))
+            if self.kind_var.get() == "yolo":
+                self.split.set_total(n + (len(self.background) if self.bg_var.get() else 0))
         else:
             text = f"{n} labelled images."
         if getattr(self, "_box_counts", None) is None:          # the labels do not change while this window is open
@@ -669,6 +682,7 @@ class HeadTrainDialog(_Dialog):
                              epochs=epochs, batch=batch, lr=lr, freeze=freeze,
                              val_fraction=self.split.valid_pct / 100, test_fraction=self.split.test_pct / 100,
                              shuffle=self.shuffle_var.get(), split_seed=int(time.time()),
+                             background=bool(self.background) and self.bg_var.get(),
                              out_dir=self.yolo_dir, augment=self.augment.job_dict())
         os.makedirs(self.yolo_dir, exist_ok=True)
         shutil.rmtree(os.path.join(self.yolo_dir, RUN_NAME), ignore_errors=True)   # an older run must not pass for this one

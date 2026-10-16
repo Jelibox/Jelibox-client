@@ -2865,6 +2865,7 @@ class AnnotationGUI:
                             f"{'Using Segmentation Model' if annotationMode == 'polygon' else 'Using Object Detection Model'}",
                             parent=self.root)
 
+        picture_counts = self._picture_counts()
         config_dialog = TrainingConfigDialog(
             self.root,
             default_epoch=EPOCH,
@@ -2874,7 +2875,8 @@ class AnnotationGUI:
             model_folder=model_folder,
             workspace=workspaceName,
             train_count=self._training_picture_count,
-            total_count=self._labelled_picture_count
+            total_count=lambda: picture_counts[0],
+            background_count=lambda: picture_counts[1]
         )
         config = config_dialog.show()
 
@@ -2929,12 +2931,13 @@ class AnnotationGUI:
         threading.Thread(target=head_data.labelled_pairs, args=(folders or [input_folder], yolo_labels_folder),
                          daemon=True).start()
 
-    def _labelled_picture_count(self):
-        """Pictures that have labels (what a training can use), for the split bar of the Train window."""
+    def _picture_counts(self):
+        """(pictures with boxes, pictures saved with nothing in them) for the Train window."""
         from . import head_data
         image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
         folders = sorted({os.path.dirname(r['source']) for r in self._find_workspace_images(image_exts)})
-        return len(head_data.labelled_pairs(folders or [input_folder], yolo_labels_folder))
+        pairs, empty = head_data.scan_labels(folders or [input_folder], yolo_labels_folder)
+        return len(pairs), len(empty)
 
     def _training_picture_count(self):
         """Pictures the plain Train button trains on before augmentation (labelled ones, 70% of them)."""

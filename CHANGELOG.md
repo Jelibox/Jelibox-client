@@ -9,11 +9,13 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Fixed
-- **A training no longer outlives Jelibox.** Going back to the workspace list, closing the window or closing Jelibox used to leave the training process running (the GPU memory stayed full) and let you start a second one in another workspace. Now the training process is tied to Jelibox by the operating system (a job object on Windows, a parent-death signal on Linux), so it ends with it however Jelibox ends, even after a crash. Leaving while a training runs asks first ("Stop the training and leave? The best model so far is kept") and installs the best model before closing. Only one training runs at a time: starting another one, even from another workspace window, says which workspace is training. If an older Jelibox left a worker behind, end the `python.exe` that is using the GPU in Task Manager once.
+## [0.4.13] - 2026-10-17
 
-### Changed
-- **The Train windows open at once, and nothing counts by itself any more.** The number of pictures of every workspace is written down (`configs/_stats.json`: pictures, labelled, pictures with nothing in them, boxes per class) and is only counted again when you press **Refresh**: in the workspace list (every workspace; the ones that are gone are forgotten) or in the Train window (that workspace, with a busy button, the window stays alive). Until a workspace is counted the window says so and training still starts, because the training run reads the real files itself when it starts (its "Step 1/3"), so a number that is out of date never changes what is trained. The folder list shows "not counted" for folders that were not counted yet.
+### Fixed
+- **A training no longer outlives Jelibox.** Going back to the workspace list, closing the window or closing Jelibox used to leave the training process running (the GPU memory stayed full) and let you start a second one in another workspace. Now the training process is tied to Jelibox by the operating system (a job object on Windows, a parent-death signal on Linux), so it ends with it however Jelibox ends, even after a crash. Leaving while a training runs asks first ("Stop the training and leave? The best model so far is kept") and installs the best model before closing. Only one training runs at a time: starting another one, even from another workspace window, says which workspace is training. If an older Jelibox left a worker behind, end the `python.exe` that is using the GPU in Task Manager once.
+
+### Changed
+- **The Train windows open at once, and nothing counts by itself any more.** The number of pictures of every workspace is written down (`configs/_stats.json`: pictures, labelled, pictures with nothing in them, boxes per class) and is only counted again when you press **Refresh**: in the workspace list (every workspace; the ones that are gone are forgotten) or in the Train window (that workspace, with a busy button, the window stays alive). Until a workspace is counted the window says so and training still starts, because the training run reads the real files itself when it starts (its "Step 1/3"), so a number that is out of date never changes what is trained. The folder list shows "not counted" for folders that were not counted yet.
 - **The same training settings in every mode.** The Train button of YOLO-World, LocateAnything and the other modes now opens the same window as Custom Model's full training: base model (or Browse), Continue from the model trained here before, image size, epochs, batch, learning rate, **weight decay**, freeze, the Train / Valid / Test split with the background box, and Augmentation. Custom Model only adds the Head only choice. The defaults are the same everywhere (split 70 / 20 / 10), and Continue is ticked by default when a trained model exists. The old settings window (and its Remove Model button) is gone; the previous model is still kept as `modelAssistant.prev.pt` when a new one replaces it.
 
 ## [0.4.12] - 2026-10-16
@@ -179,7 +181,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.12...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.13...HEAD
+[0.4.13]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.12...v0.4.13
 [0.4.12]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.11...v0.4.12
 [0.4.11]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.10...v0.4.11
 [0.4.10]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.9...v0.4.10

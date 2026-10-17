@@ -28,9 +28,8 @@ from . import assistant_modes
 from .AutoAnnotateDialog import run_blocking, open_auto_annotate, confirm_download_if_needed
 from .image_manager import (repeat_last_annotations, delete_current_image, 
                           save_and_backup_bboxes)
-from .TrainingConfigDialog import TrainingConfigDialog
 from .LabelAssistantDialog import open_label_assistant
-from .HeadTrainDialog import open_head_training, open_model_training, build_yolo_job
+from .HeadTrainDialog import HeadTrainDialog, open_head_training
 from . import export as export_module
 import threading
 import webbrowser
@@ -53,6 +52,7 @@ BATCH = 4
 class AnnotationGUI:
     def __init__(self, root):
         self.root = root
+        self.root.protocol("WM_DELETE_WINDOW", self.close_main_gui)       # the window's X asks first when a training runs
         self.root.title(f"Jelibox — {os.path.basename(os.path.normpath(input_folder))}")
         self.root.geometry("1600x900")
         self.root.configure(bg=C_BASE)
@@ -126,7 +126,6 @@ class AnnotationGUI:
 
         self.root.update_idletasks()
         self.root.after(100, self.initial_load)
-        self.root.after(1500, self._warm_label_cache)
 
         self.bind_shortcuts()
 
@@ -2311,8 +2310,37 @@ class AnnotationGUI:
             self.update_display()
 
     def close_main_gui(self):
+        if not self._leave_ok():
+            return
         self.root.quit()
         self.root.destroy()
+
+    def _leave_ok(self):
+        """False when the user keeps the window because a training is running. Leaving ends the training (its process
+        belongs to this window), so it is asked first; the best model so far is kept."""
+        proc = getattr(state, "training_process", None)
+        if proc is None or proc.poll() is not None:
+            return True
+        if not messagebox.askyesno(
+                "Training is running",
+                "A training is still running for this workspace.\n\nLeaving stops it. The best model so far is kept.\n\n"
+                "Stop the training and leave?", parent=self.root):
+            return False
+        dlg = getattr(self, "_training_dialog", None)
+        try:
+            if dlg is not None and dlg.win.winfo_exists():
+                dlg.stop_and_finalize()
+            else:
+                proc.terminate()
+        except Exception as exc:
+            print(f"[GUI] Could not stop the training cleanly: {exc}")
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        state.training_running = False
+        state.training_process = None
+        return True
 
     def back_to_workspace(self):
         """Close this workspace and hand control back to the workspace picker."""
@@ -2865,87 +2893,29 @@ class AnnotationGUI:
                             f"{'Using Segmentation Model' if annotationMode == 'polygon' else 'Using Object Detection Model'}",
                             parent=self.root)
 
-        picture_counts = self._picture_counts()
-        config_dialog = TrainingConfigDialog(
-            self.root,
-            default_epoch=EPOCH,
-            default_batch=BATCH,
-            model_path=model_path,
-            model_type=model_type,
-            model_folder=model_folder,
-            workspace=workspaceName,
-            train_count=self._training_picture_count,
-            total_count=lambda: picture_counts[0],
-            background_count=lambda: picture_counts[1]
-        )
-        config = config_dialog.show()
-
-        if config is None:
-            return
-        if config.get("action") == "removed":
-            messagebox.showinfo("Model Removed",
-                                "Existing model has been deleted.\n"
-                                "Click Train again to choose a base model.",
-                                parent=self.root)
-            return
-
-        current_epoch = config['epoch']
-        current_batch = config['batch']
-        current_imgsz = config['imgsz']
-        selected_base = config.get('base_model')
-
         image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
         image_folders = sorted({os.path.dirname(r['source'])
                                 for r in self._find_workspace_images(image_exts)})
         if not image_folders:
             image_folders = [input_folder]
-        # an existing model is trained on (it keeps what it learned), otherwise the base model from the dialog
-        default_base = "yolo11s-seg.pt" if model_type == "seg" else "yolo11s.pt"
-        init_model = model_path if os.path.exists(model_path) else (selected_base or default_base)
-        job = build_yolo_job(
-            images_folders=image_folders, labels_folder=yolo_labels_folder, classes=list(CLASSLIST),
-            init_weights=init_model, imgsz=current_imgsz, epochs=current_epoch, batch=current_batch,
-            lr=config['lr0'], freeze=config['freeze'], weight_decay=config['weight_decay'],
-            out_dir=os.path.join(model_folder, "yolo_run"), augment=config.get('augment'),
-            **{'val_fraction': 0.3, **(config.get('split') or {}), 'split_seed': int(time.time())})
+
+        def started(dlg):
+            state.training_running = True
+            state.training_process = dlg.proc.proc
 
         def finished(_installed):
             state.training_running = False
             state.training_process = None
 
-        # the progress (a row per epoch) is shown in a window of its own, not in a terminal
-        state.training_running = True
-        dlg = open_model_training(self.root, image_folders, yolo_labels_folder, model_folder, job, model_path,
-                                  on_done=finished)
-        if dlg.proc is None:
-            state.training_running = False
-        else:
-            state.training_process = dlg.proc.proc
+        # The same settings window as the Custom Model mode's full training (no head choice here); the progress, a
+        # row per epoch, shows in it, and it lets go of this window once the training has started.
+        self._training_dialog = HeadTrainDialog(
+            self.root, image_folders, yolo_labels_folder, model_folder, on_done=finished, model_path=model_path,
+            task=model_type, title="TRAIN MODEL", counts=self._stored_counts(), full_only=True, on_start=started)
 
-    def _warm_label_cache(self):
-        """Read the label files in the background (plain file work, no Tk), so the Train windows open at once: on
-        some disks reading ten thousand small files takes a minute."""
-        from . import head_data
-        image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
-        folders = sorted({os.path.dirname(r['source']) for r in self._find_workspace_images(image_exts)})
-        threading.Thread(target=head_data.labelled_pairs, args=(folders or [input_folder], yolo_labels_folder),
-                         daemon=True).start()
-
-    def _picture_counts(self):
-        """(pictures with boxes, pictures saved with nothing in them) for the Train window."""
-        from . import head_data
-        image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
-        folders = sorted({os.path.dirname(r['source']) for r in self._find_workspace_images(image_exts)})
-        pairs, empty = head_data.scan_labels(folders or [input_folder], yolo_labels_folder)
-        return len(pairs), len(empty)
-
-    def _training_picture_count(self):
-        """Pictures the plain Train button trains on before augmentation (labelled ones, 70% of them)."""
-        from . import head_data
-        image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
-        folders = sorted({os.path.dirname(r['source']) for r in self._find_workspace_images(image_exts)})
-        pairs = head_data.labelled_pairs(folders or [input_folder], yolo_labels_folder)
-        return len(head_data.split_contiguous(pairs, 0.3)[0]) if len(pairs) >= 2 else len(pairs)
+    def _stored_counts(self):
+        from . import workspace_counts
+        return workspace_counts.get_or_empty(workspaceName)
 
     def _train_head(self):
         """Custom Model mode: Train fits a head on the frozen detector, or (a choice in its window) trains a
@@ -2953,7 +2923,8 @@ class AnnotationGUI:
         image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
         folders = sorted({os.path.dirname(r['source']) for r in self._find_workspace_images(image_exts)})
         open_head_training(self.root, folders or [input_folder], yolo_labels_folder, model_folder,
-                           model_path=model_path, task="seg" if state.annotation_mode == "polygon" else "detect")
+                           model_path=model_path, task="seg" if state.annotation_mode == "polygon" else "detect",
+                           counts=self._stored_counts())
 
     # ----------------------------------------------------------
     #  Inference & misc actions

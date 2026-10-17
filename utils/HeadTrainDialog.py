@@ -24,6 +24,8 @@ from . import head_data
 from . import workspace_config as wcfg
 from .AugmentationPanel import AugmentChoice
 from .SplitBar import SplitBar
+from . import process_guard
+from . import workspace_counts
 from .ModeDialogs import _Dialog
 from .config import workspaceName, BASE_DIR
 from .theme import (C_BASE, C_CARD, C_CARD2, C_BORDER, C_ACCENT, C_AMBER, C_GREEN, C_RED, C_TXT1, C_TXT2, C_TXT3,
@@ -178,7 +180,8 @@ class TrainProcess:
         self.log_path = log_path
         with open(log_path, "wb") as out:
             self.proc = subprocess.Popen(cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, env=env,
-                                         creationflags=flags)
+                                         creationflags=flags, **process_guard.popen_extra())
+        process_guard.bind_to_parent(self.proc)         # the worker ends with Jelibox, however Jelibox ends
         self._reader = open(log_path, "rb")
         self._partial = b""
 
@@ -236,11 +239,13 @@ class HeadTrainDialog(_Dialog):
     SAVE_TEXT = "Start training"
 
     def __init__(self, parent, images_folders, labels_folder, model_folder, command=None, on_done=None,
-                 model_path=None, task="detect", preset=None, title=None):
+                 model_path=None, task="detect", preset=None, title=None, counts=None, full_only=False, on_start=None):
         """`preset` = a ready full-training job (the plain Train button's settings): the setup part is skipped, the
         window goes straight to its progress view and does not hold the annotation window while it runs."""
         if title:
             self.TITLE = title
+        self.full_only = full_only          # every mode but Custom Model: only the full training, no head choice
+        self.on_start = on_start            # on_start(window) once the training process has started
         self.preset = preset
         self.images_folders, self.labels_folder, self.model_folder = list(images_folders), labels_folder, model_folder
         self.run_dir = os.path.join(model_folder, "head_run")
@@ -258,10 +263,14 @@ class HeadTrainDialog(_Dialog):
         self.error = None
         self.active_kind = "head"            # what the run in progress (or the last one) is
         self.active_dir = self.run_dir
-        self.pairs, self.background = head_data.scan_labels(self.images_folders, self.labels_folder)
+        self._counts_in = counts           # stored numbers (workspace_counts): the folders are not looked at to open
+        self._counted = counts.get("counted") if counts else True      # None = never counted: Refresh does it
+        self._counting = False
+        self._scan = None
+        self._boxes = None
         super().__init__(parent)
         self._built = True
-        self.win.title("Train model" if preset else "Train custom model")
+        self.win.title("Train model" if preset or full_only else "Train custom model")
         self.win.bind('<Escape>', lambda e: self._close())
         self.win.protocol("WM_DELETE_WINDOW", self._close)
         if preset:
@@ -282,7 +291,7 @@ class HeadTrainDialog(_Dialog):
         h = self.cfg["custom_head"]
         self.intro = self.label(body, HEAD_INTRO, pady=(0, 8))
 
-        card = self.card(body)
+        card = type_card = self.card(body)
         self.label(card, "TRAINING TYPE", size=8, bold=True)
         self.kind_var = tk.StringVar(value="head")
         for value, text, note in (
@@ -297,9 +306,20 @@ class HeadTrainDialog(_Dialog):
                            anchor='w').pack(anchor='w', pady=(4, 0))
             self.label(card, note, size=8, fg=C_TXT3, padx=(24, 0)).config(wraplength=self.WIDTH - 110)
 
+        if self.full_only:                    # the same settings in every mode: only the head choice is Custom Model's
+            self.kind_var.set("yolo")
+            type_card.master.destroy()
+
         card = self.card(body)
         self.label(card, "DATA", size=8, bold=True)
         self.data_info = self.label(card, "", size=9, fg=C_TXT1, pady=(4, 0))
+        self.counts_row = tk.Frame(card, bg=C_CARD)
+        self.counts_row.pack(fill=tk.X, pady=(4, 0))
+        self.refresh_btn = self.button(self.counts_row, "⟳  Refresh", self._refresh_counts)
+        self.refresh_btn.pack(side=tk.LEFT, ipadx=8, ipady=2)
+        self.counted_label = tk.Label(self.counts_row, text="", bg=C_CARD, fg=C_TXT3, font=('Segoe UI', 8), anchor='w',
+                                      justify=tk.LEFT, wraplength=self.WIDTH - 190)
+        self.counted_label.pack(side=tk.LEFT, padx=10)
         row = self.val_row = tk.Frame(card, bg=C_CARD)
         row.pack(fill=tk.X, pady=(6, 0))
         tk.Label(row, text="Validation share (last images)", bg=C_CARD, fg=C_TXT2, font=('Segoe UI', 9), width=28,
@@ -312,16 +332,16 @@ class HeadTrainDialog(_Dialog):
         self.split_box = tk.Frame(card, bg=C_CARD)
         self.split = SplitBar(self.split_box, bg=C_CARD, on_change=self._update_data_info, width=self.WIDTH - 90)
         self.split.pack(fill=tk.X)
-        self.bg_var = tk.BooleanVar(value=bool(self.background))
-        if self.background:
-            self.check(self.split_box, f"Use the {len(self.background)} pictures with nothing in them as background "
-                                       f"(they teach the model what is NOT there)", self.bg_var).pack(anchor='w', pady=(6, 0))
-            self.bg_var.trace_add("write", lambda *_: self._update_data_info())
+        self.bg_var = tk.BooleanVar(value=bool(self.n_background))
+        self.bg_check = self.check(self.split_box, "", self.bg_var)       # shown only when there are such pictures
+        self.bg_var.trace_add("write", lambda *_: self._update_data_info())
         self.shuffle_var = tk.BooleanVar(value=False)
-        self.check(self.split_box, "Mix the pictures before splitting (random)", self.shuffle_var).pack(anchor='w', pady=(6, 0))
+        self.shuffle_check = self.check(self.split_box, "Mix the pictures before splitting (random)", self.shuffle_var)
+        self.shuffle_check.pack(anchor='w', pady=(6, 0))
+        self._sync_background_box()
         self.shuffle_var.trace_add("write", lambda *_: self._update_data_info())
         self.split_note = self.label(card, "", size=8, fg=C_TXT3, pady=(4, 0))
-        self.split.set_total(len(self.pairs) + (len(self.background) if self.bg_var.get() else 0))
+        self.split.set_total(self.n_labelled + (self.n_background if self.bg_var.get() else 0))
         self.classes_note = self.label(card, "", size=8, fg=C_AMBER, pady=(2, 0))
         self._update_data_info()
 
@@ -346,7 +366,7 @@ class HeadTrainDialog(_Dialog):
         self.taps_hint.pack(side=tk.LEFT, padx=10)
         self.weights_var.trace_add("write", lambda *_: self._update_taps())
         self._update_taps()
-        self.continue_var = tk.BooleanVar(value=False)
+        self.continue_var = tk.BooleanVar(value=os.path.isfile(self.model_path))     # on: keep what it learned
         self.continue_chk = self.check(card, "Continue from the model trained here before (keeps what it learned)",
                                        self.continue_var)
         if not os.path.isfile(self.model_path):
@@ -366,6 +386,7 @@ class HeadTrainDialog(_Dialog):
         self.h_var, self.w_var = tk.IntVar(value=DEFAULT_IMGSZ[0]), tk.IntVar(value=DEFAULT_IMGSZ[1])
         self.sq_var = tk.IntVar(value=640)
         self.freeze_var = tk.IntVar(value=0)
+        self.wd_var = tk.StringVar(value="0.0005")
         self.epochs_var, self.batch_var = tk.IntVar(value=50), tk.IntVar(value=16)
         self.lr_var = tk.StringVar(value="0.001")
         self.cw_var, self.flip_var = tk.BooleanVar(value=True), tk.BooleanVar(value=True)
@@ -409,6 +430,10 @@ class HeadTrainDialog(_Dialog):
         tk.Label(fr, text="0 = train every layer, 10 = keep the backbone", bg=C_CARD, fg=C_TXT3,
                  font=('Segoe UI', 8)).pack(side=tk.LEFT, padx=8)
         self._yolo_cells.append(fr)
+        row_label(5, "Weight decay", "yolo")
+        wd = self.entry(grid, self.wd_var, 10)
+        wd.grid(row=5, column=1, sticky='w', ipady=3)
+        self._yolo_cells.append(wd)
         self.size_note = self.label(card, "", size=8, fg=C_TXT3, pady=(6, 0))
         self.device_hint = self.label(card, "", size=8, fg=C_AMBER, pady=(2, 0))
         self._device_hint()
@@ -452,10 +477,10 @@ class HeadTrainDialog(_Dialog):
         if hasattr(self, "split_box"):
             if yolo:
                 self.val_row.pack_forget()
-                self.split_box.pack(fill=tk.X, pady=(6, 0), after=self.data_info)
+                self.split_box.pack(fill=tk.X, pady=(6, 0), after=self.counts_row)
             else:
                 self.split_box.pack_forget()
-                self.val_row.pack(fill=tk.X, pady=(6, 0), after=self.data_info)
+                self.val_row.pack(fill=tk.X, pady=(6, 0), after=self.counts_row)
             self._update_data_info()
         if hasattr(self, "aug_frame"):
             self.aug_frame.pack(fill=tk.X, pady=(0, 10)) if yolo else self.aug_frame.pack_forget()
@@ -507,49 +532,139 @@ class HeadTrainDialog(_Dialog):
         if hasattr(self, "scroll") and getattr(self, "_built", False):
             self.fit()
 
+    # What the window knows about the data. With stored numbers nothing is read; otherwise the folders are scanned,
+    # once, the first time a number is needed (never in the preset mode, which shows no data).
+    def _scanned(self):
+        if self._scan is None:
+            self._scan = head_data.scan_labels(self.images_folders, self.labels_folder)
+        return self._scan
+
+    @property
+    def pairs(self):
+        return self._scanned()[0]
+
+    @property
+    def background(self):
+        return self._scanned()[1]
+
+    @property
+    def n_labelled(self):
+        return int(self._counts_in["labelled"]) if self._counts_in else len(self.pairs)
+
+    @property
+    def n_background(self):
+        return int(self._counts_in["background"]) if self._counts_in else len(self.background)
+
+    def box_counts(self):
+        if self._boxes is None:
+            if self._counts_in:
+                stored = list(self._counts_in.get("boxes") or [])
+                self._boxes = (stored + [0] * len(self.classes))[:len(self.classes)]
+            else:
+                self._boxes = head_data.class_counts(self.pairs, len(self.classes))
+        return self._boxes
+
+    def _sync_background_box(self):
+        """Show the background tick box only when there are pictures with nothing in them, with their number."""
+        n = self.n_background
+        self.bg_check.config(text=f"Use the {n} pictures with nothing in them as background "
+                                  f"(they teach the model what is NOT there)")
+        if n:
+            self.bg_check.pack(anchor='w', pady=(6, 0), before=self.shuffle_check)
+        else:
+            self.bg_check.pack_forget()
+
+    def _counted_text(self):
+        if not self._counted:
+            return "Not counted yet. Press Refresh to count the pictures (the training counts them itself when it starts)."
+        when = time.strftime("%d %b %H:%M", time.localtime(self._counted))
+        return f"Counted {when}. Press Refresh after you add, delete or label pictures; the training itself always uses " \
+               f"the files as they are when it starts."
+
+    def _refresh_counts(self):
+        """Count this workspace again (the only way the numbers here change). It can take a minute on a big dataset
+        on a cold disk, so it runs aside - plain file work, no Tk - and the window stays alive."""
+        if self._counting:
+            return
+        self._counting = True
+        self.refresh_btn.config(state=tk.DISABLED, text="Counting ...")
+        self.counted_label.config(text="Counting the pictures ... (a big dataset can take a minute)")
+        answer = {}
+
+        def work():
+            try:
+                answer["stats"] = workspace_counts.recount(workspaceName)
+            except Exception as exc:                           # shown below, never lost on the thread
+                answer["error"] = str(exc) or exc.__class__.__name__
+
+        threading.Thread(target=work, daemon=True).start()
+
+        def check():
+            if not self.win.winfo_exists():
+                return
+            if not answer:
+                self.win.after(200, check)
+                return
+            self._counting = False
+            self.refresh_btn.config(state=tk.NORMAL, text="⟳  Refresh")
+            if "stats" in answer:
+                self._apply_counts(answer["stats"])
+            else:
+                self.counted_label.config(text=f"Could not count: {answer['error']}")
+        self.win.after(200, check)
+
+    def _apply_counts(self, stats):
+        had_background = self.n_background
+        self._counts_in, self._counted, self._boxes = stats, stats.get("counted"), None
+        if self.n_background and not had_background:
+            self.bg_var.set(True)
+        self._sync_background_box()
+        self._update_data_info()
+        if hasattr(self, "augment"):
+            self.augment.refresh()
+        self.fit()
+
     def _split_sizes(self):
         """(train, valid, test) pictures for the current choice: the bar for a full training, the box for the head."""
-        n = len(self.pairs)
+        n = self.n_labelled
         if n < 2:
             return n, 0, 0
         if self.kind_var.get() == "yolo":
-            pool = self.pairs + (self.background if self.bg_var.get() else [])
-            train, val, test = head_data.split_three(pool, self.split.valid_pct / 100, self.split.test_pct / 100)
-            return len(train), len(val), len(test)
+            total = n + (self.n_background if self.bg_var.get() else 0)
+            return head_data.split_sizes(total, self.split.valid_pct / 100, self.split.test_pct / 100)
         try:
             share = max(5, min(50, int(self.val_var.get())))
         except (tk.TclError, ValueError):
             share = 20
-        train, val = head_data.split_contiguous(self.pairs, share / 100)
-        return len(train), len(val), 0
+        return head_data.split_sizes(n, share / 100)
 
     def _train_count(self):
         """Training pictures before augmentation, for the current split."""
-        if len(self.pairs) < 2:
-            return len(self.pairs)
-        if hasattr(self, "split_box"):
-            return self._split_sizes()[0]
-        try:
-            share = max(5, min(50, int(self.val_var.get())))
-        except (tk.TclError, ValueError):
-            share = 20
-        return len(head_data.split_contiguous(self.pairs, share / 100)[0])
+        if self.n_labelled < 2:
+            return self.n_labelled
+        return self._split_sizes()[0]
 
     def _update_data_info(self):
-        n = len(self.pairs)
+        n = self.n_labelled
+        if hasattr(self, "counted_label") and not self._counting:
+            self.counted_label.config(text=self._counted_text())
+        if not self._counted:
+            self.data_info.config(text="The pictures of this workspace were not counted yet.")
+            self.classes_note.config(text="")
+            if self.kind_var.get() == "yolo":
+                self.split.set_total(0)
+            return
         if n >= 2:
             train, val, test = self._split_sizes()
-            extra = (f" + {len(self.background)} with nothing in them (background)"
-                     if self.kind_var.get() == "yolo" and self.bg_var.get() and self.background else "")
+            extra = (f" + {self.n_background} with nothing in them (background)"
+                     if self.kind_var.get() == "yolo" and self.bg_var.get() and self.n_background else "")
             text = (f"{n} labelled images{extra}: {train} to train, {val} to validate"
                     + (f", {test} to test." if test else "."))
             if self.kind_var.get() == "yolo":
-                self.split.set_total(n + (len(self.background) if self.bg_var.get() else 0))
+                self.split.set_total(n + (self.n_background if self.bg_var.get() else 0))
         else:
             text = f"{n} labelled images."
-        if getattr(self, "_box_counts", None) is None:          # the labels do not change while this window is open
-            self._box_counts = head_data.class_counts(self.pairs, len(self.classes))
-        counts = self._box_counts
+        counts = self.box_counts()                               # the labels do not change while this window is open
         used = [f"{c} {k}" for c, k in zip(self.classes, counts) if k]
         self.data_info.config(text=text + ("\nBoxes per class: " + ", ".join(used) if used else ""))
         notes = []
@@ -623,8 +738,8 @@ class HeadTrainDialog(_Dialog):
         except (ValueError, tk.TclError) as exc:
             self._warn(exc)
             return
-        if len(self.pairs) < head_data.MIN_LABELLED:
-            messagebox.showwarning("Train custom model", f"Only {len(self.pairs)} images have labels. At least "
+        if self._counted and self.n_labelled < head_data.MIN_LABELLED:
+            messagebox.showwarning("Train custom model", f"Only {self.n_labelled} images have labels. At least "
                                                  f"{head_data.MIN_LABELLED} are needed.", parent=self.win)
             return
         if os.path.exists(os.path.join(self.model_folder, HEAD_FILE)) and not messagebox.askyesno(
@@ -658,6 +773,12 @@ class HeadTrainDialog(_Dialog):
             freeze = int(self.freeze_var.get())
             if not 0 <= freeze <= 100:
                 raise ValueError("Freeze must be between 0 and 100 layers.")
+            try:
+                weight_decay = float(self.wd_var.get())
+            except ValueError:
+                raise ValueError("Weight decay must be a number between 0 and 0.1.")
+            if not 0 <= weight_decay <= 0.1:
+                raise ValueError("Weight decay must be between 0 and 0.1.")
             epochs, batch, lr, _share = self._read_common()
             if self.split.valid_pct < 1:
                 raise ValueError("Give the validation part at least 1 %: the training needs pictures to score itself on.")
@@ -666,8 +787,8 @@ class HeadTrainDialog(_Dialog):
         except (ValueError, tk.TclError) as exc:
             self._warn(exc)
             return
-        if len(self.pairs) < head_data.MIN_LABELLED:
-            messagebox.showwarning("Train custom model", f"Only {len(self.pairs)} images have labels. At least "
+        if self._counted and self.n_labelled < head_data.MIN_LABELLED:
+            messagebox.showwarning("Train custom model", f"Only {self.n_labelled} images have labels. At least "
                                                  f"{head_data.MIN_LABELLED} are needed.", parent=self.win)
             return
         resume = self.continue_var.get() and os.path.isfile(self.model_path)
@@ -679,10 +800,10 @@ class HeadTrainDialog(_Dialog):
             return
         job = build_yolo_job(images_folders=self.images_folders, labels_folder=self.labels_folder,
                              classes=self.classes, init_weights=self.model_path if resume else base, imgsz=size,
-                             epochs=epochs, batch=batch, lr=lr, freeze=freeze,
+                             epochs=epochs, batch=batch, lr=lr, freeze=freeze, weight_decay=weight_decay,
                              val_fraction=self.split.valid_pct / 100, test_fraction=self.split.test_pct / 100,
                              shuffle=self.shuffle_var.get(), split_seed=int(time.time()),
-                             background=bool(self.background) and self.bg_var.get(),
+                             background=bool(self.n_background) and self.bg_var.get(),
                              out_dir=self.yolo_dir, augment=self.augment.job_dict())
         os.makedirs(self.yolo_dir, exist_ok=True)
         shutil.rmtree(os.path.join(self.yolo_dir, RUN_NAME), ignore_errors=True)   # an older run must not pass for this one
@@ -697,6 +818,13 @@ class HeadTrainDialog(_Dialog):
     def _launch(self, job, kind, run_dir, epochs):
         self.active_dir = run_dir
         self._remove_flag()                                      # a flag left by an older run must not end this one
+        other = process_guard.running_training(BASE_DIR)
+        if other:                                                # one training at a time: the GPU memory is shared
+            when = time.strftime("%H:%M", time.localtime(other.get("started", time.time())))
+            messagebox.showwarning("Train custom model", f"A training is already running (workspace \"{other.get('workspace')}\","
+                                   f" started at {when}).\n\nOnly one fits on the GPU at a time. Wait for it, or stop it "
+                                   f"from its window (Stop now), then start this one.", parent=self.win)
+            return
         job_path = os.path.join(run_dir, "job.json")
         with open(job_path, "w", encoding="utf-8") as f:
             json.dump(job, f, indent=2)
@@ -705,6 +833,9 @@ class HeadTrainDialog(_Dialog):
         except OSError as exc:
             messagebox.showerror("Train custom model", f"Could not start the training process:\n{exc}", parent=self.win)
             return
+        process_guard.claim(BASE_DIR, workspaceName, self.proc.proc.pid)
+        if self.on_start:
+            self.on_start(self)
         self.active_kind, self.active_dir = kind, run_dir
         self.running = True
         self.started_at = time.time()
@@ -712,6 +843,8 @@ class HeadTrainDialog(_Dialog):
         self.best_epoch = 0
         self.total_epochs = epochs
         self._show_progress()
+        if self.full_only:
+            self.win.grab_release()               # hours of training must not lock the annotation window
         self.win.after(POLL_MS, self._poll)
 
     # ---------------------------------------------------------- progress view
@@ -893,6 +1026,7 @@ class HeadTrainDialog(_Dialog):
         self.finished = True
         self.proc.proc.wait()
         self.proc.close()
+        process_guard.release(BASE_DIR, self.proc.proc.pid)
         self.stop_btn.config(state=tk.DISABLED)
         self.finish_btn.config(state=tk.DISABLED)
         self.close_btn.config(state=tk.NORMAL)
@@ -952,7 +1086,7 @@ class HeadTrainDialog(_Dialog):
             select_trained_model(workspaceName)
         shown = os.path.relpath(installed, BASE_DIR) if installed else ""
         from . import assistant_modes
-        if self.preset and assistant_modes.get_mode() == assistant_modes.MODE_YOLO_WORLD:
+        if (self.preset or self.full_only) and assistant_modes.get_mode() == assistant_modes.MODE_YOLO_WORLD:
             use = f"Saved as {shown} and selected as My trained model: G and the full-dataset run use it now."
         else:
             use = (f"Saved as {shown} and selected as My trained model. YOLO-World mode uses it: press Mode, choose "
@@ -1011,6 +1145,21 @@ class HeadTrainDialog(_Dialog):
             self.finish_btn.config(state=tk.DISABLED)
             self.proc.stop()
 
+    def stop_and_finalize(self, timeout=30):
+        """Stop the training now and finish the job this window would do when it ends (keep the best model so far).
+        Used when the annotation window is closed while a training runs."""
+        if not (self.proc and self.running):
+            return
+        self._stop()
+        end = time.time() + timeout
+        while self.proc.running() and time.time() < end:
+            time.sleep(0.1)
+        lines, _ended = self.proc.read_new()
+        for line in lines:
+            self._handle(line)
+        if not self.proc.running():
+            self._ended()
+
     def _close(self):
         if self.running:
             kept = "model" if self.active_kind == "yolo" else "head"
@@ -1031,7 +1180,8 @@ def open_model_training(parent, images_folders, labels_folder, model_folder, job
 
 
 def open_head_training(parent, images_folders, labels_folder, model_folder, command=None, on_done=None,
-                       model_path=None, task="detect"):
-    dlg = HeadTrainDialog(parent, images_folders, labels_folder, model_folder, command, on_done, model_path, task)
+                       model_path=None, task="detect", counts=None):
+    dlg = HeadTrainDialog(parent, images_folders, labels_folder, model_folder, command, on_done, model_path, task,
+                          counts=counts)
     parent.wait_window(dlg.win)
     return dlg

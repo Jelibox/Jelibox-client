@@ -34,6 +34,7 @@ from . import relocate
 from . import workspace_manager
 from . import ServerSettingsDialog
 from .progress_popup import show_progress_popup
+from . import workspace_counts
 
 
 class WorkspacePickerApp:
@@ -92,7 +93,7 @@ class WorkspacePickerApp:
         self.mode_btn.pack(side=tk.LEFT, padx=(0, 6), pady=12, ipady=5, ipadx=10)
         self._update_mode_button()
 
-        self._btn(header, "⟳  Refresh", self.refresh_workspaces,
+        self._btn(header, "⟳  Refresh", self.recount_workspaces,
                   C_CARD2, C_TXT1).pack(side=tk.LEFT, padx=(0, 6), pady=12, ipady=5, ipadx=10)
 
         self._btn(header, "+  Add Workspace", lambda: self._open_add_workspace_dialog(),
@@ -413,6 +414,16 @@ class WorkspacePickerApp:
     # ----------------------------------------------------------
     #  Workspace tree
     # ----------------------------------------------------------
+    def recount_workspaces(self):
+        """The Refresh button: count the pictures of every workspace again (what the Train windows and this list show
+        comes from these stored numbers), forget the workspaces that are gone, and redraw the list."""
+        popup, update = self._show_progress_popup("Counting the pictures ...", C_ACCENT)
+        try:
+            workspace_counts.recount_all(update)
+        finally:
+            popup.destroy()
+        self.refresh_workspaces()
+
     def refresh_workspaces(self):
         self.workspaces = list_workspaces()
         if self.selected not in self.workspaces:
@@ -531,7 +542,7 @@ class WorkspacePickerApp:
                 self._add_instance_row(instance)
 
     def _add_instance_row(self, instance_name):
-        n_images = count_images(instance_name)
+        n_images = workspace_counts.instance_images(workspace_name_for(instance_name), instance_name)
 
         row = tk.Frame(self.tree_frame, bg=C_PANEL, cursor='hand2')
         row.pack(fill=tk.X)
@@ -540,7 +551,7 @@ class WorkspacePickerApp:
                           font=('Segoe UI', 9), anchor='w')
         label.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=6)
 
-        hint = tk.Label(row, text=f"{n_images} img", bg=C_PANEL, fg=C_TXT3,
+        hint = tk.Label(row, text="not counted" if n_images is None else f"{n_images} img", bg=C_PANEL, fg=C_TXT3,
                          font=('Segoe UI', 8))
         hint.pack(side=tk.RIGHT, padx=10)
 

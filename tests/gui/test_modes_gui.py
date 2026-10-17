@@ -1118,7 +1118,7 @@ class MainWindowModeTests(unittest.TestCase):
     def test_train_in_sam2_mode_explains_that_nothing_needs_training(self):
         from utils import sam2_dynamic as sd
         am.set_mode(am.MODE_SAM2)
-        with mock.patch("utils.AnnotationGUI.TrainingConfigDialog") as yolo, \
+        with mock.patch("utils.AnnotationGUI.HeadTrainDialog") as yolo, \
                 mock.patch("utils.AnnotationGUI.open_head_training") as head:
             self.gui.start_training()
         self.assertFalse(yolo.called or head.called)
@@ -1192,26 +1192,29 @@ class MainWindowModeTests(unittest.TestCase):
 
     def test_train_in_custom_head_mode_opens_the_head_trainer(self):
         am.set_mode(am.MODE_HEAD)
-        with mock.patch("utils.AnnotationGUI.open_head_training") as head,                 mock.patch("utils.AnnotationGUI.TrainingConfigDialog") as yolo:
+        with mock.patch("utils.AnnotationGUI.open_head_training") as head, \
+                mock.patch("utils.AnnotationGUI.HeadTrainDialog") as yolo:
             self.gui.start_training()
         head.assert_called_once()
         args = head.call_args[0]
         self.assertEqual(args[2], config.yolo_labels_folder)
         self.assertFalse(yolo.called, "no whole-YOLO training in this mode")
 
-    def test_train_in_the_other_modes_is_still_the_yolo_training(self):
-        am.set_mode(am.MODE_YOLO_WORLD)
-        dialog = mock.Mock()
-        dialog.show.return_value = None                      # the user cancels
-        with mock.patch("utils.AnnotationGUI.open_head_training") as head,                 mock.patch("utils.AnnotationGUI.TrainingConfigDialog", return_value=dialog) as yolo:
-            self.gui.start_training()
-        self.assertTrue(yolo.called)
-        self.assertFalse(head.called)
+    def test_train_in_the_other_modes_is_the_full_yolo_training_with_the_same_window(self):
+        for mode in (am.MODE_YOLO_WORLD, am.MODE_LOCATE):
+            am.set_mode(mode)
+            with mock.patch("utils.AnnotationGUI.open_head_training") as head, \
+                    mock.patch("utils.AnnotationGUI.HeadTrainDialog") as window:
+                self.gui.start_training()
+            self.assertTrue(window.called, mode)
+            self.assertTrue(window.call_args.kwargs["full_only"], "no head choice outside Custom Model")
+            self.assertFalse(head.called, mode)
 
     # ------------------------------------------------------------ the plain Train button: a window, not a terminal
     def _plain_train(self, mode="ok", cfg=None, polygon=False, slow=False):
-        """Press Train in YOLO-World mode with a fake settings dialog and a fake trainer process. Returns the
-        progress window the button opened (and keeps the Popen mock, which must stay unused)."""
+        """Press Train in YOLO-World mode: the settings window opens (the same one as Custom Model's full training),
+        the test fills it from `cfg` and presses Start, with a fake trainer process. Returns that window, now showing
+        the progress (and keeps the Popen mock, which must stay unused)."""
         import sys
         from utils import HeadTrainDialog as htd
         am.set_mode(am.MODE_YOLO_WORLD)
@@ -1220,28 +1223,50 @@ class MainWindowModeTests(unittest.TestCase):
             f.write(FAKE_YOLO_TRAINER)
         cfg = cfg or {"epoch": 2, "batch": 4, "imgsz": 320, "freeze": 0, "lr0": 0.001, "weight_decay": 0.0005,
                       "base_model": "yolo11n.pt"}
-        dialog = mock.Mock()
-        dialog.show.return_value = cfg
-        captured = []
-        real = htd.open_model_training
+        created = []
 
-        def spy(*a, **k):
-            dlg = real(*a, **k)
-            captured.append(dlg)
+        def factory(*a, **k):
+            dlg = htd.HeadTrainDialog(*a, **k)
+            created.append(dlg)
             return dlg
 
         self.addCleanup(setattr, config.state, "annotation_mode", config.state.annotation_mode)
         config.state.annotation_mode = "polygon" if polygon else "bbox"
-        with mock.patch("utils.AnnotationGUI.TrainingConfigDialog", return_value=dialog), \
+        with mock.patch("utils.AnnotationGUI.HeadTrainDialog", factory), \
                 mock.patch("utils.HeadTrainDialog.default_command",
                            lambda job_path: [sys.executable, "-u", script, job_path]), \
-                mock.patch("utils.AnnotationGUI.open_model_training", spy), \
                 mock.patch("utils.AnnotationGUI.subprocess.Popen", wraps=__import__("subprocess").Popen) as popen, \
+                mock.patch("utils.workspace_counts.get_or_empty", return_value=dict(PLENTY)), \
                 mock.patch.dict(os.environ, {"FAKE_TRAIN_MODE": mode}):
             self.gui.start_training()
+            self.assertEqual(len(created), 1, "the Train button opened one settings window")
+            self._fill_training_window(created[0], cfg)
+            created[0].save()
         self.popen = popen
-        self.assertEqual(len(captured), 1, "the Train button opened one progress window")
-        return captured[0]
+        return created[0]
+
+    def _fill_training_window(self, dlg, cfg):
+        """Type the settings of the old dialog's dict into the standard window."""
+        from utils import augment_catalog as cat
+        from utils import augmentation as aug
+        dlg.epochs_var.set(cfg["epoch"])
+        dlg.batch_var.set(cfg["batch"])
+        dlg.sq_var.set(cfg["imgsz"])
+        dlg.freeze_var.set(cfg["freeze"])
+        dlg.lr_var.set(str(cfg["lr0"]))
+        dlg.wd_var.set(str(cfg["weight_decay"]))
+        if cfg.get("base_model"):
+            dlg.base_var.set(cfg["base_model"])
+        split = cfg.get("split")
+        if split:
+            dlg.split.train_var.set(str(round(100 - split["val_fraction"] * 100 - split["test_fraction"] * 100)))
+            dlg.split.valid_var.set(str(round(split["val_fraction"] * 100)))
+            dlg.shuffle_var.set(split.get("shuffle", False))
+        if cfg.get("augment"):
+            config_ = aug.config_from_dict(cfg["augment"])
+            dlg.augment.result = {"config": config_, "state": cat.from_config(config_), "outputs": 2,
+                                  "keep_original": config_.keep_original, "seed": config_.seed,
+                                  "splits": config_.splits}
 
     def _clean_trained_model(self):
         import shutil
@@ -1292,7 +1317,8 @@ class MainWindowModeTests(unittest.TestCase):
             job = __import__("json").load(f)
         self.assertEqual((job["kind"], job["init_weights"], job["epochs"], job["batch"], job["imgsz"], job["freeze"]),
                          ("yolo", "yolov8s.pt", 3, 8, 416, 10))
-        self.assertEqual((job["lr"], job["weight_decay"], job["val_fraction"]), (0.002, 0.001, 0.3))
+        self.assertEqual((job["lr"], job["weight_decay"], job["val_fraction"]), (0.002, 0.001, 0.2))
+        self.assertAlmostEqual(job["test_fraction"], 0.1, msg="the standard split is 70 / 20 / 10 in every mode")
         self.assertEqual(job["classes"], config.class_manager.get_classes())
         self.assertEqual(job["labels_folder"], config.yolo_labels_folder)
         self.assertTrue(job["images_folders"])
@@ -1356,7 +1382,7 @@ class MainWindowModeTests(unittest.TestCase):
         dlg = self._plain_train(mode="slow", cfg=cfg)
         self.assertTrue(pump_until(self.root, lambda: float(dlg.bar.cget("value")) >= 1, 20), "epoch 1 never came")
         self.rec.calls.clear()
-        with mock.patch("utils.AnnotationGUI.TrainingConfigDialog") as again:
+        with mock.patch("utils.AnnotationGUI.HeadTrainDialog") as again:
             self.gui.start_training()
         self.assertFalse(again.called)
         self.assertIn("already running", self.rec.of("showwarning")[-1][2])
@@ -1367,6 +1393,57 @@ class MainWindowModeTests(unittest.TestCase):
         with open(config.model_path, "rb") as f:
             self.assertEqual(f.read(), b"model-1", "the best model so far is kept")
         dlg.win.destroy()
+
+    def test_leaving_while_a_training_runs_asks_and_keeps_the_best_model(self):
+        self._clean_trained_model()
+        self.addCleanup(self._clean_trained_model)
+        cfg = {"epoch": 5, "batch": 4, "imgsz": 320, "freeze": 0, "lr0": 0.001, "weight_decay": 0.0005,
+               "base_model": "yolo11n.pt"}
+        dlg = self._plain_train(mode="slow", cfg=cfg)
+        self.assertTrue(pump_until(self.root, lambda: float(dlg.bar.cget("value")) >= 1, 20), "epoch 1 never came")
+        proc = dlg.proc.proc
+        with mock.patch("utils.AnnotationGUI.messagebox.askyesno", return_value=False) as ask, \
+                mock.patch.object(self.gui.root, "quit") as quit_, mock.patch.object(self.gui.root, "destroy") as gone:
+            self.gui.close_main_gui()
+        self.assertIn("still running", ask.call_args[0][1])
+        self.assertFalse(quit_.called or gone.called, "No: the window stays and the training goes on")
+        self.assertIsNone(proc.poll())
+        with mock.patch("utils.AnnotationGUI.messagebox.askyesno", return_value=True), \
+                mock.patch.object(self.gui.root, "quit") as quit_, mock.patch.object(self.gui.root, "destroy") as gone:
+            self.gui.close_main_gui()
+        self.assertTrue(quit_.called and gone.called, "Yes: the window closes")
+        self.assertIsNotNone(proc.poll(), "and the training process is gone with it")
+        self.assertIsNone(config.state.training_process)
+        with open(config.model_path, "rb") as f:
+            self.assertEqual(f.read(), b"model-1", "the best model so far is installed, not lost")
+        dlg.win.destroy()
+
+    def test_leaving_without_a_training_just_closes(self):
+        config.state.training_process = None
+        with mock.patch("utils.AnnotationGUI.messagebox.askyesno") as ask, \
+                mock.patch.object(self.gui.root, "quit") as quit_, mock.patch.object(self.gui.root, "destroy"):
+            self.gui.close_main_gui()
+        self.assertFalse(ask.called)
+        self.assertTrue(quit_.called)
+
+    def test_a_training_running_in_another_window_blocks_a_new_one(self):
+        from utils import process_guard
+        self._clean_trained_model()
+        self.addCleanup(self._clean_trained_model)
+        process_guard.claim(config.BASE_DIR, "another-workspace", os.getpid())      # a live worker, as far as it knows
+        self.addCleanup(process_guard.release, config.BASE_DIR, os.getpid())
+        self.rec.calls.clear()
+        cfg = {"epoch": 1, "batch": 4, "imgsz": 320, "freeze": 0, "lr0": 0.001, "weight_decay": 0.0005,
+               "base_model": "yolo11n.pt"}
+        with mock.patch("utils.HeadTrainDialog.messagebox.showwarning") as warn, \
+                mock.patch("utils.HeadTrainDialog.TrainProcess") as started:
+            try:
+                self._plain_train(cfg=cfg)
+            except AssertionError:
+                pass                                           # the helper expects a window: there is none
+        self.assertFalse(started.called, "no second process on the same GPU")
+        self.assertIn("another-workspace", warn.call_args[0][1])
+        self.assertFalse(config.state.training_running)
 
     def test_finish_early_works_in_the_window_of_the_plain_train_button_too(self):
         self._clean_trained_model()
@@ -1398,6 +1475,7 @@ class MainWindowModeTests(unittest.TestCase):
 
 
 
+PLENTY = {"images": 60, "labelled": 40, "background": 0, "boxes": [20, 20], "instances": {}, "counted": 1}   # enough to train
 FAKE_YOLO_TRAINER = r"""
 import json, os, sys, time
 job = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -1645,28 +1723,122 @@ class FullYoloTrainingTests(ModeGuiBase):
                 os.remove(os.path.join(self.labels, name))
         dlg = self.open()
         self.assertEqual(len(dlg.background), 0)
-        text = " ".join(str(w.cget("text")) for w in walk(dlg.win) if isinstance(w, tk.Checkbutton))
-        self.assertNotIn("as background", text)
+        self.assertFalse(dlg.bg_check.winfo_ismapped(), "no such pictures: no box")
         dlg.win.destroy()
 
-    def test_the_old_train_dialog_offers_the_background_pictures_too(self):
-        from utils.TrainingConfigDialog import TrainingConfigDialog
-        dialog = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
-                                      model_type="detect", model_folder=ctx.model_dir, workspace=WORKSPACE,
-                                      total_count=lambda: 50, background_count=lambda: 10)
-        self.assertEqual(dialog.split.total, 60, "50 with boxes + 10 with nothing in them")
-        dialog.bg_var.set(False)
-        dialog._background_toggled()
-        self.assertEqual(dialog.split.total, 50)
-        dialog.bg_var.set(True)
-        dialog._background_toggled()
-        dialog.start()
-        self.assertTrue(dialog.result["split"]["background"])
-        none = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
-                                    model_type="detect", model_folder=ctx.model_dir, total_count=lambda: 50,
-                                    background_count=lambda: 0)
-        none.start()
-        self.assertFalse(none.result["split"]["background"])
+    # ---------------------------------------------------------------- the same window in every mode
+    def _full_only_window(self, **kw):
+        from utils.HeadTrainDialog import HeadTrainDialog
+        started = []
+        dlg = HeadTrainDialog(self.root, [self.images], self.labels, ctx.model_dir, command=self.command,
+                              model_path=self.model_file, on_done=lambda _i: None, full_only=True,
+                              on_start=started.append, **kw)
+        dlg.started = started
+        pump(self.root, 0.2)
+        return dlg
+
+    def test_outside_custom_model_the_window_is_the_full_training_without_the_head_choice(self):
+        dlg = self._full_only_window()
+        self.assertEqual(dlg.kind_var.get(), "yolo")
+        self.assertEqual([w for w in walk(dlg.win) if isinstance(w, tk.Radiobutton)], [], "no head / full choice")
+        self.assertEqual(dlg.det_title.cget("text"), "BASE MODEL")
+        self.assertTrue(dlg.split_box.winfo_ismapped())
+        self.assertTrue(dlg.aug_frame.winfo_ismapped())
+        self.assertFalse(dlg.taps_row.winfo_ismapped())
+        for part in (dlg.sq_var, dlg.epochs_var, dlg.batch_var, dlg.freeze_var, dlg.lr_var, dlg.wd_var, dlg.base_var):
+            self.assertIsNotNone(part.get())
+        self.assertEqual(dlg.wd_var.get(), "0.0005")
+        dlg.win.destroy()
+
+    def test_the_window_lets_go_of_the_annotation_window_once_training_starts(self):
+        dlg = self._full_only_window()
+        self.assertEqual(dlg.win.grab_status(), "local", "modal while it asks")
+        dlg.epochs_var.set(1)
+        self.run_to_end(dlg)
+        self.assertEqual(len(dlg.started), 1)
+        self.assertIs(dlg.started[0], dlg, "on_start is told which window started")
+        self.assertIsNone(dlg.win.grab_status(), "hours of training must not lock the annotation window")
+        dlg.win.destroy()
+
+    def test_weight_decay_is_checked_and_goes_into_the_job(self):
+        dlg = self._full_only_window()
+        dlg.wd_var.set("0.5")
+        with mock.patch("utils.HeadTrainDialog.messagebox.showwarning") as warn:
+            dlg.save()
+        self.assertIn("Weight decay", warn.call_args[0][1])
+        self.assertIsNone(dlg.proc)
+        dlg.wd_var.set("abc")
+        with mock.patch("utils.HeadTrainDialog.messagebox.showwarning") as warn:
+            dlg.save()
+        self.assertIn("Weight decay", warn.call_args[0][1])
+        dlg.wd_var.set("0.001")
+        dlg.epochs_var.set(1)
+        self.run_to_end(dlg)
+        self.assertEqual(self.job()["weight_decay"], 0.001)
+        dlg.win.destroy()
+
+    def test_an_existing_model_is_continued_by_default_and_the_choice_is_still_there(self):
+        self.assertFalse(os.path.isfile(self.model_file))
+        dlg = self._full_only_window()
+        self.assertFalse(dlg.continue_var.get(), "nothing to continue from yet")
+        dlg.win.destroy()
+        with open(self.model_file, "wb") as f:
+            f.write(b"old model")
+        dlg = self._full_only_window()
+        self.assertTrue(dlg.continue_var.get(), "keeps what it learned, as the plain Train button always did")
+        dlg.epochs_var.set(1)
+        self.run_to_end(dlg)
+        self.assertEqual(self.job()["init_weights"], self.model_file)
+        dlg.win.destroy()
+
+    # ---------------------------------------------------------------- counting only on request
+    UNCOUNTED = {"images": 0, "instances": {}, "labelled": 0, "background": 0, "boxes": [], "counted": None}
+
+    def test_nothing_is_counted_to_open_the_window(self):
+        from utils import workspace_counts as wcounts
+        with mock.patch.object(wcounts, "recount", side_effect=AssertionError("counted")), \
+                mock.patch.object(wcounts, "compute", side_effect=AssertionError("counted")), \
+                mock.patch("utils.head_data.scan_labels", side_effect=AssertionError("scanned")):
+            dlg = self._full_only_window(counts=dict(self.UNCOUNTED))
+        self.assertIn("not counted yet", dlg.data_info.cget("text"))
+        self.assertIn("Press Refresh", dlg.counted_label.cget("text"))
+        self.assertEqual(dlg.split.total, 0)
+        dlg.win.destroy()
+
+    def test_training_can_start_without_a_count_because_the_run_counts_for_itself(self):
+        dlg = self._full_only_window(counts=dict(self.UNCOUNTED))
+        dlg.epochs_var.set(1)
+        self.run_to_end(dlg)                                    # no "at least 10 images" refusal from a number of 0
+        self.assertEqual(len(dlg.started), 1)
+        dlg.win.destroy()
+
+    def test_refresh_counts_again_and_fills_the_window(self):
+        stats = {"images": 40, "instances": {}, "labelled": 25, "background": 5, "boxes": [15, 10],
+                 "counted": 1700000000.0}
+        dlg = self._full_only_window(counts=dict(self.UNCOUNTED))
+        self.assertFalse(dlg.bg_check.winfo_ismapped(), "no pictures with nothing in them known yet")
+        with mock.patch("utils.workspace_counts.recount", return_value=stats) as counted:
+            dlg.refresh_btn.invoke()
+            self.assertEqual(str(dlg.refresh_btn.cget("state")), "disabled", "busy while it counts")
+            self.assertTrue(pump_until(self.root, lambda: not dlg._counting, 10))
+        self.assertEqual(counted.call_count, 1)
+        self.assertEqual(str(dlg.refresh_btn.cget("state")), "normal")
+        self.assertIn("25 labelled images + 5 with nothing in them", dlg.data_info.cget("text"))
+        self.assertEqual(dlg.split.total, 30)
+        self.assertTrue(dlg.bg_check.winfo_ismapped(), "the background box appears with the new pictures")
+        self.assertTrue(dlg.bg_var.get())
+        self.assertIn("Counted", dlg.counted_label.cget("text"))
+        dlg.win.destroy()
+
+    def test_a_refresh_that_fails_says_so_and_keeps_the_old_numbers(self):
+        dlg = self._full_only_window(counts={**self.UNCOUNTED, "labelled": 12, "counted": 1700000000.0})
+        with mock.patch("utils.workspace_counts.recount", side_effect=OSError("disk gone")):
+            dlg.refresh_btn.invoke()
+            self.assertTrue(pump_until(self.root, lambda: not dlg._counting, 10))
+        self.assertIn("Could not count: disk gone", dlg.counted_label.cget("text"))
+        self.assertEqual(dlg.n_labelled, 12)
+        self.assertEqual(str(dlg.refresh_btn.cget("state")), "normal")
+        dlg.win.destroy()
 
     def test_no_augmentation_means_no_augment_key_in_the_job(self):
         dlg = self.open()
@@ -1683,55 +1855,6 @@ class FullYoloTrainingTests(ModeGuiBase):
         self.assertIsNotNone(ask.call_args.kwargs["previous"], "the picker starts from the earlier picks")
         self.assertIn("Blur", dlg.augment.label.cget("text"))
         dlg.win.destroy()
-
-    def test_the_old_train_dialog_has_the_split_bar_and_returns_the_choice(self):
-        from utils.TrainingConfigDialog import TrainingConfigDialog
-        counted = mock.Mock(return_value=50)              # counting the labelled pictures can take a while
-        dialog = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
-                                      model_type="detect", model_folder=ctx.model_dir, workspace=WORKSPACE,
-                                      total_count=counted)
-        self.assertEqual((dialog.split.train_pct, dialog.split.valid_pct, dialog.split.test_pct), (70, 30, 0))
-        self.assertEqual(dialog.split.counts(), (35, 15, 0), "the old 70/30 is the default")
-        dialog.split.train_var.set("60")
-        dialog.split.valid_var.set("25")
-        dialog.shuffle_var.set(True)
-        with mock.patch("utils.AugmentationPanel.ask_augmentation", return_value=self._picked("blur", outputs=2)):
-            dialog.augment.button.invoke()
-        self.assertIn("grows from 30 to 60", dialog.augment.label.cget("text"), "60% of 50 pictures")
-        self.assertEqual(counted.call_count, 1, "asked once, not again at every change in the picker")
-        dialog.start()
-        self.assertEqual(dialog.result["split"], {"val_fraction": 0.25, "test_fraction": 0.15, "shuffle": True,
-                                                  "background": False})
-        again = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
-                                     model_type="detect", model_folder=ctx.model_dir, total_count=lambda: 50)
-        again.split.valid_var.set("0")
-        with mock.patch("utils.TrainingConfigDialog.messagebox.showwarning") as warn:
-            again.start()
-        self.assertIsNone(again.result)
-        self.assertIn("at least 1", warn.call_args[0][1])
-        again.dialog.destroy()
-        plain = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
-                                     model_type="detect", model_folder=ctx.model_dir)
-        self.assertIsNone(plain.split)
-        plain.start()
-        self.assertNotIn("split", plain.result)
-
-    def test_the_old_train_dialog_has_an_augment_row_and_returns_the_picks(self):
-        from utils.TrainingConfigDialog import TrainingConfigDialog
-        dialog = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
-                                      model_type="detect", model_folder=ctx.model_dir, workspace=WORKSPACE,
-                                      train_count=lambda: 20)
-        with mock.patch("utils.AugmentationPanel.ask_augmentation", return_value=self._picked("exposure", outputs=4)):
-            dialog.augment.button.invoke()
-        self.assertIn("grows from 20 to 80", dialog.augment.label.cget("text"))
-        dialog.start()
-        self.assertEqual(dialog.result["augment"]["copies"], 3)
-        self.assertTrue(dialog.result["augment"]["ops"]["exposure"]["enabled"])
-        plain = TrainingConfigDialog(self.root, 5, 4, model_path=os.path.join(ctx.root, "none.pt"),
-                                     model_type="detect", model_folder=ctx.model_dir)
-        self.assertIsNone(plain.augment, "without a workspace there is no augment row")
-        plain.start()
-        self.assertNotIn("augment", plain.result)
 
     def test_choosing_full_training_swaps_the_fields_and_choosing_head_swaps_them_back(self):
         dlg = self.open(full=False)
@@ -1850,6 +1973,7 @@ class FullYoloTrainingTests(ModeGuiBase):
         with open(self.model_file, "wb") as f:
             f.write(b"old model")
         dlg = self.open()
+        dlg.continue_var.set(False)                              # on by default when a model is here
         dlg.epochs_var.set(1)
         self.run_to_end(dlg)
         self.assertTrue(self.rec.of("askyesno"), "asks before replacing a trained model")
@@ -1861,6 +1985,7 @@ class FullYoloTrainingTests(ModeGuiBase):
         with open(self.model_file, "wb") as f:
             f.write(b"old model")
         dlg = self.open()
+        dlg.continue_var.set(False)
         with mock.patch("utils.HeadTrainDialog.messagebox.askyesno", return_value=False):
             dlg.save()
         self.assertIsNone(dlg.proc)

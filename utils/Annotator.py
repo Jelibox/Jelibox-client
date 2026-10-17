@@ -11,7 +11,6 @@ returns control to the picker.
 
 All classes have been modularized into separate files in the utils folder:
   - TkTerminalRedirector → utils/TkTerminalRedirector.py
-  - TrainingConfigDialog → utils/TrainingConfigDialog.py
   - AnnotationGUI → utils/AnnotationGUI.py
   - WorkspacePicker → utils/WorkspacePicker.py
 """

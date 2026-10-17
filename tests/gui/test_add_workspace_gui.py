@@ -295,3 +295,31 @@ class SkipFramesTests(AddWorkspaceBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RefreshRecountsTests(AddWorkspaceBase):
+    """The Refresh button counts every workspace again; the list and the Train windows read the stored numbers."""
+
+    def test_refresh_recounts_every_workspace_and_forgets_the_ones_that_are_gone(self):
+        from utils import workspace_counts as counts
+        counts.recount_all()
+        ghost = counts._read()
+        ghost["vanished"] = {"counted": 1, "images": 9, "labelled": 9, "background": 0, "boxes": [], "instances": {}}
+        counts._write(ghost)
+        self.assertIn("vanished", counts._read())
+        find_button(self.root, "Refresh").invoke()
+        pump(self.root, 0.3)
+        stored = counts._read()
+        self.assertNotIn("vanished", stored, "a workspace that no longer exists is dropped")
+        self.assertIn(WORKSPACE, stored)
+        self.assertEqual(stored[WORKSPACE]["images"], wm.count_images(WORKSPACE + "-1"))
+
+    def test_the_list_shows_the_stored_picture_count_and_does_not_list_the_folder_again(self):
+        from utils import workspace_counts as counts
+        counts.recount_all()
+        self.app.selected = WORKSPACE
+        with mock.patch.object(wm, "count_images", side_effect=AssertionError("listed a folder")):
+            self.app.refresh_workspaces()                       # expanding a row draws its folders
+            self.app._add_instance_row(WORKSPACE + "-1")
+        pump(self.root, 0.2)
+

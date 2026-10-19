@@ -1840,6 +1840,22 @@ class FullYoloTrainingTests(ModeGuiBase):
         self.assertEqual(str(dlg.refresh_btn.cget("state")), "normal")
         dlg.win.destroy()
 
+    def test_every_stock_base_model_is_on_offer_in_the_window_of_every_mode(self):
+        from utils.HeadTrainDialog import STOCK_YOLO
+        dlg = self._full_only_window()
+        shown = list(dlg.weights_box.cget("values"))
+        for name in ("yolo26n.pt", "yolo26s.pt", "yolo26m.pt", "yolo26l.pt", "yolo26x.pt", "yolo12m.pt", "yolo11x.pt",
+                     "yolov10s.pt", "yolov9e.pt", "yolov8l.pt"):
+            self.assertIn(name, shown)
+        self.assertEqual(shown, STOCK_YOLO["detect"])
+        self.assertEqual(len(shown), len(set(shown)), "no model twice")
+        self.assertGreaterEqual(len(shown), 30)
+        self.assertIn("yolo11s.pt", shown, "the default is in the list")
+        dlg.win.destroy()
+        self.assertTrue(all(n.endswith("-seg.pt") for n in STOCK_YOLO["seg"]))
+        for name in ("yolo26n-seg.pt", "yolo26x-seg.pt", "yolo11l-seg.pt", "yolov9e-seg.pt", "yolov8x-seg.pt"):
+            self.assertIn(name, STOCK_YOLO["seg"])
+
     def test_no_augmentation_means_no_augment_key_in_the_job(self):
         dlg = self.open()
         self.run_to_end(dlg)

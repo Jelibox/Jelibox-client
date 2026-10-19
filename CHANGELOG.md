@@ -9,6 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Fixed
+- **The base model list of the training window is complete again.** Since the Train windows were unified it offered only 7 models; it now lists every stock model: YOLO26, YOLO12, YOLO11, YOLOv10 and YOLOv8 in sizes n, s, m, l, x, YOLOv9 (t, s, m, c, e) for boxes, and the -seg versions of YOLO26, YOLO11, YOLOv9 and YOLOv8 for polygons (Browse custom model still takes any .pt).
+
 ## [0.4.13] - 2026-10-17
 
 ### Fixed

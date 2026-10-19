@@ -40,9 +40,16 @@ HEAD_FILE = "head_best.pt"
 MODEL_FILE = "modelAssistant.pt"     # what models/<workspace>/ holds for YOLO-World's "My trained model"
 RUN_NAME = "train_run"               # Ultralytics' run folder inside yolo_run/
 DEFAULT_YOLO = {"detect": "yolo11s.pt", "seg": "yolo11s-seg.pt"}
-STOCK_YOLO = {"detect": ["yolo11n.pt", "yolo11s.pt", "yolo11m.pt", "yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolov9c.pt"],
-              "seg": ["yolo11n-seg.pt", "yolo11s-seg.pt", "yolo11m-seg.pt", "yolov8n-seg.pt", "yolov8s-seg.pt",
-                      "yolov8m-seg.pt", "yolov9c-seg.pt"]}
+SIZES = ("n", "s", "m", "l", "x")
+# Every stock model the full training can start from (Ultralytics downloads the one chosen the first time): the whole
+# YOLOv8, v9, v10, 11, 12 and 26 families for boxes, v8, v9, 11 and 26 for polygons. The newest first.
+STOCK_YOLO = {
+    "detect": ([f"yolo26{s}.pt" for s in SIZES] + [f"yolo12{s}.pt" for s in SIZES] + [f"yolo11{s}.pt" for s in SIZES]
+               + [f"yolov10{s}.pt" for s in SIZES] + [f"yolov9{s}.pt" for s in ("t", "s", "m", "c", "e")]
+               + [f"yolov8{s}.pt" for s in SIZES]),
+    "seg": ([f"yolo26{s}-seg.pt" for s in SIZES] + [f"yolo11{s}-seg.pt" for s in SIZES]
+            + [f"yolov9{s}-seg.pt" for s in ("c", "e")] + [f"yolov8{s}-seg.pt" for s in SIZES]),
+}
 HEAD_COLUMNS = (("epoch", "Epoch", 56), ("loss", "Loss", 70), ("acc", "Accuracy", 80), ("f1", "Macro-F1", 80),
                 ("time", "Time", 60))
 YOLO_COLUMNS = (("epoch", "Epoch", 52), ("box", "Box", 56), ("cls", "Cls", 56), ("dfl", "DFL", 56),

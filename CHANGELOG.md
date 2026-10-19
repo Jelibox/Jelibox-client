@@ -9,7 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Fixed
+## [0.4.14] - 2026-10-19
+
+### Fixed
 - **The base model list of the training window is complete again.** Since the Train windows were unified it offered only 7 models; it now lists every stock model: YOLO26, YOLO12, YOLO11, YOLOv10 and YOLOv8 in sizes n, s, m, l, x, YOLOv9 (t, s, m, c, e) for boxes, and the -seg versions of YOLO26, YOLO11, YOLOv9 and YOLOv8 for polygons (Browse custom model still takes any .pt).
 
 ## [0.4.13] - 2026-10-17
@@ -184,7 +186,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.13...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.14...HEAD
+[0.4.14]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.13...v0.4.14
 [0.4.13]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.12...v0.4.13
 [0.4.12]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.11...v0.4.12
 [0.4.11]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.10...v0.4.11

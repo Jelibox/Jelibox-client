@@ -9,15 +9,17 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Added
-- **Jelibox now also runs as a web app.** Install it on one computer and open `http://localhost:8420` (or `http://<server address>:8420` from another device on the network): sign in (`admin` / `admin` the first time, then your own password; the admin adds users) and the whole workflow is in the browser: workspaces (upload a dataset or pick a folder on the server), the annotation editor, all four Label Assistant modes, Train, Analyze, Export Dataset and Export Model (downloaded to your device). Open Folder, Move Jelibox and Stream stay desktop-only. See "Web version" in the README.
-- **The web page shows the server's resources.** CPU use, RAM use, CPU temperature, GPU use, GPU temperature and storage (the drive Jelibox is on, the others in the tooltip), refreshed every 2 seconds with a small history chart. Windows and Linux; a value the computer cannot report shows "n/a".
-- **A new sign-in page.** A brand panel next to the form, a Show / Hide password button and a light / dark switch; the "choose a new password" page matches.
-- **Analyze Dataset works in the web version too.** Select a workspace, press Analyze: the same numbers and charts as the desktop window (objects per class, size histograms, width x height, shortest side per class, image resolutions, resize table), the resize simulation, the small object limit and **Remove these objects**.
-- **The one-line installers ask: app + web, or the app only.** Asked again on every install and update. "App + web" installs the web server's packages and starts the web server for you: on Windows from your Startup folder every time you sign in (no administrator rights), on Linux as a systemd user service. "App only" removes an earlier web server. `tools/web_service.ps1` / `tools/web_service.sh` start, stop and remove it by hand.
+## [1.0.0] - 2026-10-29
 
-### Fixed
-- **The training table no longer shows one epoch too many.** With a recent Ultralytics, a run of 2 epochs listed "epoch 3 / 2": Ultralytics' final check of the best model reports its metrics through the same callback as an epoch, and Jelibox counted it. The last row, the "last epoch" scores and `epochs_run` now only come from real epochs.
+### Added
+- **Jelibox now also runs as a web app.** Install it on one computer and open `http://localhost:8420` (or `http://<server address>:8420` from another device on the network): sign in (`admin` / `admin` the first time, then your own password; the admin adds users) and the whole workflow is in the browser: workspaces (upload a dataset or pick a folder on the server), the annotation editor, all four Label Assistant modes, Train, Analyze, Export Dataset and Export Model (downloaded to your device). Open Folder, Move Jelibox and Stream stay desktop-only. See "Web version" in the README.
+- **The web page shows the server's resources.** CPU use, RAM use, CPU temperature, GPU use, GPU temperature and storage (the drive Jelibox is on, the others in the tooltip), refreshed every 2 seconds with a small history chart. Windows and Linux; a value the computer cannot report shows "n/a".
+- **A new sign-in page.** A brand panel next to the form, a Show / Hide password button and a light / dark switch; the "choose a new password" page matches.
+- **Analyze Dataset works in the web version too.** Select a workspace, press Analyze: the same numbers and charts as the desktop window (objects per class, size histograms, width x height, shortest side per class, image resolutions, resize table), the resize simulation, the small object limit and **Remove these objects**.
+- **The one-line installers ask: app + web, or the app only.** Asked again on every install and update. "App + web" installs the web server's packages and starts the web server for you: on Windows from your Startup folder every time you sign in (no administrator rights), on Linux as a systemd user service. "App only" removes an earlier web server. `tools/web_service.ps1` / `tools/web_service.sh` start, stop and remove it by hand.
+
+### Fixed
+- **The training table no longer shows one epoch too many.** With a recent Ultralytics, a run of 2 epochs listed "epoch 3 / 2": Ultralytics' final check of the best model reports its metrics through the same callback as an epoch, and Jelibox counted it. The last row, the "last epoch" scores and `epochs_run` now only come from real epochs.
 - **SAM 2 Dynamic starts again with the newest ultralytics.** It stopped with "Input and output must have the same number of spatial dimensions ... [1, 1024, 1024] ... (256, 256)" when learning from the first reference image, because recent ultralytics versions hand SAM 2 its masks with one dimension too many. Jelibox now flattens them before use, so it works with older and newer versions.
 
 ## [0.4.15] - 2026-10-28
@@ -203,7 +205,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.15...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.15...v1.0.0
 [0.4.15]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.14...v0.4.15
 [0.4.14]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.13...v0.4.14
 [0.4.13]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.12...v0.4.13

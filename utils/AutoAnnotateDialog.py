@@ -52,6 +52,8 @@ def confirm_download_if_needed(parent, mode=None):
     provider = inf.current_provider(mode)
     if provider == wcfg.PROVIDER_SAM2:
         return _confirm_sam2_download(parent)
+    if provider == wcfg.PROVIDER_YOLO_WORLD:
+        return _confirm_world_download(parent)
     if provider != wcfg.PROVIDER_LOCATE:
         return True
     from . import locate_anything as la
@@ -67,6 +69,20 @@ def confirm_download_if_needed(parent, mode=None):
         f"Jelibox will download it from huggingface.co (about {la.DOWNLOAD_GB} GB) into\n{la.HF_HOME}\n\n"
         f"and run the model's own code from that repository (pinned to a fixed version). "
         f"This happens once. Download now?", parent=parent)
+
+
+def _confirm_world_download(parent):
+    """YOLO-World weights come from GitHub (Ultralytics) the first time, plus the CLIP text model. Ask first."""
+    name = wcfg.get_assistant(workspaceName)["yolo_world"]["model"]
+    path = inf.world_weights_path(name)
+    if os.path.isfile(path) or not inf.is_heavy():
+        return True
+    return messagebox.askyesno(
+        "YOLO-World - first use",
+        f"The YOLO-World model ({name}) is not on this computer yet.\n\n"
+        f"Jelibox will download it once from github.com (Ultralytics' model files) into\n"
+        f"{os.path.dirname(path)}\n\nThe CLIP text model it needs may be fetched too, if it is missing.\n\n"
+        f"Download now?", parent=parent)
 
 
 def _confirm_sam2_download(parent):

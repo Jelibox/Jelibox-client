@@ -45,7 +45,7 @@ Pick a mode when Jelibox starts (and change it any time with the **Mode** button
 
 | Mode | In one line |
 | --- | --- |
-| **YOLO-World** | Describe it in words, or use any Ultralytics model of your own. Nothing to download. |
+| **YOLO-World** | Describe it in words, or use any Ultralytics model of your own. The YOLO-World model (and CLIP) downloads once, after you confirm. |
 | **LocateAnything** | NVIDIA LocateAnything-3B labels a whole folder from a list of categories. |
 | **Custom Model** | A detector finds the objects, a small model you train gives each one your own class. |
 | **SAM 2 Dynamic** | No training: SAM 2 learns from every image you annotate. |
@@ -92,7 +92,7 @@ When Jelibox starts it asks how it should annotate. The choice is remembered, sh
 
 | Mode | What it does | What it needs |
 | --- | --- | --- |
-| **YOLO-World** | The original Jelibox. Zero-shot: describe what to look for ("white horse") and map each phrase to one of your classes, or use your own model: the one you trained in the workspace, or **any Ultralytics model** (e.g. a fine-tuned YOLOv8m) chosen with **Browse custom model**. | Nothing extra. Runs on CPU. |
+| **YOLO-World** | The original Jelibox. Zero-shot: describe what to look for ("white horse") and map each phrase to one of your classes, or use your own model: the one you trained in the workspace, or **any Ultralytics model** (e.g. a fine-tuned YOLOv8m) chosen with **Browse custom model**. | YOLO-World downloads its model once (asks first). Your own model needs nothing. Runs on CPU. |
 | **LocateAnything** | [nvidia/LocateAnything-3B](https://huggingface.co/nvidia/LocateAnything-3B) through HF Transformers. List categories (English or Chinese), map them to your classes, and it labels the whole folder in one pass. Settings: decoding (`hybrid` best recall / `fast` / `slow`), device, image size, passes. | About 7.2 GB download on first use (Jelibox asks first), about 9 GB of free RAM and, on a GPU, 8 GB of VRAM. 64-bit Windows or x86-64 Linux. |
 | **Custom Model** | Teach Jelibox your own labels. It finds the objects (people, bottles, ...), then a small model that you train gives every one of them **your** class: sleeping / working, or Coca-Cola / Fanta / Sprite. | Train it once with the **Train** button on images you already labeled (this makes `head_best.pt`), and the ultralytics version below. |
 | **SAM 2 Dynamic** | No training. Annotate a few images and SAM 2 (through Ultralytics' `SAM2DynamicInteractivePredictor`) learns from every one of them, so it finds the same objects in the next image. | A SAM 2 model, downloaded once (75-224 MB). A GPU makes it fast; on a CPU it takes a few seconds per image. |

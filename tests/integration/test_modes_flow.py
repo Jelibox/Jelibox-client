@@ -88,9 +88,12 @@ class LocateModeTests(ModeFlowBase):
         self.assertFalse(ok)
         self.assertIn("target class", msg)
 
-    def test_yolo_world_mode_is_not_heavy(self):
+    def test_yolo_world_mode_is_heavy_until_its_model_is_loaded(self):
         am.set_mode(am.MODE_YOLO_WORLD)
-        self.assertFalse(inf.is_heavy())
+        self.assertTrue(inf.is_heavy())
+        cfg = wc.get_assistant(WORKSPACE)
+        with mock.patch.dict(inf._world_cache, {(cfg["yolo_world"]["model"], inf._world_prompts(cfg)): object()}):
+            self.assertFalse(inf.is_heavy())
         self.assertEqual(inf.current_provider(), wc.PROVIDER_YOLO_WORLD)
 
 

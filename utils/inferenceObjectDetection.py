@@ -91,12 +91,30 @@ def _collect(results, class_name_for):
     return preds, is_polygon
 
 
-def _load_world_model(weights_name, prompts):
+def world_weights_path(weights_name):
+    return os.path.join(YOLO_WORLD_DIR, weights_name + ".pt")
+
+
+def _world_prompts(cfg):
+    return tuple(t["prompt"].strip() for t in cfg["yolo_world"]["target_classes"]
+                 if t["prompt"].strip() and t["map_to"])
+
+
+def _world_loaded(cfg):
+    return (cfg["yolo_world"]["model"], _world_prompts(cfg)) in _world_cache
+
+
+def _load_world_model(weights_name, prompts, status=None):
     key = (weights_name, tuple(prompts))
     if key not in _world_cache:
         _world_cache.clear()  # keep at most one model in memory
         os.makedirs(YOLO_WORLD_DIR, exist_ok=True)
-        model = YOLOWorld(os.path.join(YOLO_WORLD_DIR, weights_name + ".pt"))
+        path = world_weights_path(weights_name)
+        if status:
+            status("Downloading YOLO-World (first use) ..." if not os.path.isfile(path) else "Loading YOLO-World ...")
+        model = YOLOWorld(path)
+        if status:
+            status("Preparing the text prompts (CLIP) ...")
         model.set_classes(prompts)
         _world_cache[key] = model
     return _world_cache[key]
@@ -110,8 +128,12 @@ def current_provider(mode=None):
 
 
 def is_heavy(mode=None):
-    """True for providers whose first use loads a big model (minutes, a download): the GUI shows a progress window."""
-    return current_provider(mode) in (wcfg.PROVIDER_LOCATE, wcfg.PROVIDER_HEAD, wcfg.PROVIDER_SAM2)
+    """True for providers whose first use loads a big model (minutes, a download): the GUI shows a progress window.
+    YOLO-World only until its model is in memory (the first load may download the weights and CLIP)."""
+    provider = current_provider(mode)
+    if provider == wcfg.PROVIDER_YOLO_WORLD:
+        return not _world_loaded(wcfg.get_assistant(workspaceName))
+    return provider in (wcfg.PROVIDER_LOCATE, wcfg.PROVIDER_HEAD, wcfg.PROVIDER_SAM2)
 
 
 def build_predictor(mode=None, status=None, conf=None, exclude=None):
@@ -163,7 +185,7 @@ def build_predictor(mode=None, status=None, conf=None, exclude=None):
                                  "Open Label Assistant and add at least one target class.")
         prompts = [t["prompt"].strip() for t in targets]
         try:
-            model = _load_world_model(yw["model"], prompts)
+            model = _load_world_model(yw["model"], prompts, status)
         except Exception as exc:
             print(f"[Assistant] YOLO-World failed to load: {exc}")
             raise AssistantError(f"YOLO-World could not be loaded:\n{exc}") from exc

@@ -21,6 +21,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 from . import head_data
+from . import yolo_train_job
 from . import workspace_config as wcfg
 from .AugmentationPanel import AugmentChoice
 from .SplitBar import SplitBar
@@ -805,6 +806,12 @@ class HeadTrainDialog(_Dialog):
                                       f"{os.path.basename(os.path.splitext(self.model_path)[0])}.prev.pt.",
                 parent=self.win):
             return
+        if not resume and yolo_train_job.needs_download(base) and not messagebox.askyesno(
+                "Train custom model - first use",
+                f"The base model {base} is not on this computer yet.\n\nJelibox will download it once from github.com "
+                f"(Ultralytics' model files) into\n{yolo_train_job.STOCK_DIR}\n\nDownload it when the training starts?",
+                parent=self.win):
+            return
         job = build_yolo_job(images_folders=self.images_folders, labels_folder=self.labels_folder,
                              classes=self.classes, init_weights=self.model_path if resume else base, imgsz=size,
                              epochs=epochs, batch=batch, lr=lr, freeze=freeze, weight_decay=weight_decay,
@@ -954,7 +961,12 @@ class HeadTrainDialog(_Dialog):
             return
         kind = ev.get("event")
         if kind == "status":
+            self._busy(False)
             self.status_label.config(text=ev.get("text", ""))
+        elif kind == "download":
+            self.title_label.config(text="Downloading the base model ...")
+            self.status_label.config(text=ev.get("text", ""))
+            self._busy(True)
         elif kind == "prepare":
             self._prepare(ev)
         elif kind == "start":
@@ -981,6 +993,18 @@ class HeadTrainDialog(_Dialog):
         elif kind == "error":
             self.error = ev.get("message", "unknown error")
             self._log("ERROR: " + self.error)
+
+    def _busy(self, on):
+        """A moving bar while something of unknown length runs (the base model download)."""
+        if on == getattr(self, "_is_busy", False):
+            return
+        self._is_busy = on
+        if on:
+            self.bar.config(mode='indeterminate')
+            self.bar.start(12)
+        else:
+            self.bar.stop()
+            self.bar.config(mode='determinate', value=0)
 
     def _prepare(self, ev):
         """Copying / augmenting the pictures before the training: say what is going on, with a bar and a time left."""

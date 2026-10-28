@@ -44,8 +44,38 @@ def pick_device():
         return "cpu"
 
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STOCK_DIR = os.path.join(BASE_DIR, "models", "_yolo_base")       # stock models (yolov8m.pt ...) downloaded once
+
+
+def stock_weights_path(weights, base_dir=BASE_DIR):
+    """Where a base model given by NAME lives (the old Jelibox folder copy counts too). A path, or a name that
+    already exists as given, is returned unchanged."""
+    weights = str(weights)
+    if os.path.isabs(weights) or os.sep in weights or "/" in weights or os.path.isfile(weights):
+        return weights
+    old = os.path.join(base_dir, weights)
+    return old if os.path.isfile(old) else os.path.join(base_dir, "models", "_yolo_base", weights)
+
+
+def needs_download(weights, base_dir=BASE_DIR):
+    """True when `weights` is a stock model name that is not on this computer yet."""
+    weights = str(weights)
+    if os.path.isabs(weights) or os.sep in weights or "/" in weights:
+        return False
+    return not os.path.isfile(stock_weights_path(weights, base_dir))
+
+
 def load_yolo(weights):
     from ultralytics import YOLO
+    if needs_download(weights):
+        from ultralytics.utils.downloads import attempt_download_asset
+        emit("download", text=f"Downloading {weights} (first use, once) ...")
+        os.makedirs(STOCK_DIR, exist_ok=True)
+        weights = str(attempt_download_asset(stock_weights_path(weights)))
+        emit("status", text="Loading the model ...")
+    else:
+        weights = stock_weights_path(weights)
     return YOLO(weights)
 
 

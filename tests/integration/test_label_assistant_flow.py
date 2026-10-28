@@ -67,7 +67,7 @@ class LabelAssistantFlowTests(unittest.TestCase):
         fake = FakeModel(boxes)
         self.loaded_prompts = []
 
-        def loader(name, prompts):
+        def loader(name, prompts, status=None):
             self.loaded_prompts.append((name, list(prompts)))
             return fake
         inf._load_world_model = loader
@@ -124,7 +124,7 @@ class LabelAssistantFlowTests(unittest.TestCase):
     def test_load_failure_is_reported_not_raised(self):
         set_assistant(targets=[{"prompt": "cat", "map_to": "cat"}])
 
-        def boom(name, prompts):
+        def boom(name, prompts, status=None):
             raise RuntimeError("no internet")
         inf._load_world_model = boom
         ok, msg = inf.inference_current(IMAGES, 0)

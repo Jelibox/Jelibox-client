@@ -519,5 +519,23 @@ class MainTests(Base):
         self.assertFalse([line for line in top_level if "torch" in line or "ultralytics" in line], top_level)
 
 
+class StockWeightsTests(unittest.TestCase):
+    def test_a_stock_name_is_downloaded_once_into_models_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertTrue(yj.needs_download("yolov8n.pt", d))
+            want = os.path.join(d, "models", "_yolo_base", "yolov8n.pt")
+            self.assertEqual(yj.stock_weights_path("yolov8n.pt", d), want)
+            os.makedirs(os.path.dirname(want))
+            open(want, "w").close()
+            self.assertFalse(yj.needs_download("yolov8n.pt", d))
+
+    def test_paths_and_old_copies_never_download(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(yj.needs_download(os.path.join(d, "mine.pt"), d))
+            open(os.path.join(d, "old.pt"), "w").close()
+            self.assertFalse(yj.needs_download("old.pt", d))
+            self.assertEqual(yj.stock_weights_path("old.pt", d), os.path.join(d, "old.pt"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,10 +7,6 @@ import re
 import shutil
 import traceback
 
-try:
-    from ultralytics import YOLO
-except Exception:
-    YOLO = None
 
 
 def export_model(model_path: str,
@@ -28,7 +24,9 @@ def export_model(model_path: str,
 
     Returns (success: bool, message: str, out_path: str|None)
     """
-    if YOLO is None:
+    try:
+        from ultralytics import YOLO               # imported here: the path helpers below must not load torch
+    except Exception:
         return False, "ultralytics package not installed", None
 
     if not os.path.exists(model_path):

@@ -77,9 +77,14 @@ class FakeYOLO:
                 self._run("on_train_batch_end", trainer)
                 if trainer.stop:
                     break                                   # Ultralytics checks `stop` between batches
-            self._run("on_fit_epoch_end", trainer)           # validation has run, even for an interrupted epoch
+            self._run("on_train_epoch_end", trainer)          # the training part of the epoch is over ...
+            self._run("on_fit_epoch_end", trainer)           # ... validation has run, even for an interrupted epoch
             if trainer.stop:
                 break
+        # the real final evaluation logs the best model's metrics with one more on_fit_epoch_end (epoch + 1): not an epoch
+        trainer.epoch += 1
+        self._run("on_fit_epoch_end", trainer)
+        trainer.epoch -= 1
         self.final_eval_ran = True
 
 

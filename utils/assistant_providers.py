@@ -123,18 +123,20 @@ def head_predictor(settings, confidence, workspace_classes, base_dir, device="au
 
 
 # ------------------------------------------------------------------ SAM 2 Dynamic
-def sam2_predictor(settings, workspace_classes, base_dir, polygon=False, exclude=None, status=None):
+def sam2_predictor(settings, workspace_classes, base_dir, polygon=False, exclude=None, status=None, store=None):
     """settings: the 'sam2_dynamic' block of the workspace config. Learns from the images stored by
     sam2_dynamic.store (the newest settings['max_references'], never `exclude`, the image about to be annotated),
-    and returns predict(bgr). polygon: give polygons (segmentation) instead of boxes."""
+    and returns predict(bgr). polygon: give polygons (segmentation) instead of boxes. `store`: the ReferenceStore to
+    learn from (default: the desktop window's one; the web server keeps one per workspace)."""
     from . import sam2_dynamic as sd
     problem = sd.predictor_problem()
     if problem:
         raise AssistantError(problem)
     if not workspace_classes:
         raise AssistantError("This workspace has no classes yet. Add a class first.")
-    references = sd.store.select(settings["max_references"], list(workspace_classes), exclude, polygon)
-    if not references and polygon and sd.store.select(1, list(workspace_classes), exclude, polygon=False):
+    store = sd.store if store is None else store
+    references = store.select(settings["max_references"], list(workspace_classes), exclude, polygon)
+    if not references and polygon and store.select(1, list(workspace_classes), exclude, polygon=False):
         raise AssistantError(
             "SAM 2 Dynamic is in polygon mode, but the images you annotated have boxes only.\n\n"
             "Draw polygons on one or two images and move on (A / D), or switch the Mode button to boxes.")

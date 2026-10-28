@@ -1,0 +1,6 @@
+# The web version of Jelibox (utils/server.py, utils/web). Installed on top of requirements.txt only when the installer is
+# told "app + web" (JELIBOX_WEB=yes); the desktop app does not need any of it.
+starlette                     # the web server (utils/web)
+uvicorn                       # runs it
+python-multipart              # dataset uploads from the browser
+httpx                         # the web tests (starlette's TestClient)

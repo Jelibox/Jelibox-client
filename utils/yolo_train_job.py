@@ -231,7 +231,17 @@ def train(job, emit=emit):
                  epochs=epochs, device="cuda" if device == 0 else str(device), batch=int(job["batch"]), imgsz=[imgsz, imgsz],
                  model=os.path.basename(str(job["init_weights"])), freeze=int(job.get("freeze", 0)))
 
+        finished = {"epoch": False}
+
+        def on_train_epoch_end(trainer):
+            finished["epoch"] = True
+
         def on_epoch_end(trainer):
+            # Ultralytics' final evaluation of best.pt calls this too (with epoch + 1): that is no epoch, only the
+            # epochs that ended their training part (on_train_epoch_end just before) get a row
+            if not finished["epoch"]:
+                return
+            finished["epoch"] = False
             metrics = dict(getattr(trainer, "metrics", None) or {})
             try:
                 losses = trainer.label_loss_items(trainer.tloss, prefix="train")
@@ -266,6 +276,7 @@ def train(job, emit=emit):
 
         model.add_callback("on_train_start", on_train_start)
         model.add_callback("on_train_batch_end", finish_early)
+        model.add_callback("on_train_epoch_end", on_train_epoch_end)
         model.add_callback("on_fit_epoch_end", on_epoch_end)
         model.add_callback("on_fit_epoch_end", finish_early)
         emit("status", text="Starting Ultralytics: it checks every picture and label first, which can take a minute "

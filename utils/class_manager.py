@@ -11,14 +11,17 @@ import colorsys
 from . import workspace_config
 
 class ClassManager:
-    def __init__(self, workspace_name: str):
+    def __init__(self, workspace_name: str, base_dir: str = None):
+        """`base_dir` = the Jelibox folder. Without it the folders are relative to the working directory, which is
+        what the desktop window has always used (it runs from the Jelibox folder); the web server passes it."""
         self.workspace_name = workspace_name
-        self.config_dir = "configs"
+        root = base_dir or "."
+        self.config_dir = os.path.join(root, "configs") if base_dir else "configs"
         self.class_file = workspace_config.config_path(workspace_name)
-        self.yolo_dataset_root = f"YOLOdataset/{workspace_name}"
+        self.yolo_dataset_root = os.path.join(root, "YOLOdataset", workspace_name) if base_dir             else f"YOLOdataset/{workspace_name}"
         self.labels_folder = os.path.join(self.yolo_dataset_root, "labels")
         self.data_yaml_path = os.path.join(self.yolo_dataset_root, "data.yaml")
-        self.voc_dataset = f"vocdataset/{workspace_name}"
+        self.voc_dataset = os.path.join(root, "vocdataset", workspace_name) if base_dir             else f"vocdataset/{workspace_name}"
         
         os.makedirs(self.config_dir, exist_ok=True)
         os.makedirs(self.labels_folder, exist_ok=True)

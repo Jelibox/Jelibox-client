@@ -160,7 +160,7 @@ class ReferenceStore:
     def load_labeled(self, records, voc_folder, limit):
         """Fill the store from images that are already annotated on disk (newest XML first).
         records: [{'source': image path, 'base': file name without extension}]. Returns how many were added."""
-        from .file_handler import _parse_voc_objects
+        from .annotation_io import _parse_voc_objects
         import xml.etree.ElementTree as ET
         by_base = {r["base"]: r["source"] for r in records}
         candidates = []
@@ -310,10 +310,18 @@ class Sam2Engine:
         if status:
             status("Loading SAM 2 ...")
         from ultralytics.models.sam import SAM2DynamicInteractivePredictor
+
+        class Predictor(SAM2DynamicInteractivePredictor):
+            def update_memory(self, obj_ids=None, points=None, labels=None, masks=None):
+                # newer ultralytics hand over masks as (N, 1, H, W) and update_memory adds the channel again (5-D)
+                if masks is not None and masks.ndim == 4:
+                    masks = masks[:, 0]
+                return super().update_memory(obj_ids, points, labels, masks)
+
         # conf=0: the predictor drops objects whose score is 0; our own min_score decides what is kept
         overrides = dict(task="segment", mode="predict", imgsz=imgsz, model=weights, verbose=False, save=False,
                          conf=0.0)
-        self.predictor = SAM2DynamicInteractivePredictor(overrides=overrides, max_obj_num=slots)
+        self.predictor = Predictor(overrides=overrides, max_obj_num=slots)
         self.key = key
 
     def _boxes_refiner(self, image):

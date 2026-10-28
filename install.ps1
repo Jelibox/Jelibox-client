@@ -8,7 +8,10 @@
 #   3. not installed yet   -> installs the newest version fresh
 #      installed, older    -> updates it (your datasets, models and configs are never touched)
 #      installed, current  -> says so and stops
-#   4. starts jelibox_windows_installation.bat, which installs uv if it is missing (official installer, user level),
+#   4. asks what to install: the app + the web version (a server you open in a browser, also from other devices, started
+#      for you every time you sign in to Windows - a shortcut in your Startup folder, no administrator rights), or the
+#      app only. The answer is asked again on every install and update, so it can be changed.
+#   5. starts jelibox_windows_installation.bat, which installs uv if it is missing (official installer, user level),
 #      gives Jelibox its own private Python 3.12 (downloaded by uv into the Jelibox folder - your own Python is not
 #      touched, nothing is put on PATH), creates the virtual environment, installs the dependencies and creates the
 #      shortcuts. No administrator rights are needed, except to install the Visual C++ runtime when it is missing:
@@ -21,6 +24,8 @@
 #   JELIBOX_NO_INSTALL  1 = only download and unpack, do not run the installer
 #   JELIBOX_FORCE       1 = reinstall even when this version is already installed
 #   JELIBOX_GPU         nvidia | cpu = which PyTorch to install without being asked (default: you are asked)
+#   JELIBOX_WEB         yes | no = app + web version, or the app only, without being asked (default: you are asked;
+#                       Enter = what this folder had before, otherwise app + web)
 #   JELIBOX_ARCHIVE     path to a local .zip instead of downloading (offline installs, tests)
 
 function Install-Jelibox {
@@ -183,6 +188,34 @@ function Install-Jelibox {
             Say ("PyTorch build: " + $(if ($gpu -eq 'nvidia') { 'NVIDIA GPU (CUDA)' } else { 'CPU only' }))
         }
 
+        # App + web, or the app only? Asked on every install and update. Enter = what this folder had before, else both.
+        # JELIBOX_WEB=yes|no skips the question; the installer script asks by itself if it is started without it.
+        if ($env:JELIBOX_NO_INSTALL -ne '1') {
+            $web = "$env:JELIBOX_WEB".Trim().ToLower()
+            if ($web -and $web -ne 'yes' -and $web -ne 'no') { Fail "JELIBOX_WEB must be 'yes' or 'no' (got '$web')." }
+            if (-not $web) {
+                $before = ''
+                try { $before = ([string](Get-Content -LiteralPath (Join-Path $dest '.jelibox-web') -TotalCount 1)).Trim() } catch { }
+                $default = if ($before -eq 'no') { '2' } else { '1' }
+                $answer = ''
+                try {
+                    Write-Host ''
+                    Write-Host '[Jelibox] What do you want to install?' -ForegroundColor Cyan
+                    Write-Host '          1  App + web   the desktop app, plus the web version: a server you open in a browser (also from'
+                    Write-Host '                         another computer on your network). It starts by itself every time you sign in to'
+                    Write-Host '                         Windows (a shortcut in your Startup folder, no administrator rights).'
+                    Write-Host '          2  App only    just the desktop app. An earlier web server of this folder is stopped and removed.'
+                    $answer = Read-Host "          Your choice [1/2, Enter = $default]"
+                } catch {
+                    Say 'No keyboard available - using the default.'
+                }
+                $answer = "$answer".Trim()
+                $web = if ($answer -eq '1') { 'yes' } elseif ($answer -eq '2') { 'no' } elseif ($default -eq '2') { 'no' } else { 'yes' }
+            }
+            $env:JELIBOX_WEB = $web
+            Say ("Installing: " + $(if ($web -eq 'yes') { 'app + web version' } else { 'app only' }))
+        }
+
         if (-not $archive) {
             Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
         }
@@ -192,6 +225,12 @@ function Install-Jelibox {
         Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
         $top = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
         if (-not $top) { Fail 'The downloaded archive is empty.' }
+
+        # An update must not run under the old server: stop it before any file or package is replaced.
+        $service = Join-Path $dest 'tools\web_service.ps1'
+        if ($existing -and (Test-Path -LiteralPath $service)) {
+            try { & powershell -NoProfile -ExecutionPolicy Bypass -File $service -Action stop -Root $dest | Out-Null } catch { }
+        }
 
         New-Item -ItemType Directory -Force -Path $dest | Out-Null
         # Copy over the existing install. Nothing is deleted, so datasets/models/configs/venv survive an update.
@@ -213,6 +252,7 @@ function Install-Jelibox {
         Say 'It opens in its own window and shows its progress there.'
         Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "`"$bat`"" -WorkingDirectory $dest
         Say "When it says JELIBOX IS READY, open the Jelibox shortcut on your Desktop."
+        if ($env:JELIBOX_WEB -eq 'yes') { Say 'The web server is started there too; its address is shown in that window.' }
     }
     finally {
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

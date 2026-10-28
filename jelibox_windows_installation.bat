@@ -17,6 +17,8 @@ set "VENV_PY=%~dp0venv\Scripts\python.exe"
 set FAILED=0
 set TORCH_STATUS=SUCCESS
 set CLIP_STATUS=SUCCESS
+set WEB_STATUS=SUCCESS
+set WEB_CHOICE=yes
 set GPU_TYPE=CPU
 set ARCH=x64
 
@@ -143,6 +145,46 @@ if "%GPU_TYPE%"=="NVIDIA" (
 )
 
 :: =========================================================
+:: 1a2. APP + WEB, OR THE APP ONLY?
+:: install.ps1 asks this itself and passes the answer in JELIBOX_WEB (yes or no); started on its own, this asks it.
+:: Yes = the web version too: a server you open in a browser, started for you every time you sign in to Windows
+:: (a shortcut in your Startup folder, no administrator rights). No = just the desktop app; a web server of an
+:: earlier install in this folder is stopped and removed.
+:: =========================================================
+if defined JELIBOX_WEB goto WEB_PRESET
+echo.
+echo     Yes = the desktop app AND the web version ^(a server you open in a browser, also from another computer
+echo           on your network; it starts by itself when you sign in to Windows^).
+echo     No  = just the desktop app.
+choice /c YN /m "Also install the web version"
+if errorlevel 2 (
+    set WEB_CHOICE=no
+) else (
+    set WEB_CHOICE=yes
+)
+goto WEB_DONE
+
+:WEB_PRESET
+if /i "%JELIBOX_WEB%"=="yes" (
+    set WEB_CHOICE=yes
+) else if /i "%JELIBOX_WEB%"=="no" (
+    set WEB_CHOICE=no
+) else (
+    echo [ERROR] JELIBOX_WEB must be yes or no, not "%JELIBOX_WEB%".
+    set FAILED=1
+    goto END
+)
+
+:WEB_DONE
+if "%WEB_CHOICE%"=="yes" (
+    echo [OK] Installing: app + web version.
+) else (
+    echo [OK] Installing: app only.
+)
+:: An update must not run under the old server: stop it before any package is replaced.
+if exist "%~dp0tools\web_service.ps1" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\web_service.ps1" -Action stop -Root "%~dp0." >nul 2>&1
+
+:: =========================================================
 :: 1b. VISUAL C++ RUNTIME (required by PyTorch)
 :: =========================================================
 if "%ARCH%"=="x64" (
@@ -256,6 +298,18 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo [OK] Dependencies installed successfully.
 
+:: The web version's packages (the web server and its uploads). Only when the web version was chosen.
+if not "%WEB_CHOICE%"=="yes" goto WEB_PACKAGES_DONE
+echo [*] Installing the web version's packages...
+"%VENV_PY%" -m pip install -r "%~dp0requirements-web.txt" --retries 5 --timeout 30
+if errorlevel 1 (
+    echo [WARNING] The web packages could not be installed. The web version will not be started.
+    set WEB_STATUS=FAILED
+) else (
+    echo [OK] Web packages installed.
+)
+:WEB_PACKAGES_DONE
+
 :: CLIP powers the YOLO-World Label Assistant. Installed from a zip archive so
 :: git is not required. Non-fatal: without it only YOLO-World is unavailable.
 echo [*] Installing CLIP (required by YOLO-World)...
@@ -308,6 +362,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%"
 del "%PS_SCRIPT%" >nul 2>&1
 
 :: =========================================================
+:: WEB SERVER AT SIGN IN
+:: tools\web_service.ps1 puts a shortcut in your Startup folder (no administrator rights) and starts the server
+:: now; "no" removes it again. A server that does not start is a warning, not a failed install.
+:: =========================================================
+if "%FAILED%"=="1" goto WEB_SKIP
+echo.
+if "%WEB_CHOICE%"=="no" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\web_service.ps1" -Action remove -Root "%~dp0."
+) else if not "%WEB_STATUS%"=="FAILED" (
+    echo [*] Starting the Jelibox web server and adding it to Windows Startup...
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\web_service.ps1" -Action install -Root "%~dp0."
+    if errorlevel 1 set WEB_STATUS=NOTSTARTED
+)
+:WEB_SKIP
+
+:: =========================================================
 :: SUCCESS
 :: =========================================================
 echo.
@@ -322,6 +392,7 @@ echo =========================================================
 :: Tells the one-line installer (install.ps1) that this install finished, so it can
 :: say "already up to date" next time instead of repeating the whole setup.
 if %FAILED% neq 1 echo done> "%~dp0.jelibox-ready"
+if %FAILED% neq 1 echo %WEB_CHOICE%> "%~dp0.jelibox-web"
 
 if "%TORCH_STATUS%"=="SKIPPED_ARM" (
     echo [NOTICE] ARM platform detected.
@@ -334,6 +405,10 @@ if "%GPU_TYPE%"=="CPU" (
 
 if "%TORCH_STATUS%"=="FAILED" (
     echo [WARNING] PyTorch installation failed.
+)
+
+if "%WEB_STATUS%"=="NOTSTARTED" (
+    echo [WARNING] The web server did not start - see temp\server.log. Try again with: tools\web_service.ps1 -Action start
 )
 
 if "%CLIP_STATUS%"=="FAILED" (

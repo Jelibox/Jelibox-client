@@ -2,14 +2,14 @@
 
 **Soft to use. Sharp on every object.**
 
-Jelibox is a private, local annotation tool for object detection and segmentation datasets. Import what you already have, label it with four kinds of AI help, see what it really contains in a built-in dashboard, and export it augmented, all on your own computer with no account and no upload.
+Jelibox is a private, local annotation tool for object detection and segmentation datasets. Import what you already have, label it with four kinds of AI help, see what it really contains in a built-in dashboard, and export it augmented, all on your own computer with no account and no upload. Use it as a desktop app, or (new in 1.0) as a **web app**: install it on one computer and annotate from any browser on your network.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/Jelibox/Jelibox-client)](https://github.com/Jelibox/Jelibox-client/releases/latest)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-lightgrey)](jelibox_windows_installation.bat)
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey)](jelibox_linux_installation.bash)
 
-[Website](https://jelibox.github.io/Jelibox-client/) | [Install in one line](#install-in-one-line) | [What's new](CHANGELOG.md)
+[Website](https://jelibox.github.io/Jelibox-client/) | [Install in one line](#install-in-one-line) | [Web version](#web-version) | [What's new](CHANGELOG.md)
 
 ![Jelibox annotation interface](assets/annotate.jpg)
 
@@ -27,7 +27,7 @@ irm https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.ps1 | 
 curl -fsSL https://raw.githubusercontent.com/Jelibox/Jelibox-client/main/install.sh | bash
 ```
 
-It downloads the newest release and gives Jelibox its own private Python (via uv), so yours is never touched. Run the same command later to update; your datasets and models are never touched. Options, what it changes on your system, and the manual install are in [Installation](#installation).
+It downloads the newest release and gives Jelibox its own private Python (via uv), so yours is never touched. It asks whether you want the **app + web version** or the app only. Run the same command later to update; your datasets and models are never touched. Options, what it changes on your system, and the manual install are in [Installation](#installation).
 
 ## Why Jelibox
 
@@ -35,6 +35,7 @@ It downloads the newest release and gives Jelibox its own private Python (via uv
 - **Four auto-label modes.** Zero-shot prompts (YOLO-World), NVIDIA LocateAnything-3B, a small head you train for your own classes (Custom Model), or SAM 2 learning from your own labels with no training (SAM 2 Dynamic).
 - **Any dataset in, any dataset out.** Import Pascal VOC, YOLO or COCO folders; export YOLO, Pascal VOC or COCO with augmentation, to any drive.
 - **Understand it before you train.** A dashboard of class counts, object sizes and image resolutions, with a warning for objects that will be too small for your model, and a simulation of what resizing to 640 px (or any size) does to them.
+- **Desktop or browser.** The same Jelibox runs as a desktop window and as a web page: put it on a strong PC and annotate from a laptop, with a built-in view of the server's CPU, RAM, GPU and disk.
 - **Light on your computer.** The CPU is enough to start; an NVIDIA GPU makes the heavy modes fast. The window fits a 12-inch laptop screen.
 
 ## Highlights
@@ -68,6 +69,59 @@ Select a workspace and press **Analyze** for a dashboard of objects per class, s
 
 <img src="assets/export.png" alt="The Export Dataset window with the Save to folder and the augmentation options" width="420">
 
+## Web version
+
+The web version is the whole annotation workflow in a browser. Install Jelibox on one computer (the *server*, ideally the one with the GPU), then open it from that computer or from any device on the same network:
+
+```text
+http://localhost:8420                 on the server itself
+http://<address of the server>:8420   from a laptop or phone on the same network
+```
+
+The installer prints the address; the page after sign-in also works on a phone-sized screen. The desktop window stays: both use the same folders, so a dataset annotated in one is there in the other.
+
+![The Jelibox sign-in page](assets/web-login.png)
+
+**Sign in.** The first time, the user is `admin` and the password is `admin`; the page makes you choose a new password straight away. The admin adds other people with the **Users** button. Everybody who signs in sees every workspace (there are no per-workspace roles). Passwords are stored as PBKDF2 hashes in `configs/_users.json`.
+
+**What works.** Everything the desktop does except **Open Folder**, **Move Jelibox** and **Stream**:
+
+| Area | In the browser |
+| --- | --- |
+| Workspaces | Add Workspace by **uploading** a folder, files or a `.zip` from your device, or by choosing a folder that is already **on the server** (Pascal VOC, YOLO, COCO, images only, videos with Skip frames); add to or delete a workspace or dataset |
+| Annotate | Boxes and polygons, zoom and pan (zooming out stops at the size of a freshly opened picture), classes, undo / redo, Repeat, ZeroFill, all the keyboard shortcuts, autosave, and a warning (keep mine / take theirs) if two people change the same picture |
+| Label Assistant | All four [modes](#modes), **Infer** on one picture or the whole dataset, Auto-annotate with a Stop button |
+| Train | Full YOLO training (and the head in Custom Model mode) with the epoch table, **Finish early** and **Stop now**. Training belongs to the server: it goes on when you close the tab, and you can open the window again to see it |
+| Analyze | The dashboard, the resize simulation, the small-object limit and **Remove these objects** |
+| Export | Export Dataset (split, preprocessing, the augmentation picker) and Export Model. The result is **downloaded to your device** (a folder as a `.zip`); nothing is kept on the server |
+| Server resources | CPU use, RAM use, CPU temperature, GPU use, GPU temperature and storage of the server, refreshed every 2 seconds |
+
+![The workspace page of the web version with the server resources](assets/web-workspaces.png)
+
+**Good to know.**
+
+- One training and one model job (Infer, Auto-annotate, a model download) run at a time on the server; the page says who is using it.
+- Heavy work (import, export, training, auto-annotate) runs on the server and shows progress; closing the tab does not stop it.
+- **Browse** buttons pick files on the *server* (a `.pt` model has to be on the server already; there is no upload of models from your device).
+- Do not annotate the same picture in the desktop window and in the browser at the same time: the browser notices a change made by someone else, the desktop window does not.
+- GPU temperature and use need an NVIDIA GPU (`nvidia-smi`) or, on Linux, an AMD GPU. CPU temperature depends on the computer: Linux reads the kernel's sensors, Windows reads the thermal-zone counter, and a computer that does not report one shows **n/a**.
+
+**Network and security.** The page uses plain HTTP, like most tools on a home or office network, so use it on a network you trust and do not open the port to the internet. Sign-in uses a session cookie that scripts cannot read, wrong passwords are slowed down, and every change must carry a header that other websites cannot send. To make the server reachable from this computer only, set `"web_host": "127.0.0.1"` in `configs/_app.json` (or start it with `--host 127.0.0.1`); `"web_port"` changes the port (8420).
+
+**Reaching it from another device.** The server must allow the port through its firewall. The installer only prints the command, it never changes your firewall:
+
+- Windows (PowerShell as administrator, once): `New-NetFirewallRule -DisplayName 'Jelibox Web' -Direction Inbound -Protocol TCP -LocalPort 8420 -Profile Private -Action Allow`
+- Ubuntu with ufw: `sudo ufw allow 8420/tcp`; with firewalld: `sudo firewall-cmd --permanent --add-port=8420/tcp && sudo firewall-cmd --reload`
+
+**Starting and stopping.** Choosing *App + web* in the installer sets this up, without administrator rights:
+
+- **Windows:** a shortcut named **Jelibox Web** in your Startup folder (Settings > Apps > Startup lists it) starts the server hidden every time you **sign in** to Windows. It does not start at boot: after a restart somebody has to sign in once, or turn on automatic sign-in. Its output is in `temp\server.log`.
+- **Linux:** a systemd *user* service, `jelibox-web.service`. To start at boot without anyone signing in, Jelibox turns on `loginctl enable-linger` for your user: first without `sudo`, and only if your system refuses it asks for one `sudo` (say no and the server simply runs while you are signed in). Its output: `journalctl --user -u jelibox-web`.
+- By hand, from the Jelibox folder: `venv\Scripts\python utils\server.py` (Windows) or `jelibox/bin/python -u utils/server.py` (Linux).
+- The service scripts also work on their own: `powershell -ExecutionPolicy Bypass -File tools\web_service.ps1 -Action status` (or `install`, `remove`, `start`, `stop`) on Windows, `bash tools/web_service.sh status` (same words) on Linux.
+
+Choosing *App only* (the installer asks again at every install and update) installs nothing for the web and removes the server of an earlier install in that folder.
+
 ## All features
 
 - Local annotation workflow with no required cloud account
@@ -84,7 +138,8 @@ Select a workspace and press **Analyze** for a dashboard of objects per class, s
 - Repeat annotations from the previous image
 - ZeroFill masking for removing sensitive image regions locally
 - Light and dark themes
-- Live camera or video inference through Streamlit
+- Live camera or video inference through Streamlit (desktop only)
+- **Web version**: the same workflow in a browser, from any device on your network, with sign-in, users, downloads and a server resource monitor - see [Web version](#web-version)
 
 ## Modes
 
@@ -152,16 +207,17 @@ What happens:
 
 - The installer first asks where to install. Press **Enter** for the default - a `Jelibox` folder in your user folder, next to Downloads/Documents/Pictures (`%USERPROFILE%\Jelibox` on Windows, `~/jelibox` on Linux) - press **B** to pick a folder in a window (Linux needs `zenity` or `kdialog` for that), or type a path. A `Jelibox` folder is created inside the folder you choose. An existing install in the old default location (`%LOCALAPPDATA%\Jelibox` / `~/.local/share/jelibox`) is found and updated in place without asking.
 - The normal installer then runs, in this order: it makes sure **uv** is installed (if not, it runs uv's official installer: `irm https://astral.sh/uv/install.ps1 | iex` on Windows, `curl -LsSf https://astral.sh/uv/install.sh | sh` on Linux), lets uv download Jelibox's **own private Python 3.12** into the install folder (`.python/`), creates the virtual environment (`venv/` on Windows, `jelibox/` on Linux) from it, installs the dependencies and adds shortcuts.
+- **Web question:** the installer also asks what to install: **1 App + web** (the desktop app plus the [web version](#web-version), started for you every time you sign in on Windows or boot on Linux) or **2 App only**. Press **Enter** to repeat your last answer (the first time: app + web). The question is asked again at every install and update, so you can switch: *App only* stops and removes the web server, *App + web* installs the web packages (`requirements-web.txt`) and starts it. `JELIBOX_WEB=yes` or `JELIBOX_WEB=no` skips the question.
 - **GPU question:** before downloading anything the installer asks whether this computer has a **discrete NVIDIA graphics card**. It suggests the answer it detected; press **Enter** to accept, or answer `Y` / `N`. *Yes* installs the CUDA build of PyTorch (about 2.5 GB, needs the NVIDIA driver); *No* installs the much smaller CPU-only build (no CUDA packages). AMD and Intel graphics cannot use CUDA, so answer *No* for them. To skip the question set `JELIBOX_GPU=nvidia` or `JELIBOX_GPU=cpu` first. Windows on ARM and Linux ARM are not asked (no CUDA build). To change your mind later, run the installer again (`JELIBOX_FORCE=1` if it says you are up to date) and answer differently.
-- **What touches your system:** only uv, installed for your user (`~/.local/bin` or `%USERPROFILE%\.local\bin`; uv's installer adds that folder to your `PATH`, and only that folder - it is not Python). Jelibox's Python is never installed system-wide, never added to `PATH`, never registered with Windows (`py -3.12` does not see it) and is only used by Jelibox, which runs it by its full path. The Python you already use is left alone.
-- **Administrator rights:** Windows needs none, except to install the Visual C++ runtime when it is missing (just that installer asks for permission). Linux needs no `sudo`, except to install the OpenCV system libraries (`libGL`, GLib) when they are missing.
+- **What touches your system:** with *App + web*, also one small startup entry for the web server: on Windows a shortcut in your Startup folder, on Linux a systemd user unit in `~/.config/systemd/user/` (plus `loginctl enable-linger`, see [Web version](#web-version)). Nothing else, and no firewall change. Besides that, only uv, installed for your user (`~/.local/bin` or `%USERPROFILE%\.local\bin`; uv's installer adds that folder to your `PATH`, and only that folder - it is not Python). Jelibox's Python is never installed system-wide, never added to `PATH`, never registered with Windows (`py -3.12` does not see it) and is only used by Jelibox, which runs it by its full path. The Python you already use is left alone.
+- **Administrator rights:** Windows needs none, except to install the Visual C++ runtime when it is missing (just that installer asks for permission). Linux needs no `sudo`, except to install the OpenCV system libraries (`libGL`, GLib) when they are missing, and, with *App + web*, one `sudo loginctl enable-linger` if your system does not let you turn it on yourself (the web server then also starts at boot; say no and it runs while you are signed in).
 - **No uv access?** If the installer cannot download uv, install it yourself from <https://docs.astral.sh/uv/> (or set `JELIBOX_UV` to an existing `uv` executable) and run the installer again.
-- **Updating:** run the same command again. It reports what it found (`Found Jelibox v0.1.0 ... updating to v0.2.0`), updates in place, and never touches your datasets, models or configs. If you are already on the newest version it says so and stops (`JELIBOX_FORCE=1` reinstalls anyway). A folder that is a `git` checkout is left alone - use `git pull` there.
+- **Updating:** run the same command again. It reports what it found (`Found Jelibox v0.1.0 ... updating to v0.2.0`), stops the web server first if one is running, updates in place (the server is started again with the new version), and never touches your datasets, models or configs. If you are already on the newest version it says so and stops (`JELIBOX_FORCE=1` reinstalls anyway). A folder that is a `git` checkout is left alone - use `git pull` there.
 - **Find the install folder:** click **Open Folder** in the workspace picker toolbar (next to Add Workspace).
-- **Move it somewhere else:** click **Move Jelibox** in the workspace picker and choose a folder. Jelibox creates `<folder>/Jelibox`, builds a fresh virtual environment there (same package versions, needs internet), moves your datasets, models and configs over, and deletes the old venv and folder. If anything fails before the files are moved, the old install is left untouched.
-- **A specific version:** set `JELIBOX_VERSION` first, for example `$env:JELIBOX_VERSION="v0.1.0"` (PowerShell) or `JELIBOX_VERSION=v0.1.0 curl ... | bash`. Use `main` for the latest development version (changes not in a release yet). Other options: `JELIBOX_GPU` (`nvidia` or `cpu`, skips the GPU question), `JELIBOX_HOME` (install location), `JELIBOX_NO_INSTALL=1` (download and unpack only) and `JELIBOX_FORCE=1` (reinstall even if current). If `uv` is already on your machine it is reused.
+- **Move it somewhere else:** click **Move Jelibox** in the desktop workspace picker (not in the web page) and choose a folder. If the web server is installed, run the installer once more afterwards (answer *App + web*) so it points at the new folder. Jelibox creates `<folder>/Jelibox`, builds a fresh virtual environment there (same package versions, needs internet), moves your datasets, models and configs over, and deletes the old venv and folder. If anything fails before the files are moved, the old install is left untouched.
+- **A specific version:** set `JELIBOX_VERSION` first, for example `$env:JELIBOX_VERSION="v0.1.0"` (PowerShell) or `JELIBOX_VERSION=v0.1.0 curl ... | bash`. Use `main` for the latest development version (changes not in a release yet). Other options: `JELIBOX_GPU` (`nvidia` or `cpu`, skips the GPU question), `JELIBOX_WEB` (`yes` or `no`, skips the app + web question), `JELIBOX_HOME` (install location), `JELIBOX_NO_INSTALL=1` (download and unpack only) and `JELIBOX_FORCE=1` (reinstall even if current). If `uv` is already on your machine it is reused.
 - **Want to read it before running it?** That is a good habit. The scripts are short: [`install.ps1`](install.ps1) and [`install.sh`](install.sh).
-- **Uninstall:** delete the install folder above, plus the Jelibox shortcuts (Desktop / application menu). The private Python lives inside that folder. The only thing left is uv, which you can keep for your own projects or remove as described at <https://docs.astral.sh/uv/>.
+- **Uninstall:** if you installed the web version, first run the installer again and choose *App only* (or run `tools\web_service.ps1 -Action remove` / `bash tools/web_service.sh remove`) so the startup entry goes too. Then delete the install folder above, plus the Jelibox shortcuts (Desktop / application menu). The private Python lives inside that folder. The only thing left is uv, which you can keep for your own projects or remove as described at <https://docs.astral.sh/uv/>.
 
 ### Manual install (with git)
 
@@ -192,7 +248,7 @@ The installer needs no `sudo` unless the OpenCV system libraries are missing (it
 
 1. Double-click [`jelibox_windows_installation.bat`](jelibox_windows_installation.bat). Do not run it as administrator: it asks Windows for permission itself, only to install the Visual C++ runtime, and only when it is missing.
 2. Follow the installer prompts.
-3. Open the generated `Jelibox.lnk` shortcut.
+3. Open the generated `Jelibox.lnk` shortcut. The installer asks whether to add the web version too (answer *Yes* to start the web server at sign-in).
 
 The Windows installer detects an NVIDIA GPU through `nvidia-smi` (with Windows device information as a fallback) only to suggest an answer; it then asks you whether this computer has a discrete NVIDIA GPU and installs the matching PyTorch build. GPU detection does not guarantee that the installed PyTorch package has CUDA enabled. The Linux installer asks the same question.
 
@@ -209,6 +265,8 @@ jelibox/bin/python -u utils/Annotator.py
 ```bat
 venv\Scripts\python utils\Annotator.py
 ```
+
+The web server, from the same folder: `venv\Scripts\python utils\server.py` (Windows) or `jelibox/bin/python -u utils/server.py` (Linux); then open <http://localhost:8420>. Options: `--port 9000`, `--host 127.0.0.1` (this computer only).
 
 Use the environment's `python` by its path as shown (the shortcuts do the same) instead of activating it, so your own Python stays the one on `PATH`. The `python` commands in the troubleshooting section below mean this interpreter.
 
@@ -252,8 +310,10 @@ models/<workspace>/head_run/         Head training job, log and last head
 models/_huggingface/                 LocateAnything-3B download (shared by all workspaces)
 models/_detectors/                   Detector weights fetched for the Custom Model mode
 configs/<workspace>.json             Workspace classes and Label Assistant settings for every mode
-export dataset/<workspace>/          Exported datasets
-export model/<workspace>/            Exported model files
+configs/_users.json                  Web version: accounts (password hashes)
+export dataset/<workspace>/          Exported datasets (desktop; the web downloads instead)
+export model/<workspace>/            Exported model files (desktop; the web downloads instead)
+temp/downloads/                      Web version: exports waiting to be downloaded (removed after a few hours)
 ```
 
 `YOLOdataset/<workspace>/` also doubles as scratch space during training: a
@@ -293,7 +353,7 @@ Jelibox supports:
 
 Use the **Export Dataset** action in the application to export YOLO, Pascal VOC, or COCO data with train, validation, and test splits.
 
-**Save to:** by default the dataset goes into `export dataset/<workspace>/` inside Jelibox (the previous export of that workspace is replaced). Press **Browse...** to save anywhere else instead - an HDD or an external drive, for example, to keep finished datasets (images and annotations together) off the SSD. Jelibox then makes a new folder `<workspace>-v<N>` inside the folder you chose: N is one more than the highest `<workspace>-v<number>` already there (`ppe-v1`, then `ppe-v2`, ... and if `ppe-v4` exists the next one is `ppe-v5`), so an archive is never overwritten and nothing in your folder is deleted. The folder is remembered for next time; **Default** switches back. If the remembered folder is not there any more (an unplugged external drive, say) the default folder is used instead and the window says so; the choice is kept and used again once the drive is back. Before exporting, Jelibox checks that the folder can be written to and that the images alone fit in its free space.
+**Save to** (desktop window; the web version always downloads the export to your device as a `.zip` instead): by default the dataset goes into `export dataset/<workspace>/` inside Jelibox (the previous export of that workspace is replaced). Press **Browse...** to save anywhere else instead - an HDD or an external drive, for example, to keep finished datasets (images and annotations together) off the SSD. Jelibox then makes a new folder `<workspace>-v<N>` inside the folder you chose: N is one more than the highest `<workspace>-v<number>` already there (`ppe-v1`, then `ppe-v2`, ... and if `ppe-v4` exists the next one is `ppe-v5`), so an archive is never overwritten and nothing in your folder is deleted. The folder is remembered for next time; **Default** switches back. If the remembered folder is not there any more (an unplugged external drive, say) the default folder is used instead and the window says so; the choice is kept and used again once the drive is back. Before exporting, Jelibox checks that the folder can be written to and that the images alone fit in its free space.
 
 COCO exports use this structure:
 
@@ -363,6 +423,8 @@ python tests/run.py --fast     # skip the GUI group (works without a display)
 python tests/run.py --only unit,repo
 python tests/run.py -k assistant -v
 ```
+
+The web tests need `starlette` and `httpx` (installed with the web version) and are skipped without them.
 
 Run it with the project's virtual environment (`venv\Scripts\python` on Windows, `jelibox/bin/python` on Linux). It uses only the standard `unittest` module, so there is nothing extra to install.
 

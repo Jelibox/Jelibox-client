@@ -268,7 +268,7 @@ def remove_small(data, yolo_dir, classes, size=None, mode=LETTERBOX, limit=SMALL
     without those objects and its YOLO label is written again from what is left (with `classes` = the workspace's
     class list). Images are never touched. Returns {"objects", "files", "emptied"} (emptied = images left with no
     object at all)."""
-    from .file_handler import prettify_xml, _parse_voc_objects, _parse_voc_size, _yolo_lines_from_annotations
+    from .annotation_io import prettify_xml, _parse_voc_objects, _parse_voc_size, _yolo_lines_from_annotations
     files = small_sources(data, size, mode, limit)
     removed = changed = emptied = 0
     for i, path in enumerate(files, start=1):

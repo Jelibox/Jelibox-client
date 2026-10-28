@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="google-site-verification" content="2dDeMeLVPGU-jXJDLVFoqY3q3CPxB_4xz4yJbas3ano"/>
-    <meta name="description" content="Jelibox is a private, local annotation tool for YOLO object detection and segmentation datasets. Import VOC, YOLO or COCO, auto-label with YOLO-World, LocateAnything, your own model or SAM 2, analyze your dataset in a dashboard, and export it augmented.">
+    <meta name="description" content="Jelibox is a private, local annotation tool for YOLO object detection and segmentation datasets. Import VOC, YOLO or COCO, auto-label with YOLO-World, LocateAnything, your own model or SAM 2, analyze your dataset in a dashboard, and export it augmented. Use it as a desktop app or in your browser, from any device on your network.">
     <meta property="og:type" content="website">
     <meta property="og:title" content="Jelibox | Local image annotation with four auto-label modes">
     <meta property="og:description" content="Import any dataset, auto-label it, see what it really contains in a built-in dashboard, and export it augmented. Private, on your own machine.">
@@ -32,7 +32,7 @@
             :root {
                 --bg:#0B0C12; --surface:#14161D; --surface2:#2B2E3A; --line:rgba(242,239,233,.10);
                 --text:#F2EFE9; --muted:#A1A1AA; --faint:#7C7C86;
-                --accent:#7C8CFF; --on-accent:#10131F; --tint:#262A4D; --accent-text:#A7B2FF;
+                --accent:#5B6BF5; --on-accent:#FFFFFF; --tint:#262A4D; --accent-text:#A7B2FF;
                 --shadow:0 1px 2px rgba(0,0,0,.4),0 16px 40px rgba(0,0,0,.45);
             }
         }
@@ -176,7 +176,7 @@
     <header class="nav">
         <div class="shell nav-inner">
             <a class="brand" href="#top" aria-label="Jelibox home"><img src="assets/jelibox.png" alt="Jelibox logo"><span>Jelibox</span></a>
-            <nav class="nav-links" aria-label="Main navigation"><a href="#modes">Auto-label</a><a href="#tools">Dataset tools</a><a href="#features">Features</a><a href="#install">Install</a><a class="button button-primary" href="https://github.com/Jelibox/Jelibox-client" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav>
+            <nav class="nav-links" aria-label="Main navigation"><a href="#modes">Auto-label</a><a href="#tools">Dataset tools</a><a href="#web">Web version</a><a href="#features">Features</a><a href="#install">Install</a><a class="button button-primary" href="https://github.com/Jelibox/Jelibox-client" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav>
         </div>
     </header>
 
@@ -184,7 +184,7 @@
         <section class="hero">
             <div class="shell">
                 <h1>Soft to use. <em>Sharp on every object.</em></h1>
-                <p class="lead">Jelibox is a private, local workspace for building object detection and segmentation datasets. Import what you have, label it with four kinds of AI help, see what it really contains, and export it augmented, without your images ever leaving your machine.</p>
+                <p class="lead">Jelibox is a private, local workspace for building object detection and segmentation datasets. Import what you have, label it with four kinds of AI help, see what it really contains, and export it augmented, without your images ever leaving your machine. On your desktop, or from any browser on your network.</p>
                 <div class="actions">
                     <a class="button button-primary" href="#install">Get started</a>
                     <a class="button button-secondary" href="https://github.com/Jelibox/Jelibox-client" target="_blank" rel="noopener noreferrer">View on GitHub ↗</a>
@@ -263,6 +263,41 @@
             </div>
         </section>
 
+        <section class="section shell" id="web">
+            <div class="section-head"><span class="eyebrow">Web version</span><h2>Install once. Annotate from any browser.</h2><p class="section-lead">Put Jelibox on the strong computer with the GPU and open it from your laptop. Same workflow, same files, nothing leaves your network.</p></div>
+
+            <div class="split">
+                <div class="split-text">
+                    <span class="feature-tag">Browser</span>
+                    <h3>The whole workflow, on your network.</h3>
+                    <p>Open <code>http://localhost:8420</code> on the server, or <code>http://&lt;server address&gt;:8420</code> from another device. Sign in, and everything the desktop does is there.</p>
+                    <ul>
+                        <li>Sign in with your own account; the admin adds the others</li>
+                        <li>Annotate, auto-label with all four modes, train, analyze and export, all in the page</li>
+                        <li>Upload a dataset from your laptop, or pick a folder that is already on the server</li>
+                        <li>Exports are downloaded straight to your device; training goes on if you close the tab</li>
+                        <li>Starts by itself: when you sign in to Windows (no administrator rights), or at boot on Linux (at most one sudo, to allow starting at boot)</li>
+                    </ul>
+                </div>
+                <div class="shot"><img src="assets/web-login.png" alt="The Jelibox sign-in page with the brand panel and the sign-in form" width="1440" height="900" loading="lazy"></div>
+            </div>
+
+            <div class="split stack">
+                <div class="split-text">
+                    <span class="feature-tag">Server resources</span>
+                    <h3>See what your server is doing.</h3>
+                    <p>The workspace page shows the computer that runs Jelibox, refreshed every two seconds: CPU use, RAM use, CPU temperature, GPU use, GPU temperature and storage, on Windows and Ubuntu. A value a computer cannot report simply shows <b>n/a</b>.</p>
+                    <ul>
+                        <li>Check that nothing else is using the GPU before you start a training</li>
+                        <li>Watch temperatures during a long run</li>
+                        <li>See how much room is left on the drive that holds your datasets</li>
+                    </ul>
+                </div>
+                <div class="shot"><img src="assets/web-workspaces.png" alt="The web version's workspace page with six tiles for CPU, RAM, temperatures, GPU and storage" width="1440" height="900" loading="lazy"></div>
+            </div>
+            <p class="install-note">The web page uses plain HTTP, so keep it on a network you trust. Choose <b>App + web</b> when the installer asks; <b>App only</b> installs just the desktop window.</p>
+        </section>
+
         <section class="section shell" id="features">
             <div class="section-head"><span class="eyebrow">Features</span><h2>Less friction between image and insight.</h2><p class="section-lead">Everything you need to annotate, inspect, train, and export without sending your dataset through a cloud service.</p></div>
             <div class="feature-grid even">
@@ -302,6 +337,7 @@
                     <p>Jelibox gets its own Python (via uv) inside its folder; yours is never touched. It asks for your <code>sudo</code> password only if the OpenCV system libraries (libGL, GLib) are missing.</p>
                 </div>
             </div>
+            <p class="install-note">The installer asks what to install: <b>App + web</b> (the desktop app plus the web version, started for you when you sign in or boot) or <b>App only</b>. It asks again at every update, so you can switch.</p>
             <p class="install-note">The installer asks whether this computer has a discrete NVIDIA graphics card and installs the CUDA or the smaller CPU-only PyTorch accordingly.</p>
             <p class="install-note">Prefer to read it first? <a href="https://github.com/Jelibox/Jelibox-client/blob/main/install.ps1" target="_blank" rel="noopener noreferrer">install.ps1</a> and <a href="https://github.com/Jelibox/Jelibox-client/blob/main/install.sh" target="_blank" rel="noopener noreferrer">install.sh</a> are short and open source.</p>
             <details class="manual">

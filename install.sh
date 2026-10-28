@@ -9,7 +9,10 @@
 #   3. not installed yet   -> installs the newest version fresh
 #      installed, older    -> updates it (your datasets, models and configs are never touched)
 #      installed, current  -> says so and stops
-#   4. runs jelibox_linux_installation.bash, which installs uv if it is missing (official installer, user level),
+#   4. asks what to install: the app + the web version (a server you open in a browser, also from other devices, started
+#      by a systemd USER service when the computer boots - no sudo for the service, one sudo only if your system does not
+#      let you turn on "linger" yourself), or the app only. Asked again on every install and update, so it can be changed.
+#   5. runs jelibox_linux_installation.bash, which installs uv if it is missing (official installer, user level),
 #      gives Jelibox its own private Python 3.12 (downloaded by uv into the Jelibox folder - your own Python is
 #      not touched, nothing is put on PATH), creates the virtual environment, installs the dependencies and adds
 #      Jelibox to your application menu. sudo is asked for only if the system graphics libraries OpenCV needs
@@ -22,6 +25,8 @@
 #   JELIBOX_NO_INSTALL  1 = only download and unpack, do not run the installer
 #   JELIBOX_FORCE       1 = reinstall even when this version is already installed
 #   JELIBOX_GPU         nvidia | cpu = which PyTorch to install without being asked (default: you are asked)
+#   JELIBOX_WEB         yes | no = app + web version, or the app only, without being asked (default: you are asked;
+#                       Enter = what this folder had before, otherwise app + web)
 #   JELIBOX_ARCHIVE     path to a local .tar.gz instead of downloading (offline installs, tests)
 
 # Everything lives in one function so bash has read the whole script before running any of it.
@@ -197,6 +202,42 @@ main() {
         say "PyTorch build: $([ "$gpu" = "nvidia" ] && echo 'NVIDIA GPU (CUDA)' || echo 'CPU only')"
     fi
 
+    # App + web, or the app only? Asked on every install and update. Enter = what this folder had before, else both.
+    # JELIBOX_WEB=yes|no skips the question; the installer script asks by itself if it is started without it.
+    if [ "${JELIBOX_NO_INSTALL:-}" != "1" ]; then
+        local web="${JELIBOX_WEB:-}"
+        web="$(printf '%s' "$web" | tr '[:upper:]' '[:lower:]')"
+        case "$web" in
+            ""|yes|no) ;;
+            *) fail "JELIBOX_WEB must be 'yes' or 'no' (got '$web')." ;;
+        esac
+        if [ -z "$web" ]; then
+            local before="" default="1" reply=""
+            before="$(head -n 1 "$dest/.jelibox-web" 2>/dev/null | tr -d '\r' || true)"
+            [ "$before" != "no" ] || default="2"
+            if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+                {
+                    printf '\n\033[1;36m[Jelibox]\033[0m What do you want to install?\n'
+                    printf '          1  App + web   the desktop app, plus the web version: a server you open in a browser (also from\n'
+                    printf '                         another computer on your network). It starts by itself when this computer boots\n'
+                    printf '                         (a systemd user service; sudo is asked for only if "linger" cannot be turned on without).\n'
+                    printf '          2  App only    just the desktop app. An earlier web server of this folder is stopped and removed.\n'
+                    printf '          Your choice [1/2, Enter = %s]: ' "$default"
+                } > /dev/tty
+                read -r reply < /dev/tty || reply=""
+            else
+                say "No keyboard available - using the default."
+            fi
+            case "$reply" in
+                1) web="yes" ;;
+                2) web="no" ;;
+                *) if [ "$default" = "2" ]; then web="no"; else web="yes"; fi ;;
+            esac
+        fi
+        export JELIBOX_WEB="$web"
+        say "Installing: $([ "$web" = "yes" ] && echo 'app + web version' || echo 'app only')"
+    fi
+
     if [ -z "${JELIBOX_ARCHIVE:-}" ]; then
         download "$url" "$archive"
     fi
@@ -207,6 +248,11 @@ main() {
     local top
     top="$(find "$tmp/src" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
     [ -n "$top" ] || fail "The downloaded archive is empty."
+
+    # An update must not run under the old server: stop it before any file or package is replaced.
+    if [ "$existing" = "1" ] && [ -f "$dest/tools/web_service.sh" ]; then
+        bash "$dest/tools/web_service.sh" stop "$dest" >/dev/null 2>&1 || true
+    fi
 
     mkdir -p "$dest"
     # Copy over the existing install. Nothing is deleted, so datasets/models/configs/venv survive an update.
@@ -225,7 +271,7 @@ main() {
     chmod +x "$installer"
 
     say "Setting up Python and the dependencies (sudo is only asked for if system graphics libraries are missing)."
-    if [ -r /dev/tty ]; then
+    if [ -r /dev/tty ] && : < /dev/tty 2>/dev/null; then       # a readable name is not always a usable terminal (ssh without tty)
         bash "$installer" < /dev/tty      # keep the keyboard available for the sudo prompt
     else
         bash "$installer"

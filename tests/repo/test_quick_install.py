@@ -144,8 +144,9 @@ class WindowsInstallerEditsTests(unittest.TestCase):
                     bad.append(f"{name}:{i}")
         self.assertEqual(bad, [])
 
-    def test_only_two_questions_are_asked_and_the_gpu_one_can_be_preset(self):
-        self.assertEqual(self.bat.count("choice /c YN"), 2)        # continue? + NVIDIA GPU?
+    def test_only_three_questions_are_asked_and_the_gpu_and_web_ones_can_be_preset(self):
+        self.assertEqual(self.bat.count("choice /c YN"), 3)        # continue? + NVIDIA GPU? + web version?
+        self.assertIn("if defined JELIBOX_WEB goto WEB_PRESET", self.bat)
         self.assertIn("if defined JELIBOX_GPU goto GPU_PRESET", self.bat)    # install.ps1 already asked
 
 

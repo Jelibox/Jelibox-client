@@ -85,6 +85,14 @@ def recount(workspace):
     return stats
 
 
+def forget(workspace):
+    """Drop the stored numbers of a workspace (it was deleted: a new one with the same name must not inherit them)."""
+    with _lock:
+        data = _read()
+        if data.pop(workspace, None) is not None:
+            _write(data)
+
+
 def recount_all(progress_cb=None):
     """Count every workspace that exists and write the result: workspaces that are gone disappear from the file.
     progress_cb(done, total, text) is called before each workspace."""

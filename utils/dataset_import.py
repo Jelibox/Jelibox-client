@@ -36,7 +36,7 @@ from .workspace_manager import (
     DATASETS_ROOT, CONFIGS_ROOT, BASE_DIR, IMAGE_EXTENSIONS,
     next_instance_name, existing_classes_for_workspace,
 )
-from .file_handler import build_voc_xml, prettify_xml, _yolo_lines_from_annotations
+from .annotation_io import build_voc_xml, prettify_xml, _yolo_lines_from_annotations
 
 CLASS_LIST_FILENAMES = {"classes.txt", "obj.names"}
 VIDEO_EXTENSIONS = (".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg")
@@ -200,7 +200,7 @@ def scan_classes(scan, fmt):
     file only), without writing anything. Used to warn before the import."""
     counts = {}
     if fmt == "voc":
-        from .file_handler import _parse_voc_objects
+        from .annotation_io import _parse_voc_objects
         for base, path in scan["voc"].items():
             if base not in scan["images"]:
                 continue
@@ -340,7 +340,7 @@ def _image_size(path):
 
 def _import_voc_annotations(scan, voc_dir, yolo_dir, class_order, rename_map, progress_cb, done, total,
                             locked=False, skipped=None):
-    from .file_handler import _parse_voc_size, _parse_voc_objects
+    from .annotation_io import _parse_voc_size, _parse_voc_objects
 
     class_set = set(class_order)
     fixed = set(class_order) if locked else None     # a workspace's own classes: nothing else is added

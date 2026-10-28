@@ -44,6 +44,7 @@ Jelibox-launcher.sh
 .install-yes
 .jelibox-version
 .jelibox-ready
+.jelibox-web
 .python/
 .uv/
 

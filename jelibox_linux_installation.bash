@@ -18,6 +18,42 @@ APP_PATH="$SCRIPT_DIR"
 PYTHON_VERSION_PREFIX="3.12"
 VENV_DIR="$APP_PATH/jelibox"
 VENV_PY="$VENV_DIR/bin/python"
+WEB_STATUS="ok"
+
+# ──────────────────────────────────────────
+# APP + WEB, OR THE APP ONLY?
+# install.sh asks this itself and passes the answer in JELIBOX_WEB (yes or no); started on its own, this asks it.
+# yes = the desktop app AND the web version: a server you open in a browser, started by a systemd user service when
+# the computer boots (no sudo for the service). no = just the desktop app; a web server of an earlier install in
+# this folder is stopped and removed.
+# ──────────────────────────────────────────
+WEB_CHOICE="${JELIBOX_WEB:-}"
+WEB_CHOICE="$(printf '%s' "$WEB_CHOICE" | tr '[:upper:]' '[:lower:]')"
+case "$WEB_CHOICE" in
+    ""|yes|no) ;;
+    *) echo "[ERROR] JELIBOX_WEB must be 'yes' or 'no', not '$WEB_CHOICE'."; exit 1 ;;
+esac
+if [ -z "$WEB_CHOICE" ]; then
+    WEB_REPLY=""
+    if [ -t 0 ]; then
+        echo ""
+        echo "    Yes = the desktop app AND the web version (a server you open in a browser, also from another computer"
+        echo "          on your network; it starts by itself when this computer boots)."
+        echo "    No  = just the desktop app."
+        read -r -p "Also install the web version? [Y/N, Enter = Y]: " WEB_REPLY || WEB_REPLY=""
+    else
+        echo "[*] No keyboard available - installing the web version too."
+    fi
+    case "$WEB_REPLY" in
+        [Nn]|[Nn][Oo]) WEB_CHOICE="no" ;;
+        *)             WEB_CHOICE="yes" ;;
+    esac
+fi
+echo "[OK] Installing: $([ "$WEB_CHOICE" = "yes" ] && echo 'app + web version' || echo 'app only')"
+# An update must not run under the old server: stop it before any package is replaced.
+if [ -f "$SCRIPT_DIR/tools/web_service.sh" ]; then
+    bash "$SCRIPT_DIR/tools/web_service.sh" stop "$APP_PATH" >/dev/null 2>&1 || true
+fi
 
 # ──────────────────────────────────────────
 # PYTHON
@@ -105,6 +141,13 @@ fi
 # including the version limits that keep them compatible: ultralytics>=8.4.68, transformers==4.57.6.
 echo "[*] Installing application dependencies..."
 "$VENV_PY" -m pip install -r "$APP_PATH/requirements.txt"
+
+# The web version's packages (the web server and its uploads). Only when the web version was chosen.
+if [ "$WEB_CHOICE" = "yes" ]; then
+    echo "[*] Installing the web version's packages..."
+    "$VENV_PY" -m pip install -r "$APP_PATH/requirements-web.txt" || WEB_STATUS="failed"
+    [ "$WEB_STATUS" = "ok" ] && echo "[OK] Web packages installed." || echo "[WARNING] The web packages could not be installed. The web version will not be started."
+fi
 
 # CLIP powers the YOLO-World Label Assistant. Installed from a zip archive so
 # git is not required. Non-fatal: without it only YOLO-World is unavailable.
@@ -198,6 +241,20 @@ if [[ -n "$DESKTOP_DIR" && -d "$DESKTOP_DIR" ]]; then
 fi
 
 # ──────────────────────────────────────────
+# WEB SERVER AT BOOT
+# tools/web_service.sh writes a systemd USER unit and starts the server now; "no" removes it again. It asks for sudo
+# only if "linger" (start at boot before anybody signs in) cannot be turned on without. A server that does not
+# start is a warning, not a failed install.
+# ──────────────────────────────────────────
+if [ "$WEB_CHOICE" = "no" ]; then
+    bash "$SCRIPT_DIR/tools/web_service.sh" remove "$APP_PATH" || true
+elif [ "$WEB_STATUS" = "ok" ]; then
+    echo "[*] Starting the Jelibox web server and adding it to your systemd user services..."
+    bash "$SCRIPT_DIR/tools/web_service.sh" install "$APP_PATH" || WEB_STATUS="notstarted"
+fi
+printf '%s\n' "$WEB_CHOICE" > "$APP_PATH/.jelibox-web" 2>/dev/null || true
+
+# ──────────────────────────────────────────
 # DONE
 # ──────────────────────────────────────────
 # Tells the one-line installer (install.sh) that this install finished, so it can
@@ -210,4 +267,8 @@ echo "      INSTALLATION COMPLETED!"
 echo "=========================================="
 echo "You can now run Jelibox from your Application Menu"
 echo "or via the Desktop shortcut!"
+if [ "$WEB_STATUS" = "notstarted" ]; then
+    echo "[WARNING] The web server did not start. Look at:  journalctl --user -u jelibox-web"
+    echo "          Try again with:  bash tools/web_service.sh install"
+fi
 echo "=========================================="

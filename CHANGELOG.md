@@ -9,8 +9,10 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Fixed
-- **YOLO-World now shows the progress window too on first use.** Only SAM 2 Dynamic and LocateAnything did; with YOLO-World the window froze while the model (and CLIP) downloaded. It now asks before downloading and shows the same "Label Assistant" window until the model is loaded.
+## [0.4.15] - 2026-10-28
+
+### Fixed
+- **YOLO-World now shows the progress window too on first use.** Only SAM 2 Dynamic and LocateAnything did; with YOLO-World the window froze while the model (and CLIP) downloaded. It now asks before downloading and shows the same "Label Assistant" window until the model is loaded.
 - **The Train window now says when it downloads the base model.** A stock model (yolov8m.pt, yolo11s.pt ...) that is not on the computer used to be fetched silently while the window looked stuck. Now it asks first, stores the file once in `models/_yolo_base/` (no longer in the Jelibox folder; an old copy there is still used), and shows "Downloading the base model ..." with a moving bar.
 
 ## [0.4.14] - 2026-10-19
@@ -190,7 +192,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.14...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.15...HEAD
+[0.4.15]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.14...v0.4.15
 [0.4.14]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.13...v0.4.14
 [0.4.13]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.12...v0.4.13
 [0.4.12]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.11...v0.4.12

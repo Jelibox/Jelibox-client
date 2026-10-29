@@ -9,7 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Fixed
+## [1.0.2] - 2026-10-29
+
+### Fixed
 - Releases 1.0.0 and 1.0.1 were never published because two tests failed on Ubuntu (the tests, not the app). 1.0.2 is the first release of the web version that the one-line installers can download.
 
 ## [1.0.1] - 2026-10-29
@@ -213,7 +215,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.15...v1.0.0
 [0.4.15]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.14...v0.4.15

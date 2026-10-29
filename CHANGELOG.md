@@ -9,7 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Fixed
+## [1.0.1] - 2026-10-29
+
+### Fixed
 - The Linux installer now retries the PyTorch download (5 times, 60 s timeout, like Windows) and stops with a clear message when `download.pytorch.org` cannot be reached, instead of carrying on without PyTorch.
 
 ## [1.0.0] - 2026-10-29
@@ -208,7 +210,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.15...v1.0.0
 [0.4.15]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.14...v0.4.15
 [0.4.14]: https://github.com/Jelibox/Jelibox-client/compare/v0.4.13...v0.4.14

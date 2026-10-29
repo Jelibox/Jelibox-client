@@ -128,13 +128,20 @@ elif [[ "$GPU_TYPE" == "nvidia" ]]; then
         echo "[WARNING] nvidia-smi was not found. PyTorch needs the NVIDIA driver to use the GPU."
     fi
     "$VENV_PY" -m pip install torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cu121
+        --index-url https://download.pytorch.org/whl/cu121 --retries 5 --timeout 60 || TORCH_FAILED=1
 
 else
     # The default Linux wheel on PyPI is the CUDA build and pulls in several GB of NVIDIA libraries - not wanted here.
     echo "[OK] PyTorch build: CPU only"
     "$VENV_PY" -m pip install torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cpu
+        --index-url https://download.pytorch.org/whl/cpu --retries 5 --timeout 60 || TORCH_FAILED=1
+fi
+
+if [ "${TORCH_FAILED:-0}" = 1 ]; then
+    echo "[ERROR] PyTorch could not be downloaded from download.pytorch.org."
+    echo "        'Name or service not known' means this computer cannot resolve that address (DNS or no internet)."
+    echo "        Check with: curl -I https://download.pytorch.org/whl/cu121/ ; then run the installer again."
+    exit 1
 fi
 
 # requirements.txt holds everything for all three modes (YOLO-World, LocateAnything, custom head models),

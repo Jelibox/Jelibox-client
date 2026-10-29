@@ -47,11 +47,12 @@ class ParsingTests(unittest.TestCase):
         self.assertIsNone(self.sm.parse_thermal_zones("Access denied"))
 
     def test_the_drive_that_holds_jelibox_comes_first_and_is_marked(self):
-        parts = [{"mount": "C:\\", "fstype": "NTFS", "fixed": True}, {"mount": "D:\\", "fstype": "NTFS", "fixed": True},
-                 {"mount": "C:\\", "fstype": "NTFS", "fixed": True}]
-        usage = lambda mount: (50, 100) if mount.startswith("D") else (80, 100)
-        rows = self.sm.disk_rows(parts, usage, "D:\\Tools\\Jelibox")
-        self.assertEqual([(r["mount"], r["here"]) for r in rows], [("D:\\", True), ("C:\\", False)])
+        first, second = os.path.abspath(os.sep), os.path.abspath(os.path.join(os.sep, "tools"))    # spelled for this OS
+        parts = [{"mount": first, "fstype": "NTFS", "fixed": True}, {"mount": second, "fstype": "NTFS", "fixed": True},
+                 {"mount": first, "fstype": "NTFS", "fixed": True}]
+        usage = lambda mount: (50, 100) if mount == second else (80, 100)
+        rows = self.sm.disk_rows(parts, usage, os.path.join(second, "Jelibox"))
+        self.assertEqual([(r["mount"], r["here"]) for r in rows], [(second, True), (first, False)])
         self.assertEqual(rows[0]["percent"], 50.0)
 
     def test_the_deepest_mount_is_the_one_that_holds_the_folder(self):

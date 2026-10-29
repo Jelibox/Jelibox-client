@@ -222,7 +222,11 @@ class SystemdServiceTests(unittest.TestCase):
 
     def test_when_linger_is_refused_it_says_how_instead_of_failing(self):
         self.listen()
-        r = self.run_service("install", FAKE_LINGER="no", FAKE_LINGER_DENIED="1", PATH=self.bin + os.pathsep + "/nonexistent")
+        sudo = os.path.join(self.bin, "sudo")                                # a sudo that is refused, whatever the machine has
+        with open(sudo, "w", newline="\n") as f:
+            f.write("#!/usr/bin/env bash\nexit 1\n")
+        os.chmod(sudo, 0o755)
+        r = self.run_service("install", FAKE_LINGER="no", FAKE_LINGER_DENIED="1")
         out = r.stdout
         self.assertEqual(r.returncode, 0, out + r.stderr)
         self.assertIn("Start at boot is OFF", out)

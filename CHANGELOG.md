@@ -9,6 +9,9 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Fixed
+- Releases 1.0.0 and 1.0.1 were never published because two tests failed on Ubuntu (the tests, not the app). 1.0.2 is the first release of the web version that the one-line installers can download.
+
 ## [1.0.1] - 2026-10-29
 
 ### Fixed

@@ -9,8 +9,10 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Fixed
-- **YouTube downloads need a JavaScript runtime, and the installers now provide one.** Without it YouTube answered "Requested format is not available". `requirements.txt` now has `yt-dlp[default]` and the Deno team's `deno` pip package (about 40 MB, inside Jelibox's own environment: no system install, PATH untouched; Windows x64, macOS, Linux x86_64 / arm64). Run the installer again to get it. The error text now explains this case.
+## [1.1.1] - 2026-11-01
+
+### Fixed
+- **YouTube downloads need a JavaScript runtime, and the installers now provide one.** Without it YouTube answered "Requested format is not available". `requirements.txt` now has `yt-dlp[default]` and the Deno team's `deno` pip package (about 40 MB, inside Jelibox's own environment: no system install, PATH untouched; Windows x64, macOS, Linux x86_64 / arm64). Run the installer again to get it. The error text now explains this case.
 - **After an update the browser could keep running the old web page.** Scripts and styles of the web version are now checked for a newer copy on every load (a cheap "not modified" answer when nothing changed), so a new button shows up without a hard refresh.
 
 ## [1.1.0] - 2026-11-01
@@ -231,7 +233,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/Jelibox/Jelibox-client/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.0...v1.0.1

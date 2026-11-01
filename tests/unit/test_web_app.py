@@ -67,6 +67,14 @@ class PageTests(WebBase):
         self.assertEqual(headers["x-frame-options"], "DENY")
         self.assertIn("frame-ancestors 'none'", headers["content-security-policy"])
 
+    def test_scripts_are_rechecked_every_time_so_an_update_shows_at_once(self):
+        for path in ("/static/editor.js", "/static/style.css"):
+            first = self.client.get(path)
+            self.assertEqual(first.headers["cache-control"], "no-cache", path)
+            again = self.client.get(path, headers={"If-None-Match": first.headers["etag"]})
+            self.assertEqual(again.status_code, 304, path)                 # unchanged: nothing is sent again
+        self.assertEqual(self.client.get("/").headers["cache-control"], "no-store")
+
     def test_the_static_folder_does_not_leak_other_files(self):
         self.assertEqual(self.client.get("/static/../app.py").status_code, 404)
         self.assertEqual(self.client.get("/static/..%2Fapp.py").status_code, 404)

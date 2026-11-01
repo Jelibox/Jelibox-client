@@ -9,6 +9,7 @@ the link never worked.
 import os
 import re
 import shutil
+import sys
 import time
 from urllib.parse import urlparse
 
@@ -110,6 +111,9 @@ def friendly_error(exc):
         return ("YouTube refused to send this video (HTTP 403). yt-dlp may be out of date "
                 "(update it with: python -m pip install -U yt-dlp), or YouTube is limiting this computer. "
                 "You can upload the video file instead.")
+    if "requested format is not available" in low:
+        return ("YouTube offered no format of this video that can be downloaded here. Usually yt-dlp is out of date "
+                "(python -m pip install -U yt-dlp) or has no JavaScript runtime. You can upload the video file instead.")
     if "not a bot" in low or "sign in to confirm" in low:
         return "YouTube wants this computer to prove it is not a robot, so it will not hand over this video. Upload the video file instead."
     if "private video" in low or "unavailable" in low or "members-only" in low or ("age" in low and "restrict" in low):
@@ -117,6 +121,13 @@ def friendly_error(exc):
     if "urlopen error" in low or "getaddrinfo" in low or "name or service not known" in low or "timed out" in low:
         return f"This computer could not reach YouTube ({detail}). Check its internet connection and DNS."
     return f"The video could not be downloaded: {detail}"
+
+
+def deno_path():
+    """The deno of the `deno` pip package (requirements.txt), which lives next to this environment's python. The
+    environment is never activated, so that folder is not on PATH and yt-dlp is pointed at it. None: yt-dlp looks on PATH."""
+    path = os.path.join(os.path.dirname(sys.executable), "deno.exe" if os.name == "nt" else "deno")
+    return path if os.path.isfile(path) else None
 
 
 class _Log:
@@ -139,7 +150,8 @@ class _Log:
 
     def hint(self):
         if any("JavaScript runtime" in w for w in self.warnings):
-            return (" yt-dlp also says no JavaScript runtime was found: YouTube downloads need one (deno) next to yt-dlp, "
+            return (" yt-dlp also says no JavaScript runtime was found, and YouTube downloads need one (deno): run the "
+                    "Jelibox installer again (it installs deno into Jelibox's own environment), "
                     "see https://github.com/yt-dlp/yt-dlp/wiki/EJS")
         return ""
 
@@ -170,6 +182,9 @@ def download_youtube(url, folder, progress=None, cancelled=None):
     options = {"format": YOUTUBE_FORMAT, "outtmpl": os.path.join(folder, "yt_%(id)s.%(ext)s"), "noplaylist": True,
                "logger": log, "noprogress": True, "restrictfilenames": True,
                "max_filesize": MAX_DOWNLOAD_BYTES, "socket_timeout": 30, "retries": 3, "progress_hooks": [hook]}
+    deno = deno_path()
+    if deno:
+        options["js_runtimes"] = {"deno": {"path": deno}}
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=True)

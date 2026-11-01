@@ -181,6 +181,25 @@ class DownloadTests(Base):
             self.run_download(fake_yt_dlp(error=Exception("HTTP Error 403: Forbidden"), warn=["something else"]))
         self.assertNotIn("JavaScript", str(ctx.exception))
 
+    def test_yt_dlp_is_pointed_at_the_deno_that_lives_in_the_environment(self):
+        scripts = os.path.join(self.base, "env", "Scripts")
+        os.makedirs(scripts)
+        name = "deno.exe" if os.name == "nt" else "deno"
+        deno = touch(os.path.join(scripts, name))
+        calls = []
+        with mock.patch.object(ss.sys, "executable", os.path.join(scripts, "python")):
+            self.run_download(fake_yt_dlp(calls=calls))
+        self.assertEqual(calls[0]["js_runtimes"], {"deno": {"path": deno}})
+        calls.clear()
+        with mock.patch.object(ss.sys, "executable", os.path.join(self.base, "elsewhere", "python")):
+            self.run_download(fake_yt_dlp(calls=calls))
+        self.assertNotIn("js_runtimes", calls[0])                       # none there: yt-dlp looks on PATH itself
+
+    def test_the_format_error_that_a_missing_runtime_causes_is_explained(self):
+        text = ss.friendly_error(Exception("ERROR: [youtube] abc: Requested format is not available. Use --list-formats"))
+        self.assertIn("no format", text)
+        self.assertIn("upload", text.lower())
+
     def test_yt_dlp_output_goes_to_our_logger_not_the_console(self):
         calls = []
         self.run_download(fake_yt_dlp(calls=calls))

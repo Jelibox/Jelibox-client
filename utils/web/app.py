@@ -34,6 +34,8 @@ SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 class SecurityHeaders(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         response = await call_next(request)
+        if request.url.path.startswith("/static/"):         # check for a newer file every time (a cheap 304): after an update
+            response.headers.setdefault("Cache-Control", "no-cache")   # the browser must not keep running the old page's scripts
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")

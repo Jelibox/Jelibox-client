@@ -55,7 +55,7 @@ headers on every answer. Plain HTTP on a LAN (HTTPS is out of scope for 1.0; say
    delete picture, info panel, autosave (2.5 s) plus a save on every move, a keepalive save when the tab closes, and a
    version check so two people cannot silently overwrite each other (409 -> keep mine / take theirs). Shortcuts as on
    the desktop (A D arrows, R, S, E, B, M, 1-9, Del, Esc, Enter, Ctrl+Z / Y). Infer / Label Assistant / Train / Export
-   buttons are there but disabled until steps 4 and 5. The desktop's **Stream** button is not in the web (removed on purpose: nothing uses it).
+   buttons are there but disabled until steps 4 and 5. The desktop's **Stream** button was left out of the web at first, and added later (see CLAUDE.md, "Stream").
    (`utils/web/editing.py` = `Workspace`, `editor_api.py`, `static/editor.js`; tests `tests/unit/test_web_editor.py`;
    real-browser run in the scratchpad, see CLAUDE.md)
 4. [x] **Label Assistant**: the four modes through one context-taking core (`utils/web/assistant.py`: `Ctx`, `build_predictor`,
@@ -66,7 +66,7 @@ headers on every answer. Plain HTTP on a LAN (HTTPS is out of scope for 1.0; say
    at a time, server-wide (409 `busy` names who). Settings windows for all four modes (targets, own model + class mapping,
    LocateAnything, head + detector, SAM 2) with a server-side file browser for `.pt` files. SAM 2 references are one
    `ReferenceStore` per workspace (`assistant.sam_store`), fed by reviewed saves, emptied by delete image / Forget all.
-   Not in the web: uploading a `.pt` from the laptop (pick a file already on the server). The Stream page is not in the web either.
+   Not in the web: uploading a `.pt` from the laptop (pick a file already on the server). Stream came later: a window of the editor, not a page.
 5. [x] **Training and export**: Export Dataset (YOLO / Pascal VOC / COCO: split bar, Auto-Orient / Resize, the whole augmentation picker
    with tile previews, results are only downloaded to the browser (no "Save to", nothing kept on the server), a folder as a .zip), Export Model (all Ultralytics formats and options, result downloadable), the Train window (full YOLO in every mode,
    head choice in Custom Model mode, counts only on Refresh, base-model download and "replace the trained model" asked first,

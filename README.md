@@ -84,7 +84,7 @@ The installer prints the address; the page after sign-in also works on a phone-s
 
 **Sign in.** The first time, the user is `admin` and the password is `admin`; the page makes you choose a new password straight away. The admin adds other people with the **Users** button. Everybody who signs in sees every workspace (there are no per-workspace roles). Passwords are stored as PBKDF2 hashes in `configs/_users.json`.
 
-**What works.** Everything the desktop does except **Open Folder**, **Move Jelibox** and **Stream**:
+**What works.** Everything the desktop does except **Open Folder** and **Move Jelibox**:
 
 | Area | In the browser |
 | --- | --- |
@@ -94,13 +94,16 @@ The installer prints the address; the page after sign-in also works on a phone-s
 | Train | Full YOLO training (and the head in Custom Model mode) with the epoch table, **Finish early** and **Stop now**. Training belongs to the server: it goes on when you close the tab, and you can open the window again to see it |
 | Analyze | The dashboard, the resize simulation, the small-object limit and **Remove these objects** |
 | Export | Export Dataset (split, preprocessing, the augmentation picker) and Export Model. The result is **downloaded to your device** (a folder as a `.zip`); nothing is kept on the server |
+| Stream | Runs your trained model on a **video you upload** or a **YouTube link** and shows the detections live, with FPS, frames and detections. The video is kept in the server's `temp/stream` folder; **Clear cache** deletes the videos and the junk (see below) |
 | Server resources | CPU use, RAM use, CPU temperature, GPU use, GPU temperature and storage of the server, refreshed every 2 seconds |
 
 ![The workspace page of the web version with the server resources](assets/web-workspaces.png)
 
 **Good to know.**
 
-- One training and one model job (Infer, Auto-annotate, a model download) run at a time on the server; the page says who is using it.
+- One training and one model job (Infer, Auto-annotate, a model download, a Stream) run at a time on the server; the page says who is using it. A Stream stops when you close its window, and by itself when nobody has looked at it for 45 seconds.
+- **Stream and YouTube.** The server downloads the video first (up to 720p, one file) and plays that file: only YouTube links are accepted, so the server cannot be pointed at other computers. If YouTube refuses the download (HTTP 403, or it wants proof that the server is not a robot) the window says so, and passes on what yt-dlp reports. yt-dlp itself says YouTube needs a JavaScript runtime (**deno**) installed next to it; Jelibox does not install one (it is a change to your system), see the [yt-dlp EJS page](https://github.com/yt-dlp/yt-dlp/wiki/EJS). Otherwise update yt-dlp (`python -m pip install -U yt-dlp`) or upload the video file instead.
+- **Clear cache** (in the Stream window) deletes every video in `temp/stream` (not the one that is playing) and the junk in `temp/`: unfinished downloads there, uploads nobody imported (older than 24 hours), exports nobody downloaded (older than 6 hours) and `server.log.old`. It never touches your datasets, annotations, models, `server.log` or the training lock, and it waits while an upload or a download is running. It lists what it will delete and asks first.
 - Heavy work (import, export, training, auto-annotate) runs on the server and shows progress; closing the tab does not stop it.
 - **Browse** buttons pick files on the *server* (a `.pt` model has to be on the server already; there is no upload of models from your device).
 - Do not annotate the same picture in the desktop window and in the browser at the same time: the browser notices a change made by someone else, the desktop window does not.
@@ -138,7 +141,7 @@ Choosing *App only* (the installer asks again at every install and update) insta
 - Repeat annotations from the previous image
 - ZeroFill masking for removing sensitive image regions locally
 - Light and dark themes
-- Live camera or video inference through Streamlit (desktop only)
+- Live video inference: a Streamlit page on the desktop, a built-in **Stream** window in the web version (uploaded video or YouTube link)
 - **Web version**: the same workflow in a browser, from any device on your network, with sign-in, users, downloads and a server resource monitor - see [Web version](#web-version)
 
 ## Modes
@@ -212,7 +215,7 @@ What happens:
 - **What touches your system:** with *App + web*, also one small startup entry for the web server: on Windows a shortcut in your Startup folder, on Linux a systemd user unit in `~/.config/systemd/user/` (plus `loginctl enable-linger`, see [Web version](#web-version)). Nothing else, and no firewall change. Besides that, only uv, installed for your user (`~/.local/bin` or `%USERPROFILE%\.local\bin`; uv's installer adds that folder to your `PATH`, and only that folder - it is not Python). Jelibox's Python is never installed system-wide, never added to `PATH`, never registered with Windows (`py -3.12` does not see it) and is only used by Jelibox, which runs it by its full path. The Python you already use is left alone.
 - **Administrator rights:** Windows needs none, except to install the Visual C++ runtime when it is missing (just that installer asks for permission). Linux needs no `sudo`, except to install the OpenCV system libraries (`libGL`, GLib) when they are missing, and, with *App + web*, one `sudo loginctl enable-linger` if your system does not let you turn it on yourself (the web server then also starts at boot; say no and it runs while you are signed in).
 - **No uv access?** If the installer cannot download uv, install it yourself from <https://docs.astral.sh/uv/> (or set `JELIBOX_UV` to an existing `uv` executable) and run the installer again.
-- **Updating:** run the same command again. It reports what it found (`Found Jelibox v0.1.0 ... updating to v0.2.0`), stops the web server first if one is running, updates in place (the server is started again with the new version), and never touches your datasets, models or configs. If you are already on the newest version it says so and stops (`JELIBOX_FORCE=1` reinstalls anyway). A folder that is a `git` checkout is left alone - use `git pull` there.
+- **Updating:** run the same command again. It reports what it found (`Found Jelibox v0.1.0 ... updating to v0.2.0`), stops the web server first if one is running, updates in place (the server is started again with the new version, and also when the update stops half way, so an update never leaves it switched off), and never touches your datasets, models or configs. If you are already on the newest version it says so and stops (`JELIBOX_FORCE=1` reinstalls anyway). A folder that is a `git` checkout is left alone - use `git pull` there.
 - **Find the install folder:** click **Open Folder** in the workspace picker toolbar (next to Add Workspace).
 - **Move it somewhere else:** click **Move Jelibox** in the desktop workspace picker (not in the web page) and choose a folder. If the web server is installed, run the installer once more afterwards (answer *App + web*) so it points at the new folder. Jelibox creates `<folder>/Jelibox`, builds a fresh virtual environment there (same package versions, needs internet), moves your datasets, models and configs over, and deletes the old venv and folder. If anything fails before the files are moved, the old install is left untouched.
 - **A specific version:** set `JELIBOX_VERSION` first, for example `$env:JELIBOX_VERSION="v0.1.0"` (PowerShell) or `JELIBOX_VERSION=v0.1.0 curl ... | bash`. Use `main` for the latest development version (changes not in a release yet). Other options: `JELIBOX_GPU` (`nvidia` or `cpu`, skips the GPU question), `JELIBOX_WEB` (`yes` or `no`, skips the app + web question), `JELIBOX_HOME` (install location), `JELIBOX_NO_INSTALL=1` (download and unpack only) and `JELIBOX_FORCE=1` (reinstall even if current). If `uv` is already on your machine it is reused.
@@ -314,6 +317,7 @@ configs/_users.json                  Web version: accounts (password hashes)
 export dataset/<workspace>/          Exported datasets (desktop; the web downloads instead)
 export model/<workspace>/            Exported model files (desktop; the web downloads instead)
 temp/downloads/                      Web version: exports waiting to be downloaded (removed after a few hours)
+temp/stream/                         Videos uploaded or downloaded for Stream (Clear cache empties it)
 ```
 
 `YOLOdataset/<workspace>/` also doubles as scratch space during training: a

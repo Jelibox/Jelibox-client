@@ -18,6 +18,8 @@ set FAILED=0
 set TORCH_STATUS=SUCCESS
 set CLIP_STATUS=SUCCESS
 set WEB_STATUS=SUCCESS
+set WEB_WAS_RUNNING=0
+set WEB_RESTARTED=0
 set WEB_CHOICE=yes
 set GPU_TYPE=CPU
 set ARCH=x64
@@ -181,8 +183,15 @@ if "%WEB_CHOICE%"=="yes" (
 ) else (
     echo [OK] Installing: app only.
 )
-:: An update must not run under the old server: stop it before any package is replaced.
-if exist "%~dp0tools\web_service.ps1" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\web_service.ps1" -Action stop -Root "%~dp0." >nul 2>&1
+:: An update must not run under the old server: stop it before any package is replaced. A server that was running
+:: (install.ps1 may have stopped it already and says so in JELIBOX_WEB_WAS_RUNNING) is started again at the end, and
+:: also at :FINISH when this installer stops half way, so an update never leaves the web version switched off.
+if "%JELIBOX_WEB_WAS_RUNNING%"=="1" set WEB_WAS_RUNNING=1
+if exist "%~dp0tools\web_service.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\web_service.ps1" -Action status -Root "%~dp0." >nul 2>&1
+    if not errorlevel 1 set WEB_WAS_RUNNING=1
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\web_service.ps1" -Action stop -Root "%~dp0." >nul 2>&1
+)
 
 :: =========================================================
 :: 1b. VISUAL C++ RUNTIME (required by PyTorch)
@@ -370,10 +379,12 @@ if "%FAILED%"=="1" goto WEB_SKIP
 echo.
 if "%WEB_CHOICE%"=="no" (
     powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\web_service.ps1" -Action remove -Root "%~dp0."
+    set WEB_RESTARTED=1
 ) else if not "%WEB_STATUS%"=="FAILED" (
     echo [*] Starting the Jelibox web server and adding it to Windows Startup...
     powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\web_service.ps1" -Action install -Root "%~dp0."
     if errorlevel 1 set WEB_STATUS=NOTSTARTED
+    set WEB_RESTARTED=1
 )
 :WEB_SKIP
 
@@ -437,6 +448,12 @@ echo Please check your internet connection or permissions.
 echo =========================================================
 
 :FINISH
+:: The server that was running is started again when the update did not get as far as starting it itself.
+if "%WEB_WAS_RUNNING%"=="1" if not "%WEB_CHOICE%"=="no" if not "%WEB_RESTARTED%"=="1" (
+    echo.
+    echo [*] The update did not finish - starting the web server again.
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\web_service.ps1" -Action start -Root "%~dp0." >nul 2>&1
+)
 echo.
 pause
 exit

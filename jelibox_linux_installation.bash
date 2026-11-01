@@ -50,10 +50,24 @@ if [ -z "$WEB_CHOICE" ]; then
     esac
 fi
 echo "[OK] Installing: $([ "$WEB_CHOICE" = "yes" ] && echo 'app + web version' || echo 'app only')"
-# An update must not run under the old server: stop it before any package is replaced.
+# An update must not run under the old server: stop it before any package is replaced. A server that was running
+# (install.sh may have stopped it already and says so in JELIBOX_WEB_WAS_RUNNING) is started again at the end, and
+# also when this script stops half way (bring_web_back), so an update never leaves the web version switched off.
+WEB_WAS_RUNNING=0
+[ "${JELIBOX_WEB_WAS_RUNNING:-}" != "1" ] || WEB_WAS_RUNNING=1
+WEB_BACK=0
 if [ -f "$SCRIPT_DIR/tools/web_service.sh" ]; then
+    if bash "$SCRIPT_DIR/tools/web_service.sh" status "$APP_PATH" >/dev/null 2>&1; then WEB_WAS_RUNNING=1; fi
     bash "$SCRIPT_DIR/tools/web_service.sh" stop "$APP_PATH" >/dev/null 2>&1 || true
 fi
+bring_web_back() {
+    if [ "$WEB_WAS_RUNNING" = 1 ] && [ "$WEB_BACK" != 1 ] && [ "$WEB_CHOICE" != "no" ]; then
+        echo "[*] The update did not finish - starting the web server again."
+        bash "$SCRIPT_DIR/tools/web_service.sh" start "$APP_PATH" >/dev/null 2>&1 \
+            || echo "[WARNING] The web server did not start. Try:  bash tools/web_service.sh start"
+    fi
+}
+trap bring_web_back EXIT
 
 # ──────────────────────────────────────────
 # PYTHON
@@ -255,9 +269,11 @@ fi
 # ──────────────────────────────────────────
 if [ "$WEB_CHOICE" = "no" ]; then
     bash "$SCRIPT_DIR/tools/web_service.sh" remove "$APP_PATH" || true
+    WEB_BACK=1
 elif [ "$WEB_STATUS" = "ok" ]; then
     echo "[*] Starting the Jelibox web server and adding it to your systemd user services..."
     bash "$SCRIPT_DIR/tools/web_service.sh" install "$APP_PATH" || WEB_STATUS="notstarted"
+    WEB_BACK=1                       # install restarts the server with the new code; nothing left for bring_web_back
 fi
 printf '%s\n' "$WEB_CHOICE" > "$APP_PATH/.jelibox-web" 2>/dev/null || true
 

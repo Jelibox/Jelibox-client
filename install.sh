@@ -251,6 +251,8 @@ main() {
 
     # An update must not run under the old server: stop it before any file or package is replaced.
     if [ "$existing" = "1" ] && [ -f "$dest/tools/web_service.sh" ]; then
+        # Remember that it was running: the installer script starts it again when it is done, or if it stops half way.
+        if bash "$dest/tools/web_service.sh" status "$dest" >/dev/null 2>&1; then export JELIBOX_WEB_WAS_RUNNING=1; fi
         bash "$dest/tools/web_service.sh" stop "$dest" >/dev/null 2>&1 || true
     fi
 

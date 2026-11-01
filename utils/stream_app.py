@@ -38,6 +38,7 @@ import base64
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, _ROOT)
+from utils import stream_support as ss  # noqa: E402
 from utils import theme as T  # noqa: E402
 
 try:
@@ -210,15 +211,16 @@ with ctrl_col:
         target_vid = None
         
         if yt_url.strip() != "":
-            with st.spinner("Mengekstrak YouTube Stream..."):
-                ydl_opts = {'format': 'best[height<=720][ext=mp4]/best'}
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info_dict = ydl.extract_info(yt_url, download=False)
-                        target_vid = info_dict['url']
-                except Exception as e:
-                    st.error(f"Could not load YouTube: {e}")
-                    st.session_state.streaming = False
+            # OpenCV cannot open the address yt-dlp finds, so the video is downloaded to temp/stream and read from there
+            bar = st.progress(0.0, text="Downloading from YouTube ...")
+            try:
+                target_vid = ss.download_youtube(
+                    yt_url, ss.stream_folder(_ROOT),
+                    progress=lambda pct, text: bar.progress(min(1.0, pct / 100), text=text))
+            except (ss.StreamError, ValueError) as e:
+                st.error(str(e))
+                st.session_state.streaming = False
+            bar.empty()
         else:
             suffix = os.path.splitext(uploaded_file.name)[-1]
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -228,7 +230,13 @@ with ctrl_col:
         if target_vid:
             st.session_state.target_vid = target_vid
             st.session_state.cap = cv2.VideoCapture(target_vid)
-            st.rerun() 
+            if not st.session_state.cap.isOpened():
+                st.error("This video could not be opened.")
+                st.session_state.streaming = False
+                st.session_state.cap.release()
+                st.session_state.cap = None
+            else:
+                st.rerun()
 
     if stop_btn:
         st.session_state.streaming = False
@@ -288,6 +296,9 @@ with feed_col:
                 if not ret:
                     st.session_state.cap.release()
                     st.session_state.cap = cv2.VideoCapture(st.session_state.target_vid)
+                    if not st.session_state.cap.isOpened():          # the file went away: do not spin on it
+                        st.session_state.streaming = False
+                        break
                     st.session_state.loop_count += 1
                     continue
 

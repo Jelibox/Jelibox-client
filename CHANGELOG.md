@@ -9,6 +9,17 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Added
+- **Stream in the web version.** The Stream button is back in the browser editor: run your trained model on a video you upload or on a YouTube link (the server downloads it, up to 720p) and watch the detections live, with FPS, frames, detections and a confidence slider that works while it plays. Videos are kept in `temp/stream` on the server; **Clear cache** deletes them, together with the junk in `temp/` (unfinished downloads, uploads and exports nobody picked up), after listing what it will delete. Only YouTube links are accepted, and one model job (Stream, Infer, Auto-annotate) runs at a time.
+
+### Fixed
+- **Desktop Stream: a YouTube link is downloaded first and played from the file.** OpenCV cannot open the direct address yt-dlp finds, so a YouTube link never started. If YouTube refuses the download, the page now says why (update yt-dlp, or use a video file) instead of doing nothing, and a video that cannot be opened shows a message instead of looping.
+- **Web: Repeat copied the wrong picture.** Repeat now always copies the picture you just left, like the desktop. It used to remember only the last picture that was actually saved, so after an assistant run left a picture empty, going back to the previous picture and forward again repeated the empty one.
+
+### Changed
+- An update never leaves the web server switched off: if an update stops half way (for example a failed PyTorch download), the web server that was running is started again, on Linux and on Windows. A finished update restarts it with the new code, as before.
+
+
 ## [1.0.2] - 2026-10-29
 
 ### Fixed

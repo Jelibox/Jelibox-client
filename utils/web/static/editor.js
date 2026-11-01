@@ -5,6 +5,7 @@ import { h, api, toast, dialog, confirmBox } from './ui.js';
 import { runAssist, inferDialog, settingsDialog } from './assistant.js';
 import { openExportDataset, openExportModel } from './export.js';
 import { openTrain } from './train.js';
+import { openStream } from './stream.js';
 
 const MIN_BOX = 8;                 // pixels of the original picture (smaller boxes are ignored, like the desktop)
 const HISTORY_LIMIT = 200;
@@ -52,6 +53,7 @@ export function openEditor(root, instance, env) {
     h('div', { class: 'spacer' }),
     hb('Infer', () => inferDialog(ed), { cls: 'primary', title: 'Label this picture or the whole dataset with the Label Assistant (G)' }),
     hb('Label Assistant', () => settingsDialog(ed), { title: 'Settings of the Label Assistant mode chosen on the workspace page' }),
+    hb('Stream', () => openStream(ed), { title: 'Run the trained model on a video file or a YouTube link' }),
     hb('Train', () => openTrain(ed), { title: 'Train a model on this workspace (T)' }),
     hb('Export Model', () => openExportModel(ed), { title: 'Export the trained model (ONNX, TensorRT ...)' }),
     hb('Export Dataset', () => openExportDataset(ed), { title: 'Export the dataset as YOLO, Pascal VOC or COCO' }),
@@ -156,7 +158,6 @@ export function openEditor(root, instance, env) {
       if (name !== S.name) return true;                     // moved on while saving (cannot happen: navigation waits)
       S.version = res.version; S.dirty = false; S.saveState = 'saved';
       S.annotated.add(name);
-      S.prev = clone({ bboxes: S.bboxes, polygons: S.polygons });
       if (res.masks) {                                      // ZeroFill is in the file now: show the real pixels
         S.masks = []; S.undo = []; S.redo = []; S.imgVersion += 1;
         S.img = await loadImg(imageUrl(name));
@@ -230,6 +231,9 @@ export function openEditor(root, instance, env) {
     S.nav = true;                                           // one move at a time: a held key must not race itself
     try {
       if (S.name && !(await saveNow(true))) return;
+      // Repeat copies the picture you just LEFT, saved or not (the desktop does the same). It used to be set only when
+      // a save really happened, so leaving an untouched picture kept the older one.
+      if (S.name) S.prev = clone({ bboxes: S.bboxes, polygons: S.polygons });
       await show(((i % S.images.length) + S.images.length) % S.images.length);
     } finally { S.nav = false; }
   }
@@ -247,7 +251,7 @@ export function openEditor(root, instance, env) {
   }
 
   function repeat() {
-    if (!S.prev) { say('No previous annotations to repeat.'); return; }
+    if (!S.prev || (!S.prev.bboxes.length && !S.prev.polygons.length)) { say('No previous annotations to repeat.'); return; }
     pushUndo();
     S.bboxes = clone(S.prev.bboxes); S.polygons = clone(S.prev.polygons);
     clearSelection(); touch();

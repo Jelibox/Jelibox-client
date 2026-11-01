@@ -52,6 +52,21 @@ class WiringTests(unittest.TestCase):
         self.assertLess(bat.index("-Action stop"), bat.index("[2/6] Preparing"))
         self.assertLess(bash.index("web_service.sh\" stop"), bash.index("tools/setup_python.sh"))
 
+    def test_an_update_that_stops_half_way_starts_the_old_server_again(self):
+        ps, sh = read("install.ps1"), read("install.sh")
+        self.assertLess(ps.index("-Action status"), ps.index("-Action stop"))               # asked while it still runs
+        self.assertIn("$env:JELIBOX_WEB_WAS_RUNNING = '1'", ps)
+        self.assertLess(sh.index('web_service.sh" status'), sh.index('web_service.sh" stop'))
+        self.assertIn("export JELIBOX_WEB_WAS_RUNNING=1", sh)
+        bash, bat = read("jelibox_linux_installation.bash"), read("jelibox_windows_installation.bat")
+        self.assertIn("trap bring_web_back EXIT", bash)                                      # any exit, a failed command included
+        self.assertLess(bash.index("trap bring_web_back EXIT"), bash.index("tools/setup_python.sh"))
+        self.assertLess(bash.index("WEB_BACK=1"), bash.index("INSTALLATION COMPLETED"))
+        self.assertIn("web_service.sh\" start", bash)
+        self.assertIn("JELIBOX_WEB_WAS_RUNNING", bat)
+        self.assertLess(bat.index("\n:FINISH"), bat.rindex("-Action start"))                 # both failure and success end at :FINISH
+        self.assertLess(bat.index("set WEB_RESTARTED=1"), bat.index("\n:FINISH"))
+
     def test_windows_installer_installs_web_packages_and_the_service_only_when_asked(self):
         bat = read("jelibox_windows_installation.bat")
         self.assertEqual(bat.count("choice /c YN"), 3)           # continue? + NVIDIA GPU? + web?
@@ -427,6 +442,213 @@ class AnswerReachesTheInstallerScript(unittest.TestCase):
                            encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
         self.assertIn("Installing: app only", r.stdout, r.stdout + r.stderr)
         self.assertEqual(self.seen(home), "no")
+
+
+FAKE_SERVICE = r'''#!/usr/bin/env bash
+echo "$1" >> "$FAKE_LOG"
+if [ "$1" = "status" ]; then [ "${FAKE_RUNNING:-1}" = "1" ] && exit 0 || exit 1; fi
+exit 0
+'''
+
+
+@unittest.skipUnless(find_bash(), "no working bash available")
+class UpdateKeepsTheServerUp(unittest.TestCase):
+    """An update stops the old server first. Whatever happens next, the one that was running must come back: the real
+    installer script runs here against a fake tools/web_service.sh and a setup_python.sh that fails."""
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="jelibox_upd_")
+        self.addCleanup(shutil.rmtree, self.work, ignore_errors=True)
+        self.app = os.path.join(self.work, "app")
+        os.makedirs(os.path.join(self.app, "tools"))
+        with open(os.path.join(REPO, "jelibox_linux_installation.bash"), encoding="utf-8", newline="") as f:
+            script = f.read().replace("\r\n", "\n")
+        self.script = os.path.join(self.app, "jelibox_linux_installation.bash")
+        for path, text in ((self.script, script), (os.path.join(self.app, "tools", "web_service.sh"), FAKE_SERVICE),
+                           (os.path.join(self.app, "tools", "setup_python.sh"), "#!/usr/bin/env bash\nexit 1\n")):
+            with open(path, "w", newline="\n") as f:
+                f.write(text)
+        self.log = os.path.join(self.work, "calls.log")
+
+    def run_installer(self, **env):
+        e = dict(os.environ, JELIBOX_GPU="cpu", FAKE_LOG=self.log)
+        e.pop("JELIBOX_WEB_WAS_RUNNING", None)
+        e.update(env)
+        r = subprocess.run([find_bash(), self.script], env=e, cwd=self.app, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        calls = []
+        if os.path.exists(self.log):
+            with open(self.log) as f:
+                calls = [line.strip() for line in f]
+        return r, calls
+
+    def test_a_running_server_is_stopped_and_started_again_when_the_update_fails(self):
+        r, calls = self.run_installer(JELIBOX_WEB="yes", FAKE_RUNNING="1")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(calls, ["status", "stop", "start"])
+        self.assertIn("starting the web server again", r.stdout)
+
+    def test_a_server_that_was_not_running_is_left_alone(self):
+        r, calls = self.run_installer(JELIBOX_WEB="yes", FAKE_RUNNING="0")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(calls, ["status", "stop"])
+
+    def test_app_only_does_not_bring_the_server_back(self):
+        r, calls = self.run_installer(JELIBOX_WEB="no", FAKE_RUNNING="1")
+        self.assertEqual(calls, ["status", "stop"])                      # the person asked for the web version to go
+
+    def test_a_server_the_one_line_installer_already_stopped_is_brought_back(self):
+        r, calls = self.run_installer(JELIBOX_WEB="yes", FAKE_RUNNING="0", JELIBOX_WEB_WAS_RUNNING="1")
+        self.assertEqual(calls, ["status", "stop", "start"])
+
+
+FAKE_SERVICE_PS = r'''param([string]$Action, [string]$Root)
+Add-Content -LiteralPath $env:FAKE_LOG -Value $Action
+if ($Action -eq 'status') { if ($env:FAKE_RUNNING -eq '1') { exit 0 } else { exit 1 } }
+exit 0
+'''
+
+
+@unittest.skipUnless(HAVE_PS, "Windows PowerShell only")
+class WindowsUpdateKeepsTheServerUp(unittest.TestCase):
+    """The real .bat runs in a temporary folder against a fake web_service.ps1 and a setup_python.ps1 that fails (no
+    VC_redist folder, so nothing is ever elevated)."""
+
+    def run_installer(self, **env):
+        work = tempfile.mkdtemp(prefix="jelibox_bat_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        os.makedirs(os.path.join(work, "tools"))
+        with open(os.path.join(REPO, "jelibox_windows_installation.bat"), "rb") as f:
+            data = f.read()
+        files = {"jelibox_windows_installation.bat": data,
+                 os.path.join("tools", "web_service.ps1"): FAKE_SERVICE_PS.encode("ascii"),
+                 os.path.join("tools", "setup_python.ps1"): b"exit 1\r\n", ".install-yes": b""}
+        for name, content in files.items():
+            with open(os.path.join(work, name), "wb") as f:
+                f.write(content)
+        log = os.path.join(work, "calls.log")
+        e = dict(os.environ, JELIBOX_GPU="cpu", FAKE_LOG=log)
+        e.pop("JELIBOX_WEB_WAS_RUNNING", None)
+        e.update(env)
+        r = subprocess.run(["cmd", "/c", os.path.join(work, "jelibox_windows_installation.bat")], env=e, cwd=work,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
+                           timeout=180)
+        out = r.stdout + r.stderr
+        if "No internet connection" in out:
+            self.skipTest("the installer needs internet access to get this far")
+        calls = []
+        if os.path.exists(log):
+            with open(log) as f:
+                calls = [line.strip() for line in f]
+        return out, calls
+
+    def test_a_running_server_is_started_again_when_the_update_fails(self):
+        out, calls = self.run_installer(JELIBOX_WEB="yes", FAKE_RUNNING="1")
+        self.assertEqual(calls, ["status", "stop", "start"], out)
+        self.assertIn("starting the web server again", out)
+
+    def test_a_server_that_was_not_running_is_left_alone(self):
+        out, calls = self.run_installer(JELIBOX_WEB="yes", FAKE_RUNNING="0")
+        self.assertEqual(calls, ["status", "stop"], out)
+
+    def test_app_only_does_not_bring_the_server_back(self):
+        out, calls = self.run_installer(JELIBOX_WEB="no", FAKE_RUNNING="1")
+        self.assertEqual(calls, ["status", "stop"], out)
+
+    def test_a_server_the_one_line_installer_already_stopped_is_brought_back(self):
+        out, calls = self.run_installer(JELIBOX_WEB="yes", FAKE_RUNNING="0", JELIBOX_WEB_WAS_RUNNING="1")
+        self.assertEqual(calls, ["status", "stop", "start"], out)
+
+
+@unittest.skipUnless(HAVE_PS, "Windows PowerShell only")
+class WindowsOneLineInstallerRemembersTheServer(unittest.TestCase):
+    """install.ps1 stops the server before it replaces files, and tells the installer script that it was running."""
+
+    def run_update(self, running):
+        import time
+        import zipfile
+        work = tempfile.mkdtemp(prefix="jelibox_updps_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        home = os.path.join(work, "home")
+        os.makedirs(os.path.join(home, "tools"))
+        os.makedirs(os.path.join(home, "utils"))
+        open(os.path.join(home, "utils", "AnnotationGUI.py"), "w").close()      # an install is here: this is an update
+        with open(os.path.join(home, "tools", "web_service.ps1"), "wb") as f:
+            f.write(FAKE_SERVICE_PS.encode("ascii"))
+        archive = os.path.join(work, "a.zip")
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("Top/jelibox_windows_installation.bat",
+                       '@echo off\r\nif defined JELIBOX_WEB_WAS_RUNNING (>"%~dp0seen.txt" echo %JELIBOX_WEB_WAS_RUNNING%) '
+                       'else (>"%~dp0seen.txt" echo unset)\r\n')                    # "echo 1> file" would redirect handle 1
+            z.writestr("Top/utils/AnnotationGUI.py", "")
+        log = os.path.join(work, "calls.log")
+        env = dict(os.environ, JELIBOX_ARCHIVE=archive, JELIBOX_HOME=home, JELIBOX_GPU="cpu", JELIBOX_WEB="yes",
+                   FAKE_LOG=log, FAKE_RUNNING="1" if running else "0")
+        for name in ("JELIBOX_NO_INSTALL", "JELIBOX_VERSION", "JELIBOX_WEB_WAS_RUNNING"):
+            env.pop(name, None)
+        script = os.path.join(REPO, "install.ps1")
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", f"Get-Content -Raw -LiteralPath '{script}' | Invoke-Expression"],
+                           env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        seen, path = None, os.path.join(home, "seen.txt")
+        for _ in range(60):                                        # the .bat is started in its own window
+            if os.path.exists(path) and os.path.getsize(path):
+                with open(path) as f:
+                    seen = f.read().strip()
+                break
+            time.sleep(0.25)
+        with open(log) as f:
+            calls = [line.strip() for line in f]
+        return seen, calls, r.stdout + r.stderr
+
+    def test_it_reports_a_running_server(self):
+        seen, calls, out = self.run_update(running=True)
+        self.assertEqual((seen, calls), ("1", ["status", "stop"]), out)
+
+    def test_it_reports_nothing_when_no_server_was_running(self):
+        seen, calls, out = self.run_update(running=False)
+        self.assertEqual((seen, calls), ("unset", ["status", "stop"]), out)
+
+
+@unittest.skipUnless(find_bash() and shutil.which("tar"), "no working bash/tar available")
+class OneLineInstallerRemembersTheServer(unittest.TestCase):
+    """install.sh stops the server before it replaces files, and tells the installer script that it was running."""
+
+    def run_update(self, running):
+        import tarfile
+        work = tempfile.mkdtemp(prefix="jelibox_upd_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        home = os.path.join(work, "home")
+        os.makedirs(os.path.join(home, "tools"))
+        os.makedirs(os.path.join(home, "utils"))
+        open(os.path.join(home, "utils", "AnnotationGUI.py"), "w").close()      # an install is here: this is an update
+        with open(os.path.join(home, "tools", "web_service.sh"), "w", newline="\n") as f:
+            f.write(FAKE_SERVICE)
+        stub = os.path.join(work, "stub.bash")
+        with open(stub, "w", newline="\n") as f:
+            f.write('echo "${JELIBOX_WEB_WAS_RUNNING:-unset}" > "$(dirname "$0")/seen.txt"\n')
+        archive = os.path.join(work, "a.tar.gz")
+        with tarfile.open(archive, "w:gz") as t:
+            t.add(stub, arcname="Top/jelibox_linux_installation.bash")
+        log = os.path.join(work, "calls.log")
+        env = dict(os.environ, JELIBOX_ARCHIVE=archive, JELIBOX_HOME=home, JELIBOX_GPU="cpu", JELIBOX_WEB="yes",
+                   FAKE_LOG=log, FAKE_RUNNING="1" if running else "0")
+        for name in ("JELIBOX_NO_INSTALL", "JELIBOX_VERSION", "JELIBOX_WEB_WAS_RUNNING"):
+            env.pop(name, None)
+        r = subprocess.run([find_bash(), "-c", 'cat "$1" | bash', "_", os.path.join(REPO, "install.sh")], env=env,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        with open(os.path.join(home, "seen.txt")) as f:
+            seen = f.read().strip()
+        with open(log) as f:
+            calls = [line.strip() for line in f]
+        return seen, calls, r.stdout + r.stderr
+
+    def test_it_reports_a_running_server(self):
+        seen, calls, out = self.run_update(running=True)
+        self.assertEqual((seen, calls), ("1", ["status", "stop"]), out)
+
+    def test_it_reports_nothing_when_no_server_was_running(self):
+        seen, calls, out = self.run_update(running=False)
+        self.assertEqual((seen, calls), ("unset", ["status", "stop"]), out)
 
 
 if __name__ == "__main__":

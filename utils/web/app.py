@@ -17,8 +17,9 @@ from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .. import assistant_modes, workspace_counts, workspace_manager
-from . import analysis_api, assistant_api, editor_api, export_api, sysmon, workspaces_api
+from . import analysis_api, assistant_api, editor_api, export_api, stream_api, sysmon, workspaces_api
 from .exporting import Downloads
+from .streaming import Streams
 from .training import TrainingManager
 from .importing import Uploads
 from .jobs import JobManager
@@ -61,6 +62,7 @@ def create_app(users_path=None, base_dir=BASE_DIR):
     uploads = Uploads(os.path.join(base_dir, "temp", "uploads"))
     downloads = Downloads(os.path.join(base_dir, "temp", "downloads"))
     trainer = TrainingManager(base_dir)
+    streams = Streams(base_dir)
 
     # ---------------------------------------------------------------- guards
     def user_of(request):
@@ -238,6 +240,7 @@ def create_app(users_path=None, base_dir=BASE_DIR):
         *editor_api.routes(guard, base_dir),
         *assistant_api.routes(guard, jobs, base_dir),
         *export_api.routes(guard, jobs, base_dir, downloads, trainer),
+        *stream_api.routes(guard, jobs, base_dir, streams),
         Route("/api/{rest:path}", not_found),
         Mount("/static", StaticFiles(directory=STATIC_DIR), name="static"),
     ]
@@ -246,4 +249,5 @@ def create_app(users_path=None, base_dir=BASE_DIR):
     app.state.trainer = trainer
     app.state.jobs = jobs
     app.state.downloads = downloads
+    app.state.streams = streams
     return app

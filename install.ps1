@@ -229,6 +229,11 @@ function Install-Jelibox {
         # An update must not run under the old server: stop it before any file or package is replaced.
         $service = Join-Path $dest 'tools\web_service.ps1'
         if ($existing -and (Test-Path -LiteralPath $service)) {
+            # Remember that it was running: the installer starts it again when it is done, or if it stops half way.
+            try {
+                & powershell -NoProfile -ExecutionPolicy Bypass -File $service -Action status -Root $dest | Out-Null
+                if ($LASTEXITCODE -eq 0) { $env:JELIBOX_WEB_WAS_RUNNING = '1' }
+            } catch { }
             try { & powershell -NoProfile -ExecutionPolicy Bypass -File $service -Action stop -Root $dest | Out-Null } catch { }
         }
 

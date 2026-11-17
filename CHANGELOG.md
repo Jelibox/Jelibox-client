@@ -9,9 +9,11 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Changed
+## [1.2.0] - 2026-11-17
 
-- **The picture list can be limited to one class.** A **Class** box under the search field (app and web) lists only the pictures that have an object of that class, for example every picture with "person". It combines with the text search.
+### Changed
+
+- **The picture list can be limited to one class.** A **Class** box under the search field (app and web) lists only the pictures that have an object of that class, for example every picture with "person". It combines with the text search.
 - A class name can now be up to 32 characters long (was 16), in the app and in the web.
 
 ## [1.1.1] - 2026-11-01
@@ -238,7 +240,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Jelibox/Jelibox-client/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/Jelibox/Jelibox-client/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/Jelibox/Jelibox-client/compare/v1.0.1...v1.0.2

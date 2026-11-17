@@ -73,10 +73,12 @@ export function openEditor(root, instance, env) {
 
   const info = h('pre', { class: 'ed-info' });
   const search = h('input', { type: 'text', placeholder: 'Search pictures', class: 'ed-search', oninput: () => { S.filter = search.value.toLowerCase(); renderImages(); } });
+  const classFilter = h('select', { class: 'ed-search', title: 'Only pictures that contain this class', onchange: () => pickClassFilter() },
+    h('option', { value: '' }, 'All classes'));
   const imageList = h('div', { class: 'ed-images' });
   const right = h('div', { class: 'ed-right' },
     h('div', { class: 'ed-sec' }, h('span', {}, 'INFORMATION')), info,
-    h('div', { class: 'ed-sec' }, h('span', {}, 'IMAGES')), search, imageList);
+    h('div', { class: 'ed-sec' }, h('span', {}, 'IMAGES')), search, classFilter, imageList);
 
   const modeBadge = h('span', { class: 'ed-badge' });
   const forceLabel = h('span', { class: 'ed-force' });
@@ -653,16 +655,16 @@ export function openEditor(root, instance, env) {
 
   // ================================================================== classes
   function addClassDialog() {
-    const name = h('input', { type: 'text', maxlength: 16, placeholder: 'letters, digits, _ or -' });
+    const name = h('input', { type: 'text', maxlength: 32, placeholder: 'letters, digits, _ or -' });
     const error = h('div', { class: 'error', hidden: true });
-    const body = h('div', {}, h('label', {}, 'Class name (16 characters at most)'), name, error);
+    const body = h('div', {}, h('label', {}, 'Class name (32 characters at most)'), name, error);
     const overlay = dialog('Add class', body);
     const submit = async () => {
       try {
         if (!(await saveNow())) return;
         const res = await api(`ws/${enc(S.instance)}/classes`, 'POST', { name: name.value.trim() });
         S.classes = res.classes; S.curClass = name.value.trim();
-        overlay.remove(); renderClasses(); renderVisibility(); updatePanels();
+        overlay.remove(); renderClasses(); renderClassFilter(); renderVisibility(); updatePanels();
       } catch (err) { error.textContent = err.message; error.hidden = false; }
     };
     name.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
@@ -685,7 +687,7 @@ export function openEditor(root, instance, env) {
       S.hidden.delete(cls);
       S.curClass = S.classes.length ? S.classes[0].name : null;
       await reloadAnnotations();
-      renderClasses(); renderVisibility(); renderImages();
+      renderClasses(); renderClassFilter(); renderVisibility(); renderImages();
       say(res.message);
     } catch (err) { say(err.message); }
   }
@@ -703,10 +705,31 @@ export function openEditor(root, instance, env) {
       return h('label', { class: 'ed-visrow' }, box, h('span', {}, c.name), h('b', { 'data-count': c.name }, '0'));
     }));
   }
+  // Picture list limited to a class: the server answers from the saved XML files, and the open picture is kept
+  // up to date from the screen (it may hold edits that are not saved yet).
+  async function pickClassFilter() {
+    S.classFilter = classFilter.value;
+    S.byClass = null;
+    if (S.classFilter) {
+      try { S.byClass = (await api(`ws/${enc(S.instance)}/by-class`)).classes; } catch (err) { say(err.message); S.classFilter = ''; classFilter.value = ''; }
+    }
+    renderImages();
+  }
+  function hasClass(name) {
+    if (name === S.name) return S.bboxes.some((b) => b[4] === S.classFilter) || S.polygons.some((p) => p[1] === S.classFilter);
+    return ((S.byClass || {})[S.classFilter] || []).includes(name);
+  }
+  function renderClassFilter() {
+    const keep = S.classFilter || '';
+    classFilter.replaceChildren(h('option', { value: '' }, 'All classes'), ...S.classes.map((c) => h('option', { value: c.name }, c.name)));
+    classFilter.value = S.classes.some((c) => c.name === keep) ? keep : '';
+    S.classFilter = classFilter.value;
+  }
   function renderImages() {
     const rows = [];
     S.images.forEach((name, i) => {
       if (S.filter && !name.toLowerCase().includes(S.filter)) return;
+      if (S.classFilter && !hasClass(name)) return;
       rows.push(h('div', { class: 'ed-img' + (i === S.idx ? ' on' : '') + (S.annotated.has(name) ? ' done' : ''), 'data-i': i, title: name,
         onclick: () => go(i) }, name));
     });
@@ -830,7 +853,7 @@ export function openEditor(root, instance, env) {
       S.images = info0.images; S.annotated = new Set(info0.annotated); S.classes = info0.classes;
       S.curClass = S.classes.length ? S.classes[0].name : null;
       if (!S.images.length) { say('This dataset has no pictures.'); env.home(); return; }
-      renderClasses(); renderVisibility(); resize();
+      renderClasses(); renderClassFilter(); renderVisibility(); resize();
       let first = 0;
       try { first = Math.max(0, S.images.indexOf(localStorage.getItem('jelibox-last-' + instance))); } catch (e) { /* private mode */ }
       await show(first);

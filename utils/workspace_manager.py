@@ -120,8 +120,8 @@ def parse_classes_input(text):
         name = raw.strip()
         if not name:
             raise ValueError("Found an empty class name - check for stray commas.")
-        if len(name) > 16:
-            raise ValueError(f"Class name '{name}' is too long (max 16 characters).")
+        if len(name) > 32:
+            raise ValueError(f"Class name '{name}' is too long (max 32 characters).")
         if not name.replace("_", "").replace("-", "").isalnum():
             raise ValueError(f"Class name '{name}' can only contain letters, numbers, underscore (_), and dash (-).")
         if name in seen:

@@ -60,6 +60,9 @@ def routes(guard, base_dir):
             on_saved=(lambda path, boxes, polys: assistant.sam_store(ws.name).remember(path, boxes, polys))
             if reviewed else None))
 
+    async def by_class(request):
+        return await run(request, lambda ws: {"classes": ws.pictures_by_class()})
+
     async def delete_image(request):
         name = request.path_params["name"]
 
@@ -94,6 +97,7 @@ def routes(guard, base_dir):
         Route(base + "/image/{name}", image),
         Route(base + "/annotations/{name}", annotations, methods=["GET", "PUT"]),
         Route(base + "/images/{name}", delete_image, methods=["DELETE"]),
+        Route(base + "/by-class", by_class),
         Route(base + "/classes", classes, methods=["GET", "POST"]),
         Route(base + "/classes/{class_name}", class_item, methods=["DELETE"]),
     ]

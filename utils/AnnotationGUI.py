@@ -32,6 +32,7 @@ from .LabelAssistantDialog import open_label_assistant
 from .HeadTrainDialog import HeadTrainDialog, open_head_training
 from . import export as export_module
 from . import dataset_export
+from . import annotation_io
 import threading
 import webbrowser
 import json
@@ -616,6 +617,19 @@ class AnnotationGUI:
             highlightthickness=0
         )
         self.image_search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=4)
+
+        # — Class filter (only pictures that contain the chosen class) —
+        class_bar = tk.Frame(right_panel, bg=C_PANEL)
+        class_bar.pack(fill=tk.X, padx=6, pady=(0, 2))
+        tk.Label(class_bar, text="Class", bg=C_PANEL, fg=C_TXT3,
+                 font=('Segoe UI', 8)).pack(side=tk.LEFT, padx=(2, 6))
+        self.ALL_CLASSES = "All classes"
+        self.image_class_var = tk.StringVar(value=self.ALL_CLASSES)
+        self.image_class_combo = ttk.Combobox(class_bar, textvariable=self.image_class_var, state='readonly',
+                                              values=[self.ALL_CLASSES], font=('Segoe UI', 9),
+                                              postcommand=self._update_class_filter_values)
+        self.image_class_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.image_class_combo.bind('<<ComboboxSelected>>', lambda e: self.on_image_search_change())
 
         # — Image listbox —
         img_list_wrap = tk.Frame(right_panel, bg=C_PANEL)
@@ -1265,6 +1279,10 @@ class AnnotationGUI:
         self.all_images_for_search = self.images.copy()
         self.on_image_search_change()
 
+    def _update_class_filter_values(self):
+        names = [c for c in class_manager.get_classes()]
+        self.image_class_combo.config(values=[self.ALL_CLASSES] + names)
+
     def on_image_search_change(self, *args):
         search_term = self.image_search_var.get().lower()
         if search_term.strip():
@@ -1272,6 +1290,11 @@ class AnnotationGUI:
                         if search_term in img.lower()]
         else:
             filtered = self.all_images_for_search
+        wanted = self.image_class_var.get()
+        if wanted and wanted != self.ALL_CLASSES:
+            index = annotation_io.class_index(vocdataset_folder)
+            filtered = [img for img in filtered
+                        if wanted in index.get(os.path.splitext(img)[0], ())]
 
         self.image_listbox.delete(0, tk.END)
         for img in filtered:

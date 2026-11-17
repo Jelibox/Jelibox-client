@@ -20,7 +20,7 @@ class ClassManagerTests(unittest.TestCase):
     def test_add_class_validation(self):
         self.assertTrue(self.cm.add_class("cat")[0])
         for bad, why in (("two words", "space"), ("cat!", "symbol"), ("", "empty"),
-                         ("cat", "duplicate"), ("x" * 17, "too long")):
+                         ("cat", "duplicate"), ("x" * 33, "too long")):
             ok, msg = self.cm.add_class(bad)
             self.assertFalse(ok, why)
             self.assertTrue(msg)

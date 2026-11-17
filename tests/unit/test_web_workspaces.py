@@ -132,7 +132,7 @@ class ImportTests(FlowBase):
                  ({"name": "pets-3", "folder": folder}, "suffix"), ({"name": "pets"}, "folder"),
                  ({"name": "pets", "folder": folder, "prefix": "bad prefix!"}, "Prefix"),
                  ({"workspace": "ghost", "folder": folder}, "does not exist"),
-                 ({"name": "pets", "folder": folder, "classes": ["x" * 20]}, "too long")]
+                 ({"name": "pets", "folder": folder, "classes": ["x" * 40]}, "too long")]
         for body, word in cases:
             res = self.post("/api/import", body)
             self.assertEqual(res.status_code, 400, body)

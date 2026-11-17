@@ -156,6 +156,15 @@ class Workspace:
             return []
         return [n for n in self.images() if os.path.splitext(n)[0] in done]
 
+    def pictures_by_class(self):
+        """{class name: [pictures whose saved XML has an object of that class]}, in picture order."""
+        index = aio.class_index(self.voc)
+        out = {}
+        for n in self.images():
+            for cls in index.get(os.path.splitext(n)[0], ()):
+                out.setdefault(cls, []).append(n)
+        return out
+
     def version(self, name):
         try:
             stat = os.stat(self.xml(name))

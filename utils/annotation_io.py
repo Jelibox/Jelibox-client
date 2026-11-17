@@ -245,3 +245,33 @@ def sync_yolo_labels(voc_dir, labels_dir, classes, progress_cb=None):
     if generated:
         print(f"[FILE_HANDLER] Backfilled {generated} missing YOLO label(s) from VOC XML")
     return generated
+
+
+_CLASS_CACHE = {}   # xml path -> ((mtime_ns, size), set of class names)
+
+
+def class_index(voc_dir):
+    """{picture base name: set of class names} from the VOC XML files of a folder. Re-reads only files whose date or
+    size changed; an unreadable file counts as having no objects."""
+    try:
+        files = [f for f in os.listdir(voc_dir) if f.lower().endswith(".xml")]
+    except OSError:
+        return {}
+    index = {}
+    for f in files:
+        path = os.path.join(voc_dir, f)
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        stamp = (st.st_mtime_ns, st.st_size)
+        hit = _CLASS_CACHE.get(path)
+        if hit is None or hit[0] != stamp:
+            try:
+                names = {(o.findtext("name") or "").strip() for o in ET.parse(path).getroot().findall("object")}
+            except (ET.ParseError, OSError):
+                names = set()
+            names.discard("")
+            hit = _CLASS_CACHE[path] = (stamp, names)
+        index[os.path.splitext(f)[0]] = hit[1]
+    return index

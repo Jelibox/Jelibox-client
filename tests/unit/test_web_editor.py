@@ -50,6 +50,15 @@ class OpenTests(EditorBase):
         self.assertRegex(data["classes"][0]["color"], r"^#[0-9a-f]{6}$")
         self.assertEqual((data["instance"], data["workspace"]), (INSTANCE, "pets"))
 
+    def test_lists_the_pictures_of_one_class(self):
+        self.save("a.png", bboxes=[[10, 10, 50, 50, "cat"]])
+        self.save("b.png", bboxes=[[10, 10, 50, 50, "dog"], [60, 60, 90, 90, "cat"]])
+        self.save("c.jpg")
+        got = self.client.get(f"{self.base}/by-class").json()["classes"]
+        self.assertEqual(got, {"cat": ["a.png", "b.png"], "dog": ["b.png"]})
+        self.save("a.png", bboxes=[[10, 10, 50, 50, "dog"]])                   # a changed picture is read again
+        self.assertEqual(self.client.get(f"{self.base}/by-class").json()["classes"]["dog"], ["a.png", "b.png"])
+
     def test_a_workspace_without_classes_gets_the_default_one(self):
         from utils import workspace_config
         workspace_config.set_classes("pets", [])
@@ -225,7 +234,7 @@ class ClassTests(EditorBase):
                          ["cat", "dog", "bird"])
 
     def test_bad_names_are_refused(self):
-        for name in ("", "a b", "dog", "x" * 17, "a/b", None):
+        for name in ("", "a b", "dog", "x" * 33, "a/b", None):
             res = self.client.post(f"{self.base}/classes", json={"name": name}, headers=H)
             self.assertEqual(res.status_code, 400, repr(name))
 

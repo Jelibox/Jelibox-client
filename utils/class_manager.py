@@ -136,8 +136,8 @@ class ClassManager:
             return False, f"Class '{class_name}' already exists"
 
         # Validation: check length
-        if len(class_name) > 16:
-            return False, "Class name is too long (max 16 characters)"
+        if len(class_name) > 32:
+            return False, "Class name is too long (max 32 characters)"
         
         # Tambah class di index paling akhir
         self.classes.append(class_name)

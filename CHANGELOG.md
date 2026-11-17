@@ -9,6 +9,11 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Changed
+
+- **The picture list can be limited to one class.** A **Class** box under the search field (app and web) lists only the pictures that have an object of that class, for example every picture with "person". It combines with the text search.
+- A class name can now be up to 32 characters long (was 16), in the app and in the web.
+
 ## [1.1.1] - 2026-11-01
 
 ### Fixed

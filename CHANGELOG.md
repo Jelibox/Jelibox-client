@@ -9,6 +9,10 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Changed
+
+- **Training uses every GPU, with mixed precision.** Full YOLO training now runs on all the NVIDIA GPUs PyTorch can see (for example the two T4s of a Kaggle notebook) instead of only the first, and mixed precision (AMP) is on whenever a GPU is used (it was always off), which is faster and needs less GPU memory. With several GPUs the batch is rounded down to a multiple of their number so each gets the same share, the table still shows one row per epoch, and **Finish early** takes effect at the end of the running epoch. **Stop now** ends all the GPU workers (on Linux too). One GPU or the CPU: nothing changes except AMP. `requirements.txt` gains `cloudpickle`; run the installer again to get it (Ultralytics would otherwise install it at the first multi-GPU run).
+
 ## [1.3.0] - 2026-11-25
 
 ### Changed

@@ -6,6 +6,7 @@
 # --- YOLO-World, custom-trained dual-head models, training ------------------------------------------------------
 ultralytics>=8.4.68           # custom dual-head models need 8.4.68 or newer (it also brings opencv, numpy, scipy, ...)
 matplotlib                    # Analyze Dataset charts (ultralytics already brings it in)
+cloudpickle                   # training on several GPUs: Ultralytics hands its callbacks to the per-GPU workers with it
 streamlit
 yt-dlp[default]               # Stream: YouTube links. [default] brings yt-dlp-ejs, the scripts YouTube needs to hand out formats
 deno; (sys_platform == "win32" and platform_machine == "AMD64") or sys_platform == "darwin" or (sys_platform == "linux" and (platform_machine == "x86_64" or platform_machine == "aarch64"))   # the JavaScript runtime yt-dlp wants for YouTube: the Deno team's own pip package, lives in this environment (no PATH, no system install); wheels exist for these only

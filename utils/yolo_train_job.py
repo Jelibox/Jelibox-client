@@ -17,11 +17,17 @@ the head trainer: frames of a video are near-duplicates and a random split would
 to stop: it leaves the loop, validates, saves, and then runs its usual final evaluation of best.pt, so the run ends
 properly instead of being killed.
 
+GPUs: every GPU PyTorch can see is used (Ultralytics multi-GPU, one worker per GPU), with mixed precision (AMP) on. With
+several GPUs the callbacks run in each worker, so only the first one reports; "Finish early" then takes effect at the
+end of the running epoch (Ultralytics shares the stop between the workers there).
+
 Needs torch + ultralytics. Import this module only when a model is actually trained.
 """
+import csv
 import json
 import os
 import shutil
+import signal
 import sys
 import time
 
@@ -36,12 +42,63 @@ def emit(event, **fields):
 
 
 def pick_device():
-    """0 (the first NVIDIA GPU) when PyTorch can use one, otherwise 'cpu'."""
+    """0 (the first NVIDIA GPU) when PyTorch can use one, "0,1,..." (all of them) when there are several, otherwise 'cpu'."""
     try:
         import torch
-        return 0 if torch.cuda.is_available() else "cpu"
+        count = torch.cuda.device_count() if torch.cuda.is_available() else 0
     except Exception:
         return "cpu"
+    if count > 1:
+        return ",".join(str(i) for i in range(count))
+    return 0 if count else "cpu"
+
+
+def gpu_count(device):
+    """How many GPUs a device value means: 0 for the CPU, 1 for 0 / "cuda" / "1", 2 for "0,1" ..."""
+    return 0 if str(device) == "cpu" else len(str(device).split(","))
+
+
+def device_label(device):
+    count = gpu_count(device)
+    return "cpu" if count == 0 else "cuda" if count == 1 else f"cuda x{count}"
+
+
+def _main_rank():
+    """Several GPUs: Ultralytics starts one worker per GPU (RANK 0, 1 ...) and each runs our callbacks; only the first reports."""
+    return int(os.environ.get("RANK", "-1")) in (-1, 0)
+
+
+def _end_with_workers():
+    """Linux, several GPUs: Ultralytics starts the workers as children of this process. Put them all in one process group
+    that SIGTERM (Stop now, or Jelibox ending) kills at once, so no worker keeps the GPUs busy afterwards. (Windows: the
+    window's taskkill /T and the job object already take the whole tree.)"""
+    if os.name != "posix":
+        return
+    os.setpgrp()
+
+    def kill_group(signum, frame):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        os.killpg(0, signal.SIGKILL)
+    signal.signal(signal.SIGTERM, kill_group)
+
+
+def _results_from_csv(save_dir):
+    """Several GPUs: the callbacks ran in the workers, so the summary reads results.csv, which Ultralytics writes after every
+    epoch. Returns (the last epoch's scores, best epoch, best fitness); the best epoch is the one with the best
+    0.1 * mAP50 + 0.9 * mAP50-95, Ultralytics' own fitness for boxes."""
+    rows = []
+    try:
+        with open(os.path.join(save_dir, "results.csv"), newline="", encoding="utf-8") as f:
+            for raw in csv.DictReader(f):
+                row = {str(k).strip(): v for k, v in raw.items()}
+                rows.append(dict(epoch=int(float(row["epoch"])), map50=_metric(row, "metrics/mAP50(B)"),
+                                 map5095=_metric(row, "metrics/mAP50-95(B)")))
+    except (OSError, KeyError, ValueError):
+        pass
+    if not rows:
+        return {}, 0, 0.0
+    best = max(rows, key=lambda r: 0.1 * r["map50"] + 0.9 * r["map5095"])
+    return rows[-1], best["epoch"], 0.1 * best["map50"] + 0.9 * best["map5095"]
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -184,6 +241,8 @@ def _evaluate_test(job, yaml_path, best_path, n_test, device, emit):
         return {}
     emit("status", text=f"Evaluating the best model on the {n_test} test pictures it has never seen ...")
     try:
+        if gpu_count(device) > 1:                                # validation runs on one GPU
+            device = int(str(device).split(",")[0])
         result = load_yolo(best_path).val(data=yaml_path, split="test", imgsz=int(job["imgsz"]), device=device,
                                           batch=int(job["batch"]), plots=False, workers=int(job.get("workers", 1)))
         box = result.box
@@ -212,6 +271,13 @@ def train(job, emit=emit):
     device = job.get("device")
     if device is None:                                          # 0 is a real choice (the first GPU), so not `or`
         device = pick_device()
+    gpus = gpu_count(device)
+    batch = int(job["batch"])
+    if gpus > 1:
+        _end_with_workers()
+        if batch % gpus or batch < gpus:                         # every GPU gets the same share of the batch
+            batch = max(batch - batch % gpus, gpus)
+            emit("status", text=f"{gpus} GPUs: the batch is set to {batch} so every GPU gets {batch // gpus}.")
 
     emit("status", text="Preparing the training images ...")
     prepared = prepare(job, lambda done, total, text: emit("prepare", done=done, total=total, text=text))
@@ -226,9 +292,11 @@ def train(job, emit=emit):
         best = {"fitness": -1.0, "epoch": 0, "last": {}}
 
         def on_train_start(trainer):
+            if not _main_rank():
+                return
             emit("start", kind="yolo", train_images=n_train, val_images=n_val, test_images=n_test, background_images=n_background,
                  classes=classes, counts=counts,
-                 epochs=epochs, device="cuda" if device == 0 else str(device), batch=int(job["batch"]), imgsz=[imgsz, imgsz],
+                 epochs=epochs, device=device_label(device), batch=batch, imgsz=[imgsz, imgsz],
                  model=os.path.basename(str(job["init_weights"])), freeze=int(job.get("freeze", 0)))
 
         finished = {"epoch": False}
@@ -237,6 +305,8 @@ def train(job, emit=emit):
             finished["epoch"] = True
 
         def on_epoch_end(trainer):
+            if not _main_rank():
+                return
             # Ultralytics' final evaluation of best.pt calls this too (with epoch + 1): that is no epoch, only the
             # epochs that ended their training part (on_train_epoch_end just before) get a row
             if not finished["epoch"]:
@@ -272,7 +342,8 @@ def train(job, emit=emit):
             if not asked["early"] and stop_file and os.path.exists(stop_file):
                 asked["early"] = True
                 trainer.stop = True
-                emit("status", text="Finishing early: validating this epoch, then the final evaluation ...")
+                if _main_rank():
+                    emit("status", text="Finishing early: validating this epoch, then the final evaluation ...")
 
         model.add_callback("on_train_start", on_train_start)
         model.add_callback("on_train_batch_end", finish_early)
@@ -281,16 +352,20 @@ def train(job, emit=emit):
         model.add_callback("on_fit_epoch_end", finish_early)
         emit("status", text="Starting Ultralytics: it checks every picture and label first, which can take a minute "
                             "before the first epoch shows up ...")
-        model.train(data=yaml_path, epochs=epochs, imgsz=imgsz, batch=int(job["batch"]), optimizer="AdamW",
+        model.train(data=yaml_path, epochs=epochs, imgsz=imgsz, batch=batch, optimizer="AdamW",
                     lr0=float(job["lr"]), weight_decay=float(job.get("weight_decay", 0.0005)),
                     freeze=int(job.get("freeze") or 0) or None, project=out, name=RUN_NAME,
-                    exist_ok=True, device=device, amp=False, workers=int(job.get("workers", 1)), plots=False)
+                    exist_ok=True, device=device, amp=gpus > 0, workers=int(job.get("workers", 1)), plots=False)
         save_dir = str(getattr(getattr(model, "trainer", None), "save_dir", "") or os.path.join(out, RUN_NAME))
         best_path = os.path.join(save_dir, "weights", "best.pt")
-        last = best["last"]
+        last, best_epoch, best_fitness = best["last"], best["epoch"], max(best["fitness"], 0.0)
+        stopped = asked["early"]
+        if gpus > 1:                                            # the callbacks ran in the workers, not in this process
+            last, best_epoch, best_fitness = _results_from_csv(save_dir)
+            stopped = bool(stop_file and os.path.exists(stop_file))
         test = _evaluate_test(job, yaml_path, best_path, n_test, device, emit) if n_test else {}
-        summary = dict(**test, best_epoch=best["epoch"], best_fitness=max(best["fitness"], 0.0), epochs_run=last.get("epoch", 0),
-                       stopped=asked["early"], out_dir=out, weights=best_path, has_model=os.path.isfile(best_path),
+        summary = dict(**test, best_epoch=best_epoch, best_fitness=best_fitness, epochs_run=last.get("epoch", 0),
+                       stopped=stopped, out_dir=out, weights=best_path, has_model=os.path.isfile(best_path),
                        classes=classes, map50=last.get("map50"), map5095=last.get("map5095"))
         emit("done", **summary)
         return summary

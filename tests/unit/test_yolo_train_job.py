@@ -417,14 +417,102 @@ class TrainTests(Base):
 
     def test_the_device_is_picked_automatically_when_the_job_names_none(self):
         _, events = self.run_job(self.job(device=None))
-        gpu = types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: True))
-        cpu = types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: False))
-        with mock.patch.dict(sys.modules, {"torch": gpu}):
+        def torch_with(gpus):
+            return types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: gpus > 0, device_count=lambda: gpus))
+        with mock.patch.dict(sys.modules, {"torch": torch_with(1)}):
             self.assertEqual(yj.pick_device(), 0)
-        with mock.patch.dict(sys.modules, {"torch": cpu}):
+        with mock.patch.dict(sys.modules, {"torch": torch_with(2)}):          # every GPU is used
+            self.assertEqual(yj.pick_device(), "0,1")
+        with mock.patch.dict(sys.modules, {"torch": torch_with(0)}):
             self.assertEqual(yj.pick_device(), "cpu")
         with mock.patch.dict(sys.modules, {"torch": None}):               # not installed
             self.assertEqual(yj.pick_device(), "cpu")
+
+
+class GpuTests(Base):
+    """AMP on a GPU, and several GPUs (Ultralytics multi-GPU: one worker per GPU, callbacks run in each of them)."""
+
+    def test_gpu_count_and_label(self):
+        self.assertEqual([yj.gpu_count(d) for d in ("cpu", 0, "cuda", "1", "0,1", "0,1,2")], [0, 1, 1, 1, 2, 3])
+        self.assertEqual([yj.device_label(d) for d in ("cpu", 0, "0,1")], ["cpu", "cuda", "cuda x2"])
+
+    def test_amp_is_on_for_a_gpu_and_off_for_the_cpu(self):
+        self.run_job(self.job(device=0))
+        self.assertIs(FakeYOLO.made[-1].kwargs["amp"], True)
+        self.run_job(self.job(device="cpu"))
+        self.assertIs(FakeYOLO.made[-1].kwargs["amp"], False)
+
+    def test_two_gpus_are_passed_on_with_a_batch_every_gpu_can_share(self):
+        with mock.patch.object(yj, "_end_with_workers") as group:
+            _, events = self.run_job(self.job(device="0,1", batch=15))
+        group.assert_called_once_with()
+        kw = FakeYOLO.made[0].kwargs
+        self.assertEqual((kw["device"], kw["batch"], kw["amp"]), ("0,1", 14, True))
+        start = next(e for e in events if e["event"] == "start")
+        self.assertEqual((start["device"], start["batch"]), ("cuda x2", 14))
+        self.assertTrue(any("batch is set to 14" in e.get("text", "") for e in events if e["event"] == "status"))
+
+    def test_an_even_batch_is_left_alone_and_one_gpu_never_groups_processes(self):
+        with mock.patch.object(yj, "_end_with_workers") as group:
+            self.run_job(self.job(device="0,1", batch=16))
+            self.assertEqual(FakeYOLO.made[-1].kwargs["batch"], 16)
+            group.reset_mock()
+            self.run_job(self.job(device=0, batch=15))
+        group.assert_not_called()
+        self.assertEqual(FakeYOLO.made[-1].kwargs["batch"], 15)
+
+    def test_only_the_first_worker_reports_and_the_summary_comes_from_results_csv(self):
+        def write_results(epoch, batch, trainer):
+            if (epoch, batch) == (0, 0):
+                with open(os.path.join(trainer.save_dir, "results.csv"), "w", encoding="utf-8") as f:
+                    f.write("epoch,train/box_loss,metrics/mAP50(B),metrics/mAP50-95(B)\n")
+                    f.write("1,1.0,0.2,0.1\n2,0.9,0.6,0.4\n3,0.8,0.5,0.3\n")
+        FakeYOLO.on_batch = write_results
+        with mock.patch.object(yj, "_end_with_workers"), mock.patch.dict(os.environ, {"RANK": "1"}):
+            summary, events = self.run_job(self.job(device="0,1"))     # this fake plays worker 1: its callbacks stay silent
+        self.assertEqual([e["event"] for e in events if e["event"] in ("start", "epoch")], [])
+        self.assertEqual((summary["epochs_run"], summary["best_epoch"], summary["stopped"]), (3, 2, False))
+        self.assertAlmostEqual(summary["map50"], 0.5)
+        self.assertAlmostEqual(summary["map5095"], 0.3)
+
+    def test_worker_zero_reports_like_a_single_gpu(self):
+        with mock.patch.object(yj, "_end_with_workers"), mock.patch.dict(os.environ, {"RANK": "0"}):
+            _, events = self.run_job(self.job(device="0,1"))
+        self.assertEqual(len([e for e in events if e["event"] == "epoch"]), 3)
+
+    def test_finish_early_with_several_gpus_is_reported_as_stopped(self):
+        os.makedirs(self.out, exist_ok=True)
+        open(self.job()["stop_file"], "w").close()
+        with mock.patch.object(yj, "_end_with_workers"), mock.patch.dict(os.environ, {"RANK": "1"}):
+            summary, _ = self.run_job(self.job(device="0,1"))
+        self.assertTrue(summary["stopped"])
+
+    def test_results_csv_that_is_missing_or_broken_gives_an_empty_summary(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(yj._results_from_csv(d), ({}, 0, 0.0))
+            with open(os.path.join(d, "results.csv"), "w") as f:
+                f.write("epoch,metrics/mAP50(B)\nx,y\n")
+            self.assertEqual(yj._results_from_csv(d), ({}, 0, 0.0))
+
+    def test_the_callbacks_can_be_pickled_for_the_workers(self):
+        """Ultralytics hands the callbacks to its per-GPU workers through cloudpickle: nothing they hold may be unpicklable."""
+        try:
+            import cloudpickle
+        except ImportError:
+            self.skipTest("cloudpickle is not installed")
+        with mock.patch.object(yj, "_end_with_workers"):
+            self.run_job(self.job(device="0,1"))
+        callbacks = FakeYOLO.made[0].callbacks
+        self.assertTrue(callbacks["on_fit_epoch_end"] and callbacks["on_train_batch_end"])
+        for fns in callbacks.values():
+            for fn in fns:
+                cloudpickle.loads(cloudpickle.dumps(fn))
+
+    def test_the_test_pictures_are_scored_on_the_first_gpu(self):
+        FakeYOLO.val_calls.clear()
+        with mock.patch.object(yj, "_end_with_workers"):
+            self.run_job(self.job(device="0,1", test_fraction=0.17))
+        self.assertEqual([c["device"] for c in FakeYOLO.val_calls], [0])
 
 
 class FinishEarlyTests(Base):

@@ -9,12 +9,14 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Added
+## [1.5.0] - 2026-11-25
 
-- **Add Workspace opens archives.** `.zip`, `.rar` and `.7z` files found anywhere in the folder (desktop and web) are unpacked and read together with the loose files, so annotations in `annotations.rar` and pictures in `fire.part1.rar`, `fire.part2.rar` ... become one dataset. Split archives are recognised by their names (`name.part1.rar`, `name.rar` + `name.r00`, `name.7z.001`); a missing part is named in the message, a password-protected or damaged archive is reported, and archives inside archives are opened too (three levels). On the desktop the unpacked copy lives in `temp/archives/` until the window closes and the chosen folder is never touched; on the web the uploaded archive files are unpacked in the upload's staging folder and then deleted. The web upload picker accepts the new archive types. `requirements.txt` gains `py7zz`, a Python package that brings the 7-Zip program inside Jelibox's own environment (no system install, no administrator rights): run the installer again to get it.
-
-### Changed
-
+### Added
+
+- **Add Workspace opens archives.** `.zip`, `.rar` and `.7z` files found anywhere in the folder (desktop and web) are unpacked and read together with the loose files, so annotations in `annotations.rar` and pictures in `fire.part1.rar`, `fire.part2.rar` ... become one dataset. Split archives are recognised by their names (`name.part1.rar`, `name.rar` + `name.r00`, `name.7z.001`); a missing part is named in the message, a password-protected or damaged archive is reported, and archives inside archives are opened too (three levels). On the desktop the unpacked copy lives in `temp/archives/` until the window closes and the chosen folder is never touched; on the web the uploaded archive files are unpacked in the upload's staging folder and then deleted. The web upload picker accepts the new archive types. `requirements.txt` gains `py7zz`, a Python package that brings the 7-Zip program inside Jelibox's own environment (no system install, no administrator rights): run the installer again to get it.
+
+### Changed
+
 - **The Server resources panel shows every GPU.** With several GPUs (the two T4s of a Kaggle notebook) the GPU usage tile shows their average load and the GPU temperature tile the hottest one; the line under each names every GPU. It used to show the first GPU only, which looked like the second one was idle.
 
 ## [1.4.0] - 2026-11-25
@@ -264,7 +266,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/Jelibox/Jelibox-client/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/Jelibox/Jelibox-client/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Jelibox/Jelibox-client/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Jelibox/Jelibox-client/compare/v1.1.1...v1.2.0

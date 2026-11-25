@@ -9,6 +9,14 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Changed
+
+- **The website says it is the official one.** The page at jelibox.github.io now carries "Official Jelibox Website" (title, top bar, footer) and names the only official download, `github.com/Jelibox/Jelibox-client`; the web app's sign-in page names it too. A copy of Jelibox from anywhere else is not ours.
+
+### Added
+
+- **Export Model can give you the trained `.pt` file itself.** A new first format, **PyTorch (.pt)**, in the app and in the web: no conversion, the model of the workspace is copied as `<workspace>.pt` (in the web your browser downloads it). Handy when Jelibox runs on a remote server such as a Kaggle notebook and the model has to come back to your computer.
+
 ## [1.2.0] - 2026-11-17
 
 ### Changed

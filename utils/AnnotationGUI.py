@@ -2850,6 +2850,7 @@ class AnnotationGUI:
         # Export format dropdown
         tk.Label(body, text="Format:", bg=C_CARD, fg=C_TXT1).pack(anchor='w')
         formats = [
+            ('PyTorch (.pt, the trained file as it is)','pt'),
             ('TorchScript','torchscript'), ('ONNX','onnx'), ('OpenVINO','openvino'),
             ('TensorRT','engine'), ('CoreML','coreml'), ('TF SavedModel','saved_model'),
             ('TFLite','tflite'), ('TFJS','tfjs'), ('Paddle','paddle'), ('MNN','mnn'),
@@ -2904,6 +2905,13 @@ class AnnotationGUI:
         cb6 = make_cb('Simplify', simplify_var)
         cb7 = make_cb('End2End', end2end_var)
 
+        def on_format_change(evt=None):             # .pt is a plain copy: size and options do not apply
+            state_ = 'disabled' if fmt_vals.get(fmt_combo.get()) == 'pt' else 'normal'
+            imgsz_entry.config(state=state_)
+            for cb in (cb1, cb2, cb3, cb4, cb5, cb6, cb7):
+                cb.config(state=state_)
+        fmt_combo.bind('<<ComboboxSelected>>', on_format_change)
+
         # Info link
         def open_docs(evt=None):
             webbrowser.open('https://docs.ultralytics.com/modes/export/#arguments')
@@ -2949,7 +2957,8 @@ class AnnotationGUI:
                     dynamic=opts['dynamic'],
                     simplify=opts['simplify'],
                     end2end=opts['end2end'],
-                    save_dir=export_model_folder
+                    save_dir=export_model_folder,
+                    name=workspaceName
                 )
 
                 def on_done():

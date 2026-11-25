@@ -6,7 +6,7 @@
     <meta name="google-site-verification" content="2dDeMeLVPGU-jXJDLVFoqY3q3CPxB_4xz4yJbas3ano"/>
     <meta name="description" content="Jelibox is a private, local annotation tool for YOLO object detection and segmentation datasets. Import VOC, YOLO or COCO, auto-label with YOLO-World, LocateAnything, your own model or SAM 2, analyze your dataset in a dashboard, and export it augmented. Use it as a desktop app or in your browser, from any device on your network.">
     <meta property="og:type" content="website">
-    <meta property="og:title" content="Jelibox | Local image annotation with four auto-label modes">
+    <meta property="og:title" content="Official Jelibox Website | Local image annotation with four auto-label modes">
     <meta property="og:description" content="Import any dataset, auto-label it, see what it really contains in a built-in dashboard, and export it augmented. Private, on your own machine.">
     <meta property="og:image" content="https://jelibox.github.io/Jelibox-client/assets/og-image.png">
     <meta property="og:url" content="https://jelibox.github.io/Jelibox-client/">
@@ -14,7 +14,7 @@
     <meta name="twitter:image" content="https://jelibox.github.io/Jelibox-client/assets/og-image.png">
     <meta name="theme-color" content="#EAE5DA" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#0B0C12" media="(prefers-color-scheme: dark)">
-    <title>Jelibox | Local Image Annotation, Auto-labeling and Dataset Analysis</title>
+    <title>Official Jelibox Website | Local Image Annotation, Auto-labeling and Dataset Analysis</title>
     <link rel="icon" href="assets/jelibox.png" type="image/png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&amp;display=swap">
@@ -49,6 +49,7 @@
         .nav-inner { height:68px; display:flex; align-items:center; justify-content:space-between; }
         .brand { display:flex; align-items:center; gap:11px; font:800 18px var(--display); letter-spacing:-.02em; }
         .brand img { width:34px; height:34px; border-radius:9px; }
+        .brand-official { font:600 12px var(--sans); letter-spacing:0; color:var(--muted); border-left:1px solid var(--line); padding-left:11px; }
         .nav-links { display:flex; align-items:center; gap:26px; color:var(--muted); font-size:14px; font-weight:500; }
         .nav-links a:hover { color:var(--text); }
 
@@ -163,6 +164,7 @@
         .hero .shell > *:nth-child(4) { animation-delay:.18s; } .hero .shell > *:nth-child(5) { animation-delay:.24s; }
 
         @media (max-width:900px) { .split.stack .split-text ul { columns:1; } .split { grid-template-columns:1fr; gap:26px; margin-top:64px; } .split.flip .split-text { order:0; } .mode-grid { grid-template-columns:repeat(2,1fr); } .feature-grid,.loop { grid-template-columns:repeat(2,1fr); } .strip { grid-template-columns:repeat(2,1fr); } .feature.wide,.feature-grid .feature:last-child { grid-column:span 2; } }
+        @media (max-width:760px) { .brand-official { display:none; } }
         @media (max-width:640px) {
             .shell { width:min(100% - 32px,1120px); }
             .nav-links a:not(.button) { display:none; }
@@ -175,7 +177,7 @@
 <body>
     <header class="nav">
         <div class="shell nav-inner">
-            <a class="brand" href="#top" aria-label="Jelibox home"><img src="assets/jelibox.png" alt="Jelibox logo"><span>Jelibox</span></a>
+            <a class="brand" href="#top" aria-label="Jelibox home"><img src="assets/jelibox.png" alt="Jelibox logo"><span>Jelibox</span><span class="brand-official">Official Jelibox Website</span></a>
             <nav class="nav-links" aria-label="Main navigation"><a href="#modes">Auto-label</a><a href="#tools">Dataset tools</a><a href="#web">Web version</a><a href="#features">Features</a><a href="#install">Install</a><a class="button button-primary" href="https://github.com/Jelibox/Jelibox-client" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav>
         </div>
     </header>
@@ -381,6 +383,6 @@
         </section>
     </main>
 
-    <footer><div class="shell"><span>© 2026 Jelibox</span><span>Built for computer vision &amp; AI</span></div></footer>
+    <footer><div class="shell"><span>© 2026 Jelibox · Official Jelibox Website</span><span>The only official download: <a href="https://github.com/Jelibox/Jelibox-client" target="_blank" rel="noopener noreferrer">github.com/Jelibox/Jelibox-client</a></span></div></footer>
 </body>
 </html>

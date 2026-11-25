@@ -29,7 +29,7 @@ from .editing import EditError
 
 IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
 DATASET_FORMATS = [("yolo", "YOLO"), ("voc", "Pascal VOC (XML)"), ("coco", "COCO")]
-MODEL_FORMATS = [("TorchScript", "torchscript"), ("ONNX", "onnx"), ("OpenVINO", "openvino"), ("TensorRT", "engine"),
+MODEL_FORMATS = [("PyTorch (.pt, the trained file as it is)", "pt"), ("TorchScript", "torchscript"), ("ONNX", "onnx"), ("OpenVINO", "openvino"), ("TensorRT", "engine"),
                  ("CoreML", "coreml"), ("TF SavedModel", "saved_model"), ("TFLite", "tflite"), ("TFJS", "tfjs"),
                  ("Paddle", "paddle"), ("MNN", "mnn"), ("NCNN", "ncnn"), ("IMX500", "imx"), ("RKNN", "rknn"),
                  ("ExecuTorch", "executorch"), ("Axelera", "axelera")]
@@ -272,7 +272,8 @@ def run_model_export(ws, job, req, parsed, downloads, user):
     path, imgsz = parsed
     job.progress(0, 0, "Exporting the model (this can take a few minutes) ...")
     opts = {k: bool(req.get(k)) for k in MODEL_OPTIONS}
-    ok, message, out = ex.export_model(path, fmt=req["format"], imgsz=imgsz, save_dir=downloads.scratch(), **opts)
+    ok, message, out = ex.export_model(path, fmt=req["format"], imgsz=imgsz, save_dir=downloads.scratch(), name=ws.name,
+                                       **opts)
     if not ok:
         raise EditError(message.split("\nTraceback")[0].strip() or "The export failed.")
     return {"name": os.path.basename(os.path.normpath(out)) + ("" if os.path.isfile(out) else ".zip") if out and os.path.exists(out) else None,

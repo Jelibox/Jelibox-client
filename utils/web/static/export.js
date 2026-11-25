@@ -348,6 +348,11 @@ export async function openExportModel(ed) {
   const size = h('input', { type: 'number', value: 640, min: 32, max: 8192 });
   const boxes = Object.fromEntries(info.options.map((o) => [o, h('input', { type: 'checkbox' })]));
   const error = h('div', { class: 'error', hidden: true });
+  const plain = () => {                                  // .pt is the trained file as it is: nothing to set
+    size.disabled = fmt.value === 'pt';
+    for (const box of Object.values(boxes)) box.disabled = fmt.value === 'pt';
+  };
+  fmt.onchange = plain;
   const body = h('div', { class: 'form' },
     info.has_model ? h('p', { class: 'muted' }, `Model: ${info.model}`) : h('div', { class: 'note' }, 'This workspace has no trained model yet. Train one first (the Train button).'),
     h('label', {}, 'Format'), fmt, h('label', {}, 'Image size (px)'), size,

@@ -93,7 +93,7 @@ The installer prints the address; the page after sign-in also works on a phone-s
 | Label Assistant | All four [modes](#modes), **Infer** on one picture or the whole dataset, Auto-annotate with a Stop button |
 | Train | Full YOLO training (and the head in Custom Model mode) with the epoch table, **Finish early** and **Stop now**. Training belongs to the server: it goes on when you close the tab, and you can open the window again to see it |
 | Analyze | The dashboard, the resize simulation, the small-object limit and **Remove these objects** |
-| Export | Export Dataset (split, preprocessing, the augmentation picker) and Export Model. The result is **downloaded to your device** (a folder as a `.zip`); nothing is kept on the server |
+| Export | Export Dataset (split, preprocessing, the augmentation picker) and Export Model (the trained `.pt` file as it is, or ONNX, TorchScript and more). The result is **downloaded to your device** (a folder as a `.zip`); nothing is kept on the server |
 | Stream | Runs your trained model on a **video you upload** or a **YouTube link** and shows the detections live, with FPS, frames and detections. The video is kept in the server's `temp/stream` folder; **Clear cache** deletes the videos and the junk (see below) |
 | Server resources | CPU use, RAM use, CPU temperature, GPU use, GPU temperature and storage of the server, refreshed every 2 seconds |
 

@@ -19,11 +19,25 @@ def export_model(model_path: str,
                  dynamic: bool = False,
                  simplify: bool = False,
                  end2end: bool = False,
-                 save_dir: str = None):
+                 save_dir: str = None,
+                 name: str = None):
     """Export the model using ultralytics.YOLO.export.
 
+    fmt 'pt' is no conversion: the trained file is copied as <name>.pt into save_dir (the other options do not apply).
     Returns (success: bool, message: str, out_path: str|None)
     """
+    if fmt == 'pt':
+        if not os.path.exists(model_path):
+            return False, f"Model file not found: {model_path}", None
+        if not save_dir:
+            return True, "Export completed", model_path
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+            dest = os.path.join(save_dir, (name or os.path.splitext(os.path.basename(model_path))[0]) + '.pt')
+            shutil.copy2(model_path, dest)
+        except OSError as e:
+            return False, f"Export failed: {e}", None
+        return True, "Export completed", dest
     try:
         from ultralytics import YOLO               # imported here: the path helpers below must not load torch
     except Exception:

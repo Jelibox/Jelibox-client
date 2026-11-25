@@ -34,7 +34,9 @@ function authShell(form) {
       h('button', { class: 'btn ghost auth-theme', type: 'button', onclick: () => { setTheme(theme() === 'dark' ? 'light' : 'dark'); render(); } },
         theme() === 'dark' ? 'Light' : 'Dark'),
       form,
-      h('p', { class: 'auth-foot' }, 'Jelibox runs on your own computer. Your pictures never leave it.')));
+      h('p', { class: 'auth-foot' }, 'Jelibox runs on your own computer. Your pictures never leave it.'),
+      h('p', { class: 'auth-foot' }, 'Official Jelibox software. Get it only from ',
+        h('a', { href: 'https://github.com/Jelibox/Jelibox-client', target: '_blank', rel: 'noopener noreferrer' }, 'github.com/Jelibox/Jelibox-client'), '.')));
 }
 
 // A password box with a Show / Hide button

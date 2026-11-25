@@ -75,3 +75,32 @@ class DestinationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlainPtTests(unittest.TestCase):
+    """Export Model, format "pt": the trained file is copied, not converted (no ultralytics needed)."""
+
+    def make_model(self):
+        folder = tempfile.mkdtemp()
+        path = os.path.join(folder, "modelAssistant.pt")
+        with open(path, "wb") as f:
+            f.write(b"weights")
+        return path
+
+    def test_it_copies_the_file_under_the_workspace_name(self):
+        out_dir = os.path.join(tempfile.mkdtemp(), "new")
+        ok, _msg, out = export.export_model(self.make_model(), fmt="pt", save_dir=out_dir, name="pets")
+        self.assertTrue(ok)
+        self.assertEqual(out, os.path.join(out_dir, "pets.pt"))
+        self.assertEqual(open(out, "rb").read(), b"weights")
+
+    def test_without_a_name_the_file_keeps_its_own(self):
+        out_dir = tempfile.mkdtemp()
+        _ok, _msg, out = export.export_model(self.make_model(), fmt="pt", save_dir=out_dir)
+        self.assertEqual(os.path.basename(out), "modelAssistant.pt")
+
+    def test_a_missing_model_is_reported(self):
+        ok, msg, out = export.export_model(os.path.join(tempfile.mkdtemp(), "none.pt"), fmt="pt", save_dir=tempfile.mkdtemp())
+        self.assertFalse(ok)
+        self.assertIn("not found", msg)
+        self.assertIsNone(out)

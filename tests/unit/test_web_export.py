@@ -208,6 +208,7 @@ class ModelExportTests(ExportBase):
         info = self.client.get(f"{self.base}/export/model").json()
         self.assertFalse(info["has_model"])
         self.assertIn("onnx", [f["id"] for f in info["formats"]])
+        self.assertEqual(info["formats"][0]["id"], "pt")
         res = self.post(f"{self.base}/export/model", {"format": "onnx"})
         self.assertEqual(res.status_code, 400)
         self.assertIn("no trained model", res.json()["error"])
@@ -230,6 +231,15 @@ class ModelExportTests(ExportBase):
         self.assertEqual((dl.status_code, dl.content), (200, b"onnx-bytes"))
         self.assertEqual(job["result"]["name"], "modelAssistant.onnx")
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "export model")))
+
+    def test_pt_is_the_trained_file_copied_as_it_is(self):
+        self.put_model()
+        job = self.finish(self.post(f"{self.base}/export/model", {"format": "pt"}))     # no mock: nothing is converted
+        self.assertEqual(job["state"], "done", job.get("error"))
+        self.assertEqual(job["result"]["name"], "pets.pt")
+        dl = self.client.get(f"/api/downloads/{job['result']['download']}")
+        self.assertEqual((dl.status_code, dl.content), (200, b"model"))
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, "models", "pets", "modelAssistant.pt")))
 
     def test_a_failed_export_is_the_job_message(self):
         self.put_model()

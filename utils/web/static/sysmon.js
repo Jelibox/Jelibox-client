@@ -70,8 +70,13 @@ function build() {
     h('div', { class: 'mon-grid' }, tiles.cpu.el, tiles.ram.el, tiles.cpuTemp.el, tiles.gpu.el, tiles.gpuTemp.el, tiles.disk.el));
   node.update = (snap) => {
     const cpu = snap.cpu, ram = snap.ram, gpus = snap.gpus || [], gpu = gpus[0] || null, disks = snap.disks || [];
+    // several GPUs: the tile shows their average load and the hottest one, every GPU is named in the line below
+    const known = (key) => gpus.map((g) => g[key]).filter((v) => v !== null && v !== undefined);
+    const loads = known('percent'), temps = known('temp');
+    const load = loads.length ? loads.reduce((a, b) => a + b, 0) / loads.length : null;
+    const heat = temps.length ? Math.max(...temps) : null;
     push('cpu', cpu.percent); push('ram', ram.percent); push('cpuTemp', cpu.temp);
-    push('gpu', gpu && gpu.percent); push('gpuTemp', gpu && gpu.temp);
+    push('gpu', load); push('gpuTemp', heat);
     const main = disks.find((d) => d.here) || disks[0] || null;
     push('disk', main && main.percent);
     tiles.cpu.set({ text: cpu.percent === null ? 'n/a' : `${cpu.percent.toFixed(0)}%`, percent: cpu.percent, series: history.cpu,
@@ -80,13 +85,14 @@ function build() {
       note: ram.total ? `${fmtBytes(ram.used)} of ${fmtBytes(ram.total)}` : '' });
     tiles.cpuTemp.set({ text: cpu.temp === null ? 'n/a' : `${cpu.temp.toFixed(0)} °C`, percent: cpu.temp, kind: 'temp', series: history.cpuTemp,
       note: cpu.temp === null ? 'This computer does not report it' : '' });
-    const more = gpus.length > 1 ? `  (+${gpus.length - 1} more)` : '';
     const gpuTip = gpus.map((g, i) => `GPU ${i}: ${g.name}  ${g.percent ?? '-'}%  ${g.temp ?? '-'} °C`
       + (g.mem_total ? `  ${fmtBytes(g.mem_used)} / ${fmtBytes(g.mem_total)}` : '')).join('\n');
-    tiles.gpu.set({ text: gpu && gpu.percent !== null ? `${gpu.percent.toFixed(0)}%` : 'n/a', percent: gpu ? gpu.percent : null, series: history.gpu, tip: gpuTip,
-      note: gpu ? `${gpu.name}${gpu.mem_total ? ` · ${fmtBytes(gpu.mem_used)} / ${fmtBytes(gpu.mem_total)}` : ''}${more}` : 'No NVIDIA or AMD GPU found' });
-    tiles.gpuTemp.set({ text: gpu && gpu.temp !== null ? `${gpu.temp.toFixed(0)} °C` : 'n/a', percent: gpu ? gpu.temp : null, kind: 'temp', series: history.gpuTemp, tip: gpuTip,
-      note: gpu ? gpu.name : 'No NVIDIA or AMD GPU found' });
+    const each = (key, unit) => gpus.map((g, i) => `GPU ${i} ${g[key] === null || g[key] === undefined ? '-' : g[key].toFixed(0) + unit}`).join(' · ');
+    const memory = gpus.length === 1 && gpu.mem_total ? ` · ${fmtBytes(gpu.mem_used)} / ${fmtBytes(gpu.mem_total)}` : '';
+    tiles.gpu.set({ text: load !== null ? `${load.toFixed(0)}%` : 'n/a', percent: load, series: history.gpu, tip: gpuTip,
+      note: !gpu ? 'No NVIDIA or AMD GPU found' : gpus.length > 1 ? each('percent', '%') : `${gpu.name}${memory}` });
+    tiles.gpuTemp.set({ text: heat !== null ? `${heat.toFixed(0)} °C` : 'n/a', percent: heat, kind: 'temp', series: history.gpuTemp, tip: gpuTip,
+      note: !gpu ? 'No NVIDIA or AMD GPU found' : gpus.length > 1 ? `${each('temp', ' °C')}  (hottest shown)` : gpu.name });
     const driveTip = disks.map((d) => `${d.mount}  ${d.percent.toFixed(0)}%  (${fmtBytes(d.used)} of ${fmtBytes(d.total)})${d.here ? '  - Jelibox is here' : ''}`).join('\n');
     tiles.disk.set({ text: main ? `${main.percent.toFixed(0)}%` : 'n/a', percent: main ? main.percent : null, series: history.disk, tip: driveTip,
       note: main ? `${fmtBytes(main.used)} of ${fmtBytes(main.total)} · ${main.mount}${disks.length > 1 ? `  (+${disks.length - 1} more)` : ''}` : '' });

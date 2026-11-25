@@ -177,6 +177,81 @@ def video_folder(with_images=False, frames=25):
 
 
 @unittest.skipUnless(HAVE_DISPLAY, "no display available")
+class ArchiveTests(AddWorkspaceBase):
+    """Archives in the chosen folder are unpacked into a temp folder, read with the loose files, and cleaned up."""
+
+    def archived_folder(self):
+        import zipfile
+        src = tempfile.mkdtemp()
+        loose = tempfile.mkdtemp()
+        names = make_images(loose, count=2, size=SIZE)
+        os.makedirs(os.path.join(src, "deep"))
+        with zipfile.ZipFile(os.path.join(src, "deep", "pictures.zip"), "w") as z:
+            for n in names:
+                z.write(os.path.join(loose, n), n)
+        with zipfile.ZipFile(os.path.join(src, "annotations.zip"), "w") as z:
+            z.writestr("classes.txt", "cat\ndog\n")
+            for n in names:
+                z.writestr(n.replace(".png", ".txt"), "0 0.5 0.5 0.2 0.2\n")
+        return src
+
+    def temp_archives(self):
+        folder = os.path.join(wm.BASE_DIR, "temp", "archives")
+        return os.listdir(folder) if os.path.isdir(folder) else []
+
+    def test_archives_are_unpacked_read_and_the_temp_copy_is_removed_on_create(self):
+        src = self.archived_folder()
+        self.app._open_add_workspace_dialog()
+        name, classes, prefix = self.entries()
+        self.type_into(name, "guizip")
+        self.created.append("guizip")
+        self.browse(src)
+        text = self.texts()
+        self.assertIn("2 image(s)", text)
+        self.assertIn("2 archive(s) unpacked", text)
+        self.assertEqual(len(self.temp_archives()), 1, "the unpacked copy lives in temp/archives while the window is open")
+        find_button(self.dialog(), "Create Workspace").invoke()
+        pump(self.root, 0.5)
+        self.assertEqual(sorted(os.listdir(os.path.join(ctx.datasets, "guizip-1"))), ["img1.png", "img2.png"])
+        self.assertEqual(self.temp_archives(), [])
+        self.assertEqual(sorted(os.listdir(src)), ["annotations.zip", "deep"], "the chosen folder is not touched")
+
+    def test_cancelling_removes_the_temp_copy(self):
+        src = self.archived_folder()
+        self.app._open_add_workspace_dialog()
+        self.browse(src)
+        self.assertEqual(len(self.temp_archives()), 1)
+        self.dialog().destroy()
+        pump(self.root, 0.2)
+        self.assertEqual(self.temp_archives(), [])
+
+    def test_browsing_again_replaces_the_temp_copy(self):
+        src = self.archived_folder()
+        self.app._open_add_workspace_dialog()
+        self.browse(src)
+        self.browse(src)
+        self.assertEqual(len(self.temp_archives()), 1)
+        self.browse(voc_folder([["cat"]]))
+        self.assertEqual(self.temp_archives(), [])
+        self.assertNotIn("archive(s) unpacked", self.texts())
+
+    def test_a_missing_part_is_shown_in_red_under_the_folder(self):
+        src = tempfile.mkdtemp()
+        for n in ("fire.part1.rar", "fire.part3.rar"):
+            with open(os.path.join(src, n), "wb") as f:
+                f.write(b"x")
+        self.app._open_add_workspace_dialog()
+        self.browse(src)
+        text = self.texts()
+        self.assertIn("part 2", text)
+        self.assertEqual(self.temp_archives(), [])
+        create = find_button(self.dialog(), "Create Workspace")
+        create.invoke()
+        pump(self.root, 0.2)
+        self.assertEqual(self.dialogs.calls, [], "nothing was imported")
+
+
+@unittest.skipUnless(HAVE_DISPLAY, "no display available")
 class SkipFramesTests(AddWorkspaceBase):
     """Video files in the chosen folder: a Skip frames box appears, default 10, and the frames become pictures."""
 

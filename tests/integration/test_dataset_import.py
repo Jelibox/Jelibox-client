@@ -12,6 +12,7 @@ ctx = isolated_workspace()
 from utils import workspace_config as wc                        # noqa: E402
 from utils import workspace_manager as wm                       # noqa: E402
 from utils import dataset_import as di                          # noqa: E402
+from utils import archive_support                               # noqa: E402
 
 SIZE = (200, 100)
 
@@ -86,6 +87,47 @@ class NewWorkspaceTests(Base):
         folder = os.path.join(ctx.datasets, result["instance_name"])
         self.assertEqual(sorted(os.listdir(folder)), ["p-1.png", "p-2.png"])
         self.assertIn("<filename>p-1.png</filename>", self.voc("p-1"))
+
+
+class ArchiveTests(Base):
+    """Pictures and annotations inside archives, read together with the loose files of the folder."""
+
+    def zip_of(self, folder, name, files):
+        import zipfile
+        os.makedirs(folder, exist_ok=True)
+        with zipfile.ZipFile(os.path.join(folder, name), "w") as z:
+            for rel, path in files.items():
+                z.write(path, rel)
+
+    def test_pictures_and_annotations_in_separate_archives_are_imported_together(self):
+        loose = tempfile.mkdtemp()
+        names = make_images(loose, count=2, size=SIZE)
+        with open(os.path.join(loose, "classes.txt"), "w") as f:
+            f.write("cat\ndog\n")
+        labels = []
+        for i in (1, 2):
+            path = os.path.join(loose, f"img{i}.txt")
+            with open(path, "w") as f:
+                f.write("0 0.5 0.5 0.2 0.2\n1 0.3 0.3 0.1 0.1\n")
+            labels.append(path)
+        self.zip_of(os.path.join(self.src, "a", "b"), "pictures.zip", {n: os.path.join(loose, n) for n in names})
+        self.zip_of(self.src, "annotations.zip", {os.path.basename(p): p for p in labels} |
+                    {"classes.txt": os.path.join(loose, "classes.txt")})
+        work = tempfile.mkdtemp()
+        extra = archive_support.unpack_all(self.src, dest=work)
+        self.assertEqual(len(extra), 2)
+        scan = di.scan_dataset_folder(self.src, extra)
+        self.assertEqual((len(scan["images"]), len(scan["yolo"])), (2, 2))
+        ws = self.workspace("zipped")
+        result = di.import_dataset(self.src, ws, extra_folders=extra)
+        self.assertEqual((result["image_count"], result["format"], result["classes"]), (2, "YOLO", ["cat", "dog"]))
+        self.assertEqual(sorted(l.split()[0] for l in self.label(ws, "img1")), ["0", "1"])
+        self.assertEqual(sorted(os.listdir(self.src)), ["a", "annotations.zip"], "the chosen folder is not touched")
+
+    def test_without_extra_folders_the_archives_are_ignored(self):
+        self.zip_of(self.src, "pictures.zip", {})
+        with self.assertRaises(ValueError):
+            di.import_dataset(self.src, self.workspace("empty"))
 
 
 class ExistingWorkspaceTests(Base):

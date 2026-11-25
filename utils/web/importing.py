@@ -1,8 +1,8 @@
 """
 What Add Workspace needs on the server side, without any web framework (so it is easy to test):
 
-  Uploads       files sent from the browser land in a staging folder (temp/uploads/<id>/), zip files are unpacked
-                there, and the importer then reads that folder like any other. Every name that comes from the browser
+  Uploads       files sent from the browser land in a staging folder (temp/uploads/<id>/), zip / rar / 7z archives (split ones too) are
+                unpacked there, and the importer then reads that folder like any other. Every name that comes from the browser
                 is checked: nothing can be written outside the staging folder.
   list_folder   the folder browser of the page (folders of THIS computer, the server).
   summarize     what a folder holds (pictures, videos, annotation format, classes), shown before Create.
@@ -15,39 +15,12 @@ import shutil
 import string
 import sys
 import time
-import zipfile
 
 from .. import dataset_import as di
 from .. import workspace_manager as wm
+from ..archive_support import free_bytes, safe_parts, unpack_all     # free_bytes: the upload routes use it from here
 
-RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
-SPARE_BYTES = 1 << 30                     # always leave 1 GB free on the disk
-MAX_ZIP_FILES = 300_000
 STALE_SECONDS = 24 * 3600
-
-
-def safe_parts(path):
-    """The folders and file name of a relative path from the browser, or ValueError. No '..', no drive letters, no
-    control characters, no Windows device names."""
-    parts = []
-    for part in str(path or "").replace("\\", "/").split("/"):
-        if part in ("", "."):
-            continue
-        if part == ".." or ":" in part or any(ord(c) < 32 for c in part) or len(part) > 200:
-            raise ValueError(f"Not an allowed file name: {path!r}")
-        if part.split(".")[0].upper() in RESERVED or part != part.rstrip(" ."):
-            raise ValueError(f"Not an allowed file name: {path!r}")
-        parts.append(part)
-    if not parts:
-        raise ValueError("The file has no name.")
-    return parts
-
-
-def free_bytes(folder):
-    try:
-        return shutil.disk_usage(folder).free - SPARE_BYTES
-    except OSError:
-        return 0
 
 
 class Uploads:
@@ -105,41 +78,10 @@ class Uploads:
             except OSError:
                 pass
 
-    def unpack_zips(self, folder):
-        """Unpack every .zip found in `folder` next to itself (then delete it). Returns how many were unpacked."""
-        zips = [os.path.join(d, f) for d, _dirs, files in os.walk(folder) for f in files if f.lower().endswith(".zip")]
-        for path in zips:
-            _unpack(path)
-        return len(zips)
-
-
-def _unpack(path):
-    stem = os.path.splitext(path)[0]
-    target = stem
-    while os.path.exists(target):
-        target += "_x"
-    try:
-        archive = zipfile.ZipFile(path)
-    except zipfile.BadZipFile:
-        raise ValueError(f"{os.path.basename(path)} is not a valid zip file.")
-    with archive:
-        infos = [i for i in archive.infolist() if not i.is_dir()]
-        if len(infos) > MAX_ZIP_FILES:
-            raise ValueError(f"{os.path.basename(path)} holds too many files.")
-        if sum(i.file_size for i in infos) > free_bytes(os.path.dirname(path)):
-            raise ValueError(f"Not enough free disk space to unpack {os.path.basename(path)}.")
-        root = os.path.realpath(target)
-        for info in infos:
-            try:
-                out = os.path.join(target, *safe_parts(info.filename))
-            except ValueError:
-                continue                                    # a name that is not allowed is skipped, never written
-            if os.path.commonpath([os.path.realpath(out), root]) != root:
-                continue
-            os.makedirs(os.path.dirname(out), exist_ok=True)
-            with archive.open(info) as src, open(out, "wb") as dst:
-                shutil.copyfileobj(src, dst)
-    os.remove(path)
+    def unpack_archives(self, folder):
+        """Unpack every .zip / .rar / .7z (split ones too) found in `folder` next to itself, then delete the archive
+        files. Returns how many folders were made."""
+        return len(unpack_all(folder, remove=True))
 
 
 # ------------------------------------------------------------------ folder browser

@@ -12,8 +12,10 @@ screen must be safe to show before any dataset instance folder is chosen.
 """
 
 import os
+import shutil
 import sys
 import subprocess
+import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -35,6 +37,7 @@ from . import workspace_manager
 from . import ServerSettingsDialog
 from .progress_popup import show_progress_popup
 from . import workspace_counts
+from . import archive_support
 
 
 class WorkspacePickerApp:
@@ -711,7 +714,28 @@ class WorkspacePickerApp:
 
         # ---- state shared with on_create() ----
         state = {'folder': None, 'scan': None, 'format': 'unset', 'found': {}, 'auto_classes': '',
-                 'yolo_unnamed_classes': False, 'probes': []}
+                 'yolo_unnamed_classes': False, 'probes': [], 'extra': [], 'work': None, 'busy': False}
+
+        def drop_unpacked():
+            """The temporary folder the archives were unpacked into (the chosen folder itself is never touched)."""
+            if state['work']:
+                shutil.rmtree(state['work'], ignore_errors=True)
+            state.update(work=None, extra=[])
+
+        def unpack_archives(folder):
+            """Unpack the .zip / .rar / .7z files in the folder (split ones too) into a temp folder; returns the folders."""
+            if not archive_support.find_archives(folder):
+                return []
+            parent = os.path.join(workspace_manager.BASE_DIR, 'temp', 'archives')
+            archive_support.forget_stale(parent)
+            os.makedirs(parent, exist_ok=True)
+            state['work'] = tempfile.mkdtemp(dir=parent)
+            alive = lambda: dialog.winfo_exists()
+            return archive_support.unpack_all(
+                folder, dest=state['work'], tick=lambda: alive() and dialog.update(),
+                log=lambda text: alive() and set_status(folder_status, text, C_TXT3))
+
+        dialog.bind('<Destroy>', lambda e: drop_unpacked() if e.widget is dialog else None)
 
         # ======== NAME (only for a brand-new workspace) ========
         name_var = tk.StringVar()
@@ -836,8 +860,9 @@ class WorkspacePickerApp:
 
         def browse_folder():
             chosen = filedialog.askdirectory(title="Select dataset folder", parent=dialog)
-            if not chosen:
+            if not chosen or state['busy']:
                 return
+            drop_unpacked()
             state.update(folder=chosen, scan=None, format='unset', found={}, yolo_unnamed_classes=False, probes=[])
             video_box.pack_forget()
             folder_var.set(chosen)
@@ -845,7 +870,23 @@ class WorkspacePickerApp:
             set_status(skip_status, "", C_TXT3)
             dialog.update()
 
-            scan = scan_dataset_folder(chosen)
+            state['busy'] = True
+            try:
+                state['extra'] = unpack_archives(chosen)
+            except (ValueError, OSError) as e:
+                drop_unpacked()
+                if dialog.winfo_exists():
+                    state['format'] = None
+                    set_status(folder_status, f"✗ {e}", C_RED)
+                return
+            finally:
+                state['busy'] = False
+            if not dialog.winfo_exists():
+                return
+            set_status(folder_status, "Scanning...", C_TXT3)
+            dialog.update()
+
+            scan = scan_dataset_folder(chosen, state['extra'])
             state['scan'] = scan
             n_images = len(scan['images'])
             n_videos = len(scan['videos'])
@@ -883,6 +924,9 @@ class WorkspacePickerApp:
                 color = C_AMBER
                 text += (f"\n⚠ {scan['duplicates']} image(s) have the same file name as another one in a different "
                          f"subfolder - only one image of each name is imported.")
+            if state['extra']:
+                text = (text + "\n" if text else "") + (f"✓ {len(state['extra'])} archive(s) unpacked (a temporary copy, "
+                                                         f"removed when this window closes).")
             if n_videos:
                 state['probes'] = probe_videos(scan['videos'])
                 if n_images == 0:
@@ -1022,6 +1066,8 @@ class WorkspacePickerApp:
         create_label = "＋  Add Instance" if existing_workspace else "＋  Create Workspace"
 
         def on_create():
+            if state['busy']:
+                return                      # archives are still being unpacked
             # ---- validate name ----
             target_name = existing_workspace
             classes_to_write = None
@@ -1095,7 +1141,7 @@ class WorkspacePickerApp:
             try:
                 result = import_dataset(state['folder'], target_name, prefix=prefix,
                                         progress_cb=on_copy_progress, classes=classes_to_write,
-                                        skip_frames=skip_frames)
+                                        skip_frames=skip_frames, extra_folders=state['extra'])
             except (ValueError, OSError) as e:
                 dialog.destroy()
                 messagebox.showerror("Couldn't Add Workspace", str(e), parent=self.root)

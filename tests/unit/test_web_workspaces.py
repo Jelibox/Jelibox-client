@@ -5,6 +5,7 @@ import time
 import unittest
 import zipfile
 
+from tests.unit.test_archive_support import make_rar_parts, rar_readable
 from tests.unit.test_web_app import H, TestClient, WebBase
 
 
@@ -182,6 +183,31 @@ class UploadTests(FlowBase):
         self.assertEqual(scanned["images"], 3)                 # a, b and abs: the ".." entry was skipped
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "temp", "escape.png")))
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "escape.png")))
+
+    def test_a_split_rar_for_the_pictures_and_a_rar_for_the_labels_are_unpacked(self):
+        if not rar_readable():
+            self.skipTest("needs the rar program and a 7-Zip program that reads rar (py7zz)")
+        staging = os.path.join(self.tmp, "rars")
+        pictures = {f"pics/img{i}.png": png_bytes((i * 40, 90, 150), (200, 150)) + os.urandom(3000) for i in (1, 2, 3)}
+        parts = make_rar_parts(pictures, os.path.join(staging, "deep", "folder"), "fire")
+        self.assertGreater(len(parts), 1)
+        labels = {f"labels/img{i}.txt": b"0 0.5 0.5 0.2 0.2\n" for i in (1, 2, 3)}
+        labels["classes.txt"] = b"cat\ndog\n"
+        make_rar_parts(labels, staging, "annotations", volume="500k")
+        files = {os.path.relpath(os.path.join(d, f), staging).replace(os.sep, "/"): open(os.path.join(d, f), "rb").read()
+                 for d, _dirs, names in os.walk(staging) for f in names}
+        upload_id = self.upload(files)
+        scanned = self.post("/api/scan", {"upload_id": upload_id}).json()
+        self.assertEqual((scanned["images"], scanned["format"], scanned["classes"]), (3, "yolo", {"cat": 3}))
+        folder = os.path.join(self.tmp, "temp", "uploads", upload_id)
+        left = [f for _d, _dirs, names in os.walk(folder) for f in names if f.endswith(".rar")]
+        self.assertEqual(left, [], "the archives are removed once unpacked")
+
+    def test_a_split_archive_with_a_missing_part_is_reported(self):
+        upload_id = self.upload({"fire.part1.rar": b"x", "fire.part3.rar": b"x", "img1.png": png_bytes()})
+        res = self.post("/api/scan", {"upload_id": upload_id})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("part 2", res.json()["error"])
 
     def test_a_broken_zip_is_reported(self):
         upload_id = self.upload({"bad.zip": b"this is not a zip"})

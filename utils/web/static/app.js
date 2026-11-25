@@ -209,7 +209,7 @@ async function confirmDelete(name, instance) {
 const pickServerFolder = (start) => pickServer({ start });
 
 // ------------------------------------------------------------------ Add Workspace
-const UPLOAD_TYPES = /\.(jpe?g|png|bmp|tiff?|webp|mp4|avi|mov|mkv|webm|m4v|wmv|flv|mpe?g|xml|txt|json|ya?ml|zip)$/i;
+const UPLOAD_TYPES = /\.(jpe?g|png|bmp|tiff?|webp|mp4|avi|mov|mkv|webm|m4v|wmv|flv|mpe?g|xml|txt|json|ya?ml|zip|rar|7z|r\d\d|\d{3})$/i;
 
 async function uploadFiles(files, progress) {
   const { id } = await api('uploads', 'POST', {});
@@ -246,7 +246,7 @@ function addWorkspace(existing) {
   const videoBox = h('div', { hidden: true }, h('label', {}, 'Skip frames (video files: keep every N-th frame)'), skip, skipNote);
   const classBox = h('div', {}, h('label', {}, 'Classes (separated by commas)'), classes);
   const folderInput = h('input', { type: 'file', webkitdirectory: true, multiple: true, hidden: true });
-  const filesInput = h('input', { type: 'file', multiple: true, hidden: true, accept: '.zip,image/*,video/*,.xml,.txt,.json,.yaml,.yml' });
+  const filesInput = h('input', { type: 'file', multiple: true, hidden: true, accept: '.zip,.rar,.7z,.001,image/*,video/*,.xml,.txt,.json,.yaml,.yml' });
   const create = h('button', { class: 'btn primary', disabled: true }, 'Create');
   let overlay;
 
@@ -287,7 +287,7 @@ function addWorkspace(existing) {
 
   async function chooseUpload(fileList) {
     const files = [...fileList].map((file) => ({ file, path: file.webkitRelativePath || file.name })).filter((f) => UPLOAD_TYPES.test(f.file.name));
-    if (!files.length) { say('Nothing Jelibox can use in that selection (pictures, videos, annotation files or a zip).', 'error'); return; }
+    if (!files.length) { say('Nothing Jelibox can use in that selection (pictures, videos, annotation files or a zip / rar / 7z archive).', 'error'); return; }
     await discard();
     create.disabled = true;
     try {
@@ -337,7 +337,7 @@ function addWorkspace(existing) {
     h('label', {}, 'Dataset'),
     h('div', { class: 'row', style: 'margin-top:0' },
       h('button', { class: 'btn', onclick: () => folderInput.click() }, 'Upload a folder'),
-      h('button', { class: 'btn', onclick: () => filesInput.click() }, 'Upload files or a .zip'),
+      h('button', { class: 'btn', onclick: () => filesInput.click() }, 'Upload files or an archive (.zip .rar .7z)'),
       h('button', { class: 'btn', onclick: chooseServer }, 'Folder on the server')),
     h('p', { class: 'muted', style: 'font-size:12px' }, 'Upload sends the pictures from this device to the server. "Folder on the server" reads a folder that is already on the computer running Jelibox. Pascal VOC, YOLO and COCO are detected by themselves.'),
     folderInput, filesInput, status, classBox, videoBox,

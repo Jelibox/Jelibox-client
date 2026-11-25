@@ -10,6 +10,7 @@ cloudpickle                   # training on several GPUs: Ultralytics hands its 
 streamlit
 yt-dlp[default]               # Stream: YouTube links. [default] brings yt-dlp-ejs, the scripts YouTube needs to hand out formats
 deno; (sys_platform == "win32" and platform_machine == "AMD64") or sys_platform == "darwin" or (sys_platform == "linux" and (platform_machine == "x86_64" or platform_machine == "aarch64"))   # the JavaScript runtime yt-dlp wants for YouTube: the Deno team's own pip package, lives in this environment (no PATH, no system install); wheels exist for these only
+py7zz; (sys_platform == "win32" and platform_machine == "AMD64") or sys_platform == "darwin" or (sys_platform == "linux" and (platform_machine == "x86_64" or platform_machine == "aarch64"))   # opens .rar and .7z (and split archives) when a dataset folder is added: it brings the 7-Zip program (7zz) inside this environment, no system install; wheels exist for these only
 pyinstaller
 
 # --- LocateAnything-3B (nvidia/LocateAnything-3B, HF Transformers + trust_remote_code) --------------------------

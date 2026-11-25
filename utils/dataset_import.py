@@ -63,10 +63,10 @@ def _looks_like_coco(path):
     return isinstance(data, dict) and "images" in data and "annotations" in data
 
 
-def scan_dataset_folder(root_folder):
+def scan_dataset_folder(root_folder, extra_folders=()):
     """
-    Recursively scan root_folder for images and annotation files, wherever
-    they're nested. Returns:
+    Recursively scan root_folder (and `extra_folders`: where its archives were unpacked) for images and annotation
+    files, wherever they're nested. Returns:
       {
         'images': {basename: path},
         'voc': {basename: path},          # .xml
@@ -82,7 +82,7 @@ def scan_dataset_folder(root_folder):
     duplicates = 0
     videos = []
 
-    for path in _walk_files(root_folder):
+    for path in (p for root in (root_folder, *extra_folders) for p in _walk_files(root)):
         fname = os.path.basename(path)
         base, ext = os.path.splitext(fname)
         ext = ext.lower()
@@ -622,7 +622,7 @@ def _drop_unknown(boxes, polygons, fixed, skipped):
 # ============================================================
 
 def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None, classes=None,
-                   skip_frames=DEFAULT_SKIP_FRAMES):
+                   skip_frames=DEFAULT_SKIP_FRAMES, extra_folders=()):
     """
     Import an external folder (any layout, searched recursively) as a new
     datasetsInput/<workspace>-<N> instance, converting whichever single
@@ -636,6 +636,9 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None,
 
     progress_cb(done, total, label), if given, is called repeatedly while
     images are copied and annotations converted.
+
+    `extra_folders` are folders unpacked from the archives found in source_folder (see archive_support): they are
+    read together with it.
 
     Video files in the folder are cut into pictures: every `skip_frames`-th frame is saved as a JPEG next to the
     images (named `<video>_f<frame>.jpg`, or `<prefix><number>` when a prefix is given). The pictures have no
@@ -661,7 +664,7 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None,
     prefix = sanitize_filename_prefix(prefix)  # raises ValueError on bad chars
     skip = sanitize_skip_frames(skip_frames)
 
-    scan = scan_dataset_folder(source_folder)
+    scan = scan_dataset_folder(source_folder, extra_folders)
     if not scan["images"] and not scan["videos"]:
         raise ValueError("No images or videos found in that folder (all subfolders were searched).")
 

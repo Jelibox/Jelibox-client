@@ -113,10 +113,10 @@ def routes(guard, jobs, uploads, base_dir):
         return JSONResponse({"ok": True})
 
     def source_folder(data, user):
-        """The folder to import from: an upload's staging folder (zip files unpacked) or a folder on the server."""
+        """The folder to import from: an upload's staging folder (archives unpacked) or a folder on the server."""
         if data.get("upload_id"):
             folder = uploads.check(str(data["upload_id"]), user["name"])
-            uploads.unpack_zips(folder)
+            uploads.unpack_archives(folder)
             return folder
         folder = str(data.get("folder") or "").strip()
         if not folder:

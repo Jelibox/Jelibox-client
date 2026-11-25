@@ -9,8 +9,10 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
-### Changed
+## [1.4.0] - 2026-11-25
 
+### Changed
+
 - **Training uses every GPU, with mixed precision.** Full YOLO training now runs on all the NVIDIA GPUs PyTorch can see (for example the two T4s of a Kaggle notebook) instead of only the first, and mixed precision (AMP) is on whenever a GPU is used (it was always off), which is faster and needs less GPU memory. With several GPUs the batch is rounded down to a multiple of their number so each gets the same share, the table still shows one row per epoch, and **Finish early** takes effect at the end of the running epoch. **Stop now** ends all the GPU workers (on Linux too). One GPU or the CPU: nothing changes except AMP. `requirements.txt` gains `cloudpickle`; run the installer again to get it (Ultralytics would otherwise install it at the first multi-GPU run).
 
 ## [1.3.0] - 2026-11-25
@@ -254,7 +256,8 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 - The redundant top-right mode and "Text: ON" badges.
 - The neon "cyber terminal" look.
 
-[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/Jelibox/Jelibox-client/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/Jelibox/Jelibox-client/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Jelibox/Jelibox-client/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Jelibox/Jelibox-client/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/Jelibox/Jelibox-client/compare/v1.1.0...v1.1.1

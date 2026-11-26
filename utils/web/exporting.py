@@ -103,6 +103,17 @@ class Downloads:
             item["archive"], item["name"] = archive, base + ".zip"
             return archive, item["name"]
 
+    def discard(self, token):
+        """Forget one download and delete what it left on disk (a checkpoint is sent again and again, never kept)."""
+        with self.lock:
+            item = self.items.pop(token, None)
+        if not item:
+            return
+        root = os.path.abspath(self.root) + os.sep
+        for path in (item["archive"], item["path"]):
+            if path and os.path.abspath(path).startswith(root) and os.path.exists(path):
+                shutil.rmtree(path, ignore_errors=True) if os.path.isdir(path) else os.remove(path)
+
     def _forget_stale(self):
         now = time.time()
         try:

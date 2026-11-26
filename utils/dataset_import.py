@@ -31,10 +31,10 @@ import json
 import shutil
 import xml.etree.ElementTree as ET
 
-from . import workspace_config
+from . import model_bundle, process_guard, workspace_config
 from .workspace_manager import (
     DATASETS_ROOT, CONFIGS_ROOT, BASE_DIR, IMAGE_EXTENSIONS,
-    next_instance_name, existing_classes_for_workspace,
+    next_instance_name, existing_classes_for_workspace, list_workspaces,
 )
 from .annotation_io import build_voc_xml, prettify_xml, _yolo_lines_from_annotations
 
@@ -75,6 +75,7 @@ def scan_dataset_folder(root_folder, extra_folders=()):
         'yolo_classes_file': path or None,  # classes.txt / obj.names / data.yaml
         'duplicates': int,                # images whose file name another image already has (only one is kept)
         'videos': [path, ...],            # video files; their frames are saved as pictures on import
+        'model_folders': [(folder, marker), ...],  # model folders (model_bundle.py): they go to models/<workspace>
       }
     """
     images, voc, yolo, coco = {}, {}, {}, []
@@ -109,12 +110,32 @@ def scan_dataset_folder(root_folder, extra_folders=()):
     return {
         "images": images, "voc": voc, "yolo": yolo, "coco": coco,
         "yolo_classes_file": yolo_classes_file, "duplicates": duplicates, "videos": sorted(videos),
+        "model_folders": model_bundle.find([root_folder, *extra_folders]),
     }
 
 
 # ============================================================
 #  Video files: every N-th frame becomes a picture
 # ============================================================
+
+def check_model_folder(scan, workspace_name):
+    """ValueError when the model folder found in the scan cannot be installed into this workspace now."""
+    if not scan["model_folders"]:
+        return
+    folder = scan["model_folders"][0][0]
+    if not os.path.isfile(os.path.join(folder, "yolo_run", "resume_point.pt")):
+        raise ValueError("The model folder in there has no checkpoint (yolo_run/resume_point.pt is missing).")
+    running = process_guard.running_training(BASE_DIR)
+    if running and running.get("workspace") == workspace_name:
+        raise ValueError("A training is running in this workspace: stop it before a model folder is put in it.")
+
+
+def install_model_folder(scan, workspace_name):
+    """Put the model folder of the scan (the most advanced one) into models/<workspace>; the summary, or None."""
+    if not scan["model_folders"]:
+        return None
+    return model_bundle.install(scan["model_folders"][0][0], os.path.join(BASE_DIR, "models", workspace_name), workspace_name)
+
 
 def sanitize_skip_frames(value):
     """The "Skip frames" number as an int (1 = keep every frame); ValueError with a message the user can act on."""
@@ -666,7 +687,18 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None,
 
     scan = scan_dataset_folder(source_folder, extra_folders)
     if not scan["images"] and not scan["videos"]:
-        raise ValueError("No images or videos found in that folder (all subfolders were searched).")
+        if not scan["model_folders"]:
+            raise ValueError("No images or videos found in that folder (all subfolders were searched).")
+        if workspace_name not in list_workspaces():          # a model alone needs the workspace it belongs to
+            raise ValueError("The folder holds a saved model but no pictures. Add the dataset's pictures in the same upload, "
+                             "or use Add Instance on an existing workspace.")
+        check_model_folder(scan, workspace_name)
+        model = install_model_folder(scan, workspace_name)
+        return {"instance_name": None, "image_count": 0, "frames": 0, "videos": 0, "video_errors": [], "skip_frames": skip,
+                "annotated_count": 0, "format": None, "classes": [], "skipped": {}, "duplicates": 0, "model": model}
+    check_model_folder(scan, workspace_name)
+    if scan["model_folders"] and not classes and not existing_classes_for_workspace(workspace_name):
+        classes = list(scan["model_folders"][0][1].get("classes") or []) or classes    # the saved run knows the class order
 
     fmt = detect_dataset_format(scan)  # raises on conflicting formats
     rename_map = build_rename_map(scan["images"].keys(), prefix)
@@ -760,4 +792,5 @@ def import_dataset(source_folder, workspace_name, prefix=None, progress_cb=None,
         "classes": class_order,
         "skipped": skipped,
         "duplicates": scan["duplicates"],
+        "model": install_model_folder(scan, workspace_name),
     }

@@ -21,6 +21,13 @@ GPUs: every GPU PyTorch can see is used (Ultralytics multi-GPU, one worker per G
 several GPUs the callbacks run in each worker, so only the first one reports; "Finish early" then takes effect at the
 end of the running epoch (Ultralytics shares the stop between the workers there).
 
+Going on later: after every saved epoch the job copies last.pt to resume_point.pt and keeps run_state.json up to date
+(see run_state.py: running / paused / failed can be continued, finished / stopped cannot). A pause (the file named by
+`job["pause_file"]`, or `job["pause_after_hours"]` running out) stops after the epoch in progress WITHOUT the final
+evaluation that would strip the optimizer from the checkpoint. With `job["resume_from"]` (a resume_point.pt) the run goes
+on from there with Ultralytics' own `resume`; `job["fixed_split"]` ({val: [file names], test: [...]}) keeps the same
+pictures as validation and test.
+
 Needs torch + ultralytics. Import this module only when a model is actually trained.
 """
 import csv
@@ -31,7 +38,7 @@ import signal
 import sys
 import time
 
-from . import head_data
+from . import head_data, run_state
 
 PREFIX = "@@ "
 RUN_NAME = "train_run"                  # <out_dir>/train_run/weights/best.pt, as in the plain Train button
@@ -156,13 +163,22 @@ def prepare(job, progress=None):
     pairs, empty = head_data.scan_labels(job["images_folders"], job["labels_folder"])
     if len(pairs) < head_data.MIN_LABELLED:
         raise ValueError(f"Only {len(pairs)} labelled images; at least {head_data.MIN_LABELLED} are needed.")
+    fingerprint_of = head_data.fingerprint(pairs, len(job["classes"]))     # the labelled pictures, before any background
     n_background = 0
     if job.get("background") and empty:                        # pictures saved with no object: negatives
         pairs = sorted(pairs + empty, key=lambda p: head_data._natural(os.path.basename(p[0])))
         n_background = len(empty)
-    train_pairs, val_pairs, test_pairs = head_data.split_three(
-        pairs, float(job.get("val_fraction", 0.2)), float(job.get("test_fraction", 0.0)), bool(job.get("shuffle")),
-        job.get("split_seed"))
+    missing = 0
+    if job.get("fixed_split"):                                 # a run that goes on keeps its validation / test pictures
+        fixed = job["fixed_split"]
+        train_pairs, val_pairs, test_pairs, missing = head_data.split_fixed(pairs, fixed.get("val") or [], fixed.get("test") or [])
+        if not val_pairs or not train_pairs:
+            raise ValueError("The pictures this run was validated on are not in the dataset (or nothing is left to train on), so "
+                             "the run cannot go on with it. Upload the same dataset again, or start a new training.")
+    else:
+        train_pairs, val_pairs, test_pairs = head_data.split_three(
+            pairs, float(job.get("val_fraction", 0.2)), float(job.get("test_fraction", 0.0)), bool(job.get("shuffle")),
+            job.get("split_seed"))
     classes = [str(c) for c in job["classes"]]
     scratch = job["scratch_dir"]
     shutil.rmtree(scratch, ignore_errors=True)                 # a stopped run leaves its copy behind
@@ -202,7 +218,8 @@ def prepare(job, progress=None):
         f.write("names:\n" + "".join(f"  {i}: {json.dumps(name)}\n" for i, name in enumerate(classes)))
     return {"yaml": yaml_path, "scratch": scratch, "n_train": written["train"], "n_val": written["val"],
             "n_test": written["test"], "n_background": n_background,
-            "counts": head_data.class_counts(train_pairs, len(classes))}
+            "counts": head_data.class_counts(train_pairs, len(classes)), "missing_split": missing, "dataset": fingerprint_of,
+            "val_names": [os.path.basename(p[0]) for p in val_pairs], "test_names": [os.path.basename(p[0]) for p in test_pairs]}
 
 
 def _augmenter(job):
@@ -253,6 +270,13 @@ def _evaluate_test(job, yaml_path, best_path, n_test, device, emit):
         return {}
 
 
+def _copy_resume_point(last, target):
+    """last.pt -> resume_point.pt, whole or not at all (Ultralytics rewrites last.pt in place)."""
+    tmp = target + ".part"
+    shutil.copyfile(str(last), tmp)
+    os.replace(tmp, target)
+
+
 def _metric(metrics, *names):
     for name in names:
         if name in metrics and metrics[name] is not None:
@@ -284,20 +308,66 @@ def train(job, emit=emit):
     yaml_path, scratch, counts = prepared["yaml"], prepared["scratch"], prepared["counts"]
     n_train, n_val, n_test = prepared["n_train"], prepared["n_val"], prepared["n_test"]
     n_background = prepared["n_background"]
+    resume_from = job.get("resume_from")
+    old_state = run_state.read(out) if resume_from else None
+    if not resume_from:
+        run_state.forget(out)
     try:
+        if resume_from and not os.path.isfile(resume_from):
+            raise ValueError("The checkpoint to go on from was not found.")
+        different = head_data.same_dataset((old_state or {}).get("dataset"), prepared["dataset"]) if resume_from else None
+        if different:
+            raise ValueError(different)
+        epochs = int((old_state or {}).get("epochs") or job["epochs"])
+        done_before = int((old_state or {}).get("epoch") or 0)
+        if prepared["missing_split"]:
+            emit("status", text=f"{prepared['missing_split']} picture(s) this run validated on are not in the dataset any more.")
+        run_state.write(out, status="running", reason="", workspace=job.get("workspace"), classes=classes, imgsz=imgsz, batch=batch,
+                        epochs=epochs, epoch=done_before, started=time.time(),
+                        split={"val": prepared["val_names"], "test": prepared["test_names"]},
+                        augment=job.get("augment"), background=bool(job.get("background")), dataset=prepared["dataset"],
+                        resumed=int((old_state or {}).get("resumed") or 0) + (1 if resume_from else 0))
         emit("status", text="Loading the model ...")
-        model = load_yolo(job["init_weights"])
-        epochs = int(job["epochs"])
+        model = load_yolo(resume_from or job["init_weights"])
         started = {"t": time.time()}
         best = {"fitness": -1.0, "epoch": 0, "last": {}}
+        resume_file = run_state.resume_path(out)
+        pause_file = job.get("pause_file")
+        limit = float(job.get("pause_after_hours") or 0) * 3600
+        clock = {"begin": time.time(), "save": time.time()}
 
         def on_train_start(trainer):
+            clock["save"] = time.time()
             if not _main_rank():
                 return
             emit("start", kind="yolo", train_images=n_train, val_images=n_val, test_images=n_test, background_images=n_background,
                  classes=classes, counts=counts,
                  epochs=epochs, device=device_label(device), batch=batch, imgsz=[imgsz, imgsz],
-                 model=os.path.basename(str(job["init_weights"])), freeze=int(job.get("freeze", 0)))
+                 model=os.path.basename(str(resume_from or job["init_weights"])), freeze=int(job.get("freeze", 0)),
+                 resumed_from=done_before if resume_from else 0)
+
+        def on_model_save(trainer):
+            """last.pt is written: keep a whole copy to go on from, and pause here when asked (or when the session's time is up)."""
+            if not _main_rank():
+                return
+            epoch = int(trainer.epoch) + 1
+            try:
+                _copy_resume_point(trainer.last, resume_file)
+                run_state.write(out, epoch=epoch)
+                emit("checkpoint", epoch=epoch)
+            except OSError as exc:
+                print(f"Could not keep the checkpoint of epoch {epoch}: {exc}", flush=True)
+            now = time.time()
+            took, clock["save"] = now - clock["save"], now
+            why = ""
+            if pause_file and os.path.exists(pause_file):
+                why = "paused on request"
+            elif limit and now - clock["begin"] + took >= limit:
+                why = "the session time ran out"
+            if why and epoch < int(getattr(trainer, "epochs", epochs)):
+                trainer.stop = True                              # ends after this epoch, without the final evaluation
+                run_state.write(out, status="paused", reason=why)
+                emit("status", text=f"Pausing after epoch {epoch} ({why}): the checkpoint is saved, the run can go on later.")
 
         finished = {"epoch": False}
 
@@ -346,29 +416,44 @@ def train(job, emit=emit):
                     emit("status", text="Finishing early: validating this epoch, then the final evaluation ...")
 
         model.add_callback("on_train_start", on_train_start)
+        model.add_callback("on_model_save", on_model_save)
         model.add_callback("on_train_batch_end", finish_early)
         model.add_callback("on_train_epoch_end", on_train_epoch_end)
         model.add_callback("on_fit_epoch_end", on_epoch_end)
         model.add_callback("on_fit_epoch_end", finish_early)
         emit("status", text="Starting Ultralytics: it checks every picture and label first, which can take a minute "
                             "before the first epoch shows up ...")
-        model.train(data=yaml_path, epochs=epochs, imgsz=imgsz, batch=batch, optimizer="AdamW",
-                    lr0=float(job["lr"]), weight_decay=float(job.get("weight_decay", 0.0005)),
-                    freeze=int(job.get("freeze") or 0) or None, project=out, name=RUN_NAME,
-                    exist_ok=True, device=device, amp=gpus > 0, workers=int(job.get("workers", 1)), plots=False)
+        if resume_from:                                         # Ultralytics' own resume: epoch, optimizer, EMA, schedule
+            model.train(resume=True, data=yaml_path, batch=batch, device=device, workers=int(job.get("workers", 1)),
+                        save_dir=os.path.join(out, RUN_NAME), plots=False)
+        else:
+            model.train(data=yaml_path, epochs=epochs, imgsz=imgsz, batch=batch, optimizer="AdamW",
+                        lr0=float(job["lr"]), weight_decay=float(job.get("weight_decay", 0.0005)),
+                        freeze=int(job.get("freeze") or 0) or None, project=out, name=RUN_NAME,
+                        exist_ok=True, device=device, amp=gpus > 0, workers=int(job.get("workers", 1)), plots=False)
         save_dir = str(getattr(getattr(model, "trainer", None), "save_dir", "") or os.path.join(out, RUN_NAME))
         best_path = os.path.join(save_dir, "weights", "best.pt")
         last, best_epoch, best_fitness = best["last"], best["epoch"], max(best["fitness"], 0.0)
         stopped = asked["early"]
-        if gpus > 1:                                            # the callbacks ran in the workers, not in this process
+        if gpus > 1 or resume_from:                             # the callbacks ran in the workers / saw only the last part
             last, best_epoch, best_fitness = _results_from_csv(save_dir)
-            stopped = bool(stop_file and os.path.exists(stop_file))
-        test = _evaluate_test(job, yaml_path, best_path, n_test, device, emit) if n_test else {}
-        summary = dict(**test, best_epoch=best_epoch, best_fitness=best_fitness, epochs_run=last.get("epoch", 0),
-                       stopped=stopped, out_dir=out, weights=best_path, has_model=os.path.isfile(best_path),
+            stopped = bool(stop_file and os.path.exists(stop_file)) if gpus > 1 else asked["early"]
+        saved = run_state.read(out) or {}
+        paused = saved.get("status") == "paused"
+        epochs_done = int(last.get("epoch") or saved.get("epoch") or 0)
+        test = _evaluate_test(job, yaml_path, best_path, n_test, device, emit) if n_test and not paused else {}
+        summary = dict(**test, best_epoch=best_epoch, best_fitness=best_fitness, epochs_run=epochs_done,
+                       stopped=stopped, paused=paused, out_dir=out, weights=best_path, has_model=os.path.isfile(best_path),
                        classes=classes, map50=last.get("map50"), map5095=last.get("map5095"))
+        if not paused:
+            run_state.write(out, status="stopped" if stopped else "finished",
+                            reason="Finish early" if stopped else "all the epochs ran", epoch=epochs_done)
         emit("done", **summary)
         return summary
+    except Exception as exc:                                    # cut off by an error: it can go on from the last saved epoch
+        if (run_state.read(out) or {}).get("status") == "running":
+            run_state.write(out, status="failed", reason=str(exc) or exc.__class__.__name__)
+        raise
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 

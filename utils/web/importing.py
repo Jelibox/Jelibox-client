@@ -117,8 +117,20 @@ def summarize(folder, workspace=None):
         return {"error": "That folder does not exist."}
     scan = di.scan_dataset_folder(folder)
     n_images, n_videos = len(scan["images"]), len(scan["videos"])
+    model = None
+    if scan["model_folders"]:
+        marker = scan["model_folders"][0][1]
+        model = {"epoch": marker.get("epoch"), "epochs": marker.get("epochs"), "classes": list(marker.get("classes") or []),
+                 "workspace": marker.get("workspace"), "status": marker.get("status")}
     if not n_images and not n_videos:
-        return {"error": "No images or videos found in this folder (every subfolder was searched)."}
+        if model is None:
+            return {"error": "No images or videos found in this folder (every subfolder was searched)."}
+        if not workspace or workspace not in wm.list_workspaces():
+            return {"error": "The upload holds a saved model but no pictures. Add the dataset's pictures in the same upload, "
+                             "or use Add Instance on an existing workspace."}
+        return {"error": None, "images": 0, "videos": 0, "duplicates": 0, "format": None, "annotation_files": 0, "classes": {},
+                "yolo_unnamed": False, "video_frames": 0, "locked_classes": wm.existing_classes_for_workspace(workspace),
+                "skipped_classes": [], "model": model}
     try:
         fmt = di.detect_dataset_format(scan) if n_images else None
     except ValueError as exc:
@@ -129,7 +141,7 @@ def summarize(folder, workspace=None):
         "annotation_files": len(scan[fmt]) if fmt else 0, "classes": found,
         "yolo_unnamed": bool(fmt == "yolo" and not di.yolo_classes_resolved(scan)),
         "video_frames": sum(p["frames"] for p in di.probe_videos(scan["videos"])) if n_videos else 0,
-        "locked_classes": None, "skipped_classes": [],
+        "locked_classes": None, "skipped_classes": [], "model": model,
     }
     locked = wm.existing_classes_for_workspace(workspace) if workspace else None
     if locked:

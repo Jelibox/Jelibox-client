@@ -9,6 +9,15 @@ Add a line under **[Unreleased]** in every pull request that a user would notice
 
 ## [Unreleased]
 
+### Added
+
+- **A full training can be paused and resumed, also in another session.** Every full YOLO training now keeps `run_state.json` and `resume_point.pt` in `models/<workspace>/yolo_run/` (the copy of the checkpoint is made after every saved epoch) and records how it ended: *paused* (**Pause (continue later)** in the progress window, or the new **Pause after (hours)** setting, which stops after the last epoch that fits in a Kaggle session), *cut off* (the server stopped, the session ended, the power went), *failed*, or ended on purpose (*Finish early*, **Stop now**, all epochs run). Only the first three can go on: the Train window then shows a **Resume** card (ticked by default; the only settings are the batch size and the session limit) and goes on from the saved epoch with the same optimizer and learning-rate schedule, the same settings and the same validation and test pictures (their file names are in `run_state.json`; every other picture trains). The state also keeps the number of labelled pictures and annotations: when the dataset has a different count Resume is refused ("the dataset is not the one this run was trained with") even though the model is there. A new training asks before it deletes a saved run.
+- **Carry a run to another session.** **Download checkpoint** (Train window) and **Keep a copy on this computer** (Chrome / Edge: the page rewrites one file on your computer after every epoch while it stays open, so a Kaggle session that ends takes nothing with it) make a `.zip` holding a *model folder*: `jelibox-model.json` plus the files that belong in `models/<workspace>`. Upload that folder or `.zip` with **Add Workspace** (together with the dataset, or alone into a workspace that exists): Jelibox recognises the marker, does not read it as a dataset and puts the files in `models/<workspace>`, then Resume is offered. A new workspace takes its classes from the folder when none are typed. The desktop installs such a folder too; resuming is in the web version's Train window.
+
+### Fixed
+
+- **A training started by the web server could be ended by the server itself.** On Linux the operating system ends a child process when the *thread* that started it ends, and a web server's worker threads come and go; the training is now started by one thread that lives as long as the server. (This is also why 8 tests of the web training had been failing on some machines.)
+
 ## [1.5.0] - 2026-11-25
 
 ### Added

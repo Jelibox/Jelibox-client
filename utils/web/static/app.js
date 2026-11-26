@@ -272,6 +272,7 @@ function addWorkspace(existing) {
       const parts = [];
       if (sc.images) parts.push(sc.format ? `${sc.images} picture(s), ${sc.annotation_files} ${label} annotation file(s), ${found.length} class(es): ${found.slice(0, 8).join(', ')}${found.length > 8 ? ' ...' : ''}` : `${sc.images} picture(s), no annotations: they are added unannotated.`);
       if (sc.videos) parts.push(`${sc.videos} video(s): their frames become pictures without annotations.`);
+      if (sc.model) parts.push(`✓ A saved training run was found (epoch ${sc.model.epoch} of ${sc.model.epochs}). It is put in this workspace's models folder, and the Train window offers to go on from there.`);
       if (sc.yolo_unnamed) parts.push('⚠ No class name file (classes.txt / obj.names / data.yaml): the classes import as class_0, class_1 ...');
       if (sc.duplicates) parts.push(`⚠ ${sc.duplicates} picture(s) share a file name with another one: only one of each name is imported.`);
       if (sc.locked_classes) parts.push(`This workspace keeps its classes (${sc.locked_classes.join(', ')}).` + (sc.skipped_classes.length ? ` ⚠ Annotations of ${sc.skipped_classes.join(', ')} are skipped.` : ''));
@@ -326,7 +327,8 @@ function addWorkspace(existing) {
       const job = await watchJob(started.title, started);
       if (job.state === 'error') { toast(job.error); } else {
         const r = job.result;
-        toast(`Added ${r.image_count} picture(s) to ${r.instance_name}` + (r.annotated_count ? `, ${r.annotated_count} annotated` : '') + '.');
+        toast((r.instance_name ? `Added ${r.image_count} picture(s) to ${r.instance_name}` + (r.annotated_count ? `, ${r.annotated_count} annotated` : '') + '.' : '')
+          + (r.model ? `${r.instance_name ? ' ' : ''}Saved training run installed (epoch ${r.model.epoch} of ${r.model.epochs}): open Train to resume.` : ''));
       }
       await reloadWorkspaces();
     } catch (err) { say(err.message, 'error'); }

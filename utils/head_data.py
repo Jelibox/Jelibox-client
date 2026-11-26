@@ -196,6 +196,33 @@ def split_three(pairs, val_fraction=0.2, test_fraction=0.0, shuffle=False, seed=
     return items[:n_train], items[n_train:n_train + n_val], items[n_train + n_val:]
 
 
+def split_fixed(pairs, val_names, test_names):
+    """(train, val, test, missing) for a run that goes on: the pictures whose FILE NAME is in `val_names` / `test_names`
+    (what the first part of the run validated and tested on) stay the validation / test part, every other picture trains,
+    so nothing the model was scored on is ever trained on. `missing` counts the named pictures that are not in `pairs`."""
+    val_set, test_set = set(val_names), set(test_names)
+    train, val, test = [], [], []
+    for pair in pairs:
+        name = os.path.basename(pair[0])
+        (val if name in val_set else test if name in test_set else train).append(pair)
+    return train, val, test, len(val_set | test_set) - len(val) - len(test)
+
+
+def fingerprint(pairs, n_classes):
+    """The cheapest way to tell whether a dataset is the same one: how many labelled pictures and how many annotations
+    (boxes) it holds. A run that goes on later is only allowed with a dataset that has the same two numbers."""
+    return {"pictures": len(pairs), "annotations": sum(class_counts(pairs, n_classes))}
+
+
+def same_dataset(saved, now):
+    """None when the two fingerprints match (or the saved one is missing), else the sentence that says how they differ."""
+    if not saved or not now or (saved.get("pictures"), saved.get("annotations")) == (now.get("pictures"), now.get("annotations")):
+        return None
+    return (f"The dataset is not the one this run was trained with: then {saved.get('annotations')} annotations on "
+            f"{saved.get('pictures')} labelled pictures, now {now['annotations']} annotations on {now['pictures']}. A run only goes on "
+            f"with the same dataset: upload the original dataset again, or start a new training.")
+
+
 def class_counts(pairs, n_classes):
     counts = [0] * n_classes
     for _, label in pairs:

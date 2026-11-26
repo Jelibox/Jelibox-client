@@ -309,5 +309,168 @@ class RulesTests(TrainBase):
         self.wait_end()
 
 
+class ResumeTests(TrainBase):
+    """A saved run (paused, cut off or failed) is offered, continued with the same settings and pictures, and can be carried away."""
+
+    def setUp(self):
+        super().setUp()
+        self.save("a.png", bboxes=[[10, 10, 50, 50, "cat"]])
+        self.save("b.png", bboxes=[[10, 10, 50, 50, "dog"], [60, 60, 90, 90, "cat"]])
+        self.run_dir = os.path.join(self.tmp, "models", "pets", "yolo_run")
+
+    def fingerprint(self):
+        from utils import head_data, workspace_manager as wm
+        folders = [wm.instance_path(i) for i in wm.list_workspaces().get("pets", [])]
+        pairs, _ = head_data.scan_labels(folders, self.labels)
+        return head_data.fingerprint(pairs, 2)
+
+    def a_saved_run(self, status="paused", classes=("cat", "dog"), dataset=None, epoch=3, epochs=10):
+        from utils import run_state
+        run_state.write(self.run_dir, status=status, reason="paused on request", epoch=epoch, epochs=epochs, classes=list(classes),
+                        imgsz=320, batch=6, split={"val": ["b.png"], "test": []}, background=False, augment=None,
+                        dataset=dataset or self.fingerprint())
+        for rel, data in (("resume_point.pt", b"resume"), ("train_run/weights/best.pt", b"best"),
+                          ("train_run/results.csv", "epoch,train/box_loss,metrics/mAP50(B),metrics/mAP50-95(B)\n1,1.0,0.1,0.05\n2,0.8,0.3,0.2\n"
+                                                   "3,0.7,0.2,0.1\n")):
+            full = os.path.join(self.run_dir, *rel.split("/"))
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "wb" if isinstance(data, bytes) else "w") as f:
+                f.write(data)
+
+    def resume(self, **extra):
+        return self.post(self.url, {"kind": "yolo", "resume": True, **extra})
+
+    def test_a_paused_run_is_offered_with_what_it_needs(self):
+        self.a_saved_run()
+        info = self.client.get(self.url).json()
+        self.assertEqual((info["resume"]["status"], info["resume"]["epoch"], info["resume"]["epochs"], info["resume"]["batch"]),
+                         ("paused", 3, 10, 6))
+        self.assertIn("epoch 3 of 10", info["resume"]["text"])
+        self.assertIsNone(info["resume"]["blocked"])
+        self.assertEqual(info["checkpoint"], {"epoch": 3, "epochs": 10, "status": "paused"})
+
+    def test_a_cut_off_run_is_offered_as_interrupted(self):
+        self.a_saved_run("running")
+        self.assertEqual(self.client.get(self.url).json()["resume"]["status"], "interrupted")
+
+    def test_a_run_that_ended_on_purpose_is_not_offered_but_its_checkpoint_can_be_downloaded(self):
+        for status in ("stopped", "finished"):
+            self.a_saved_run(status)
+            info = self.client.get(self.url).json()
+            self.assertIsNone(info["resume"], status)
+            self.assertEqual(info["checkpoint"]["status"], status)
+
+    def test_other_classes_block_the_resume(self):
+        self.a_saved_run(classes=("dog", "cat"))
+        resume = self.client.get(self.url).json()["resume"]
+        self.assertIn("not the ones of the saved run", resume["blocked"])
+        res = self.resume()
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("cannot go on", res.json()["error"])
+        self.assertFalse(self.trainer.is_running())
+
+    def test_a_changed_dataset_blocks_the_resume_even_with_the_model_there(self):
+        self.a_saved_run(dataset={"pictures": 2, "annotations": 99})
+        self.assertIn("not the one this run was trained with", self.client.get(self.url).json()["resume"]["blocked"])
+        res = self.resume()
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("99 annotations on 2 labelled pictures", res.json()["error"])
+        self.assertTrue(os.path.isfile(os.path.join(self.run_dir, "resume_point.pt")), "nothing was touched")
+
+    def test_resuming_starts_the_job_with_the_saved_settings_and_keeps_the_run_folder(self):
+        self.a_saved_run()
+        res = self.resume(batch=4, pause_after_hours="11.5")
+        self.assertEqual(res.status_code, 200, res.text)
+        shown = res.json()
+        self.assertEqual((shown["resumed_from"], shown["total_epochs"]), (3, 10))
+        self.assertEqual([r["epoch"] for r in shown["rows"]], [1, 2, 3], "the table so far comes back from results.csv")
+        self.assertEqual(shown["best_epoch"], 2)
+        job = self.job_file("yolo_run")
+        self.assertEqual((job["resume_from"], job["epochs"], job["imgsz"], job["batch"], job["pause_after_hours"]),
+                         (os.path.join(self.run_dir, "resume_point.pt"), 10, 320, 4, 11.5))
+        self.assertEqual(job["fixed_split"], {"val": ["b.png"], "test": []})
+        self.assertEqual(job["pause_file"], os.path.join(self.run_dir, "pause.flag"))
+        self.wait_end()
+        self.assertTrue(os.path.isfile(os.path.join(self.run_dir, "train_run", "results.csv")), "the run folder is not wiped")
+
+    def test_a_new_training_asks_before_it_deletes_a_saved_run(self):
+        self.a_saved_run()
+        res = self.post(self.url, self.yolo(confirm=False))
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("deleted", res.json()["needs_confirm"]["message"])
+        self.assertIn("epoch 3 of 10", res.json()["needs_confirm"]["message"])
+        self.assertEqual(self.post(self.url, self.yolo()).status_code, 200)
+        self.wait_end()
+        self.assertFalse(os.path.isfile(os.path.join(self.run_dir, "resume_point.pt")))
+
+    def test_pause_asks_the_job_to_stop_after_the_epoch(self):
+        os.environ["FAKE_MODE"] = "wait"
+        self.a_saved_run()
+        self.assertEqual(self.resume().status_code, 200)
+        res = self.post("/api/train/pause")
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json()["pausing"])
+        self.assertTrue(os.path.exists(os.path.join(self.run_dir, "pause.flag")))
+        self.assertEqual(self.post("/api/train/pause").status_code, 400, "once is enough")
+        self.post("/api/train/stop")
+        self.wait_end()
+        self.assertFalse(os.path.exists(os.path.join(self.run_dir, "pause.flag")), "the flag is removed when the run is over")
+
+    def test_pause_needs_a_full_training(self):
+        self.assertEqual(self.post("/api/train/pause").status_code, 400)
+        os.environ["FAKE_MODE"] = "wait"
+        self.assertEqual(self.post(self.url, self.head()).status_code, 200)
+        self.assertEqual(self.post("/api/train/pause").status_code, 400)
+        self.post("/api/train/stop")
+        self.wait_end()
+
+    def test_stop_now_marks_the_run_as_ended_on_purpose(self):
+        from utils import run_state
+        os.environ["FAKE_MODE"] = "wait"
+        self.a_saved_run()
+        self.resume()
+        self.post("/api/train/stop")
+        self.wait_end()
+        self.assertEqual(run_state.read(self.run_dir)["status"], "stopped")
+        self.assertIsNone(self.client.get(self.url).json()["resume"])
+
+    def test_the_checkpoint_downloads_as_a_zip_with_the_marker_and_leaves_nothing_behind(self):
+        import io
+        import zipfile
+        self.a_saved_run()
+        res = self.client.get(f"{self.url}/checkpoint")
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertIn("pets-checkpoint.zip", res.headers["content-disposition"])
+        names = sorted(zipfile.ZipFile(io.BytesIO(res.content)).namelist())
+        self.assertEqual(names, ["pets-checkpoint/jelibox-model.json", "pets-checkpoint/yolo_run/resume_point.pt",
+                                 "pets-checkpoint/yolo_run/run_state.json", "pets-checkpoint/yolo_run/train_run/results.csv",
+                                 "pets-checkpoint/yolo_run/train_run/weights/best.pt"])
+        self.assertEqual(self.client.get(f"{self.url}/checkpoint").status_code, 200, "it can be fetched again and again")
+        left = os.path.join(self.tmp, "temp", "downloads")
+        self.assertEqual(os.listdir(left) if os.path.isdir(left) else [], [], "no copy stays on the server")
+
+    def test_there_is_no_checkpoint_before_the_first_epoch(self):
+        res = self.client.get(f"{self.url}/checkpoint")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("first epoch", res.json()["error"])
+
+    def test_a_paused_end_is_shown_as_paused_and_installs_nothing(self):
+        from utils import run_state
+        self.a_saved_run()
+        self.assertEqual(self.resume().status_code, 200)
+        self.wait_end()
+        for leftover in ("modelAssistant.pt", "modelAssistant.prev.pt"):                   # what the fake run installed
+            if os.path.exists(os.path.join(self.tmp, "models", "pets", leftover)):
+                os.remove(os.path.join(self.tmp, "models", "pets", leftover))
+        # the fake process does not pause, so say what the real job reports and look at how the manager words it
+        run = self.trainer.run
+        run.result = {"paused": True, "epochs_run": 4, "weights": os.path.join(self.run_dir, "train_run", "weights", "best.pt")}
+        run_state.write(self.run_dir, status="paused", reason="the session time ran out", epoch=4)
+        final = self.trainer._ended_yolo(run)
+        self.assertEqual((final["kind"], final["title"], final["installed"]), ("warn", "Paused - it can go on later", ""))
+        self.assertIn("the session time ran out", final["text"])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "models", "pets", "modelAssistant.pt")))
+
+
 if __name__ == "__main__":
     unittest.main()

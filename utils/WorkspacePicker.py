@@ -890,6 +890,15 @@ class WorkspacePickerApp:
             state['scan'] = scan
             n_images = len(scan['images'])
             n_videos = len(scan['videos'])
+            models = scan['model_folders']
+            if n_images == 0 and n_videos == 0 and models:
+                state['format'] = None
+                note = (f"✓ A saved training run was found (epoch {models[0][1].get('epoch')} of {models[0][1].get('epochs')}): "
+                        f"it is put in this workspace's models folder when you press the button below. "
+                        f"Pictures are not needed for that, but the workspace must already exist.")
+                set_status(folder_status, note, C_GREEN)
+                recenter()
+                return
             if n_images == 0 and n_videos == 0:
                 state['format'] = None
                 set_status(folder_status, "✗ No images or videos found in this folder (every subfolder was searched).",
@@ -927,6 +936,9 @@ class WorkspacePickerApp:
             if state['extra']:
                 text = (text + "\n" if text else "") + (f"✓ {len(state['extra'])} archive(s) unpacked (a temporary copy, "
                                                          f"removed when this window closes).")
+            if models:
+                text = (text + "\n" if text else "") + (f"✓ A saved training run was found (epoch {models[0][1].get('epoch')} of "
+                                                         f"{models[0][1].get('epochs')}): it goes to this workspace's models folder.")
             if n_videos:
                 state['probes'] = probe_videos(scan['videos'])
                 if n_images == 0:
@@ -1085,7 +1097,7 @@ class WorkspacePickerApp:
                 return
             if state['format'] == 'conflict':
                 return                      # the specific error is already shown under the folder field
-            if not state['scan']['images'] and not state['scan']['videos']:
+            if not state['scan']['images'] and not state['scan']['videos'] and not state['scan']['model_folders']:
                 set_status(folder_status, "✗ No images or videos found in this folder.", C_RED)
                 return
             skip_frames = DEFAULT_SKIP_FRAMES
@@ -1150,7 +1162,10 @@ class WorkspacePickerApp:
             dialog.destroy()
             self.expanded.add(target_name)
             self.refresh_workspaces()
-            lines = [f'"{result["instance_name"]}" created with {result["image_count"]} image(s).']
+            lines = [f'"{result["instance_name"]}" created with {result["image_count"]} image(s).'] if result['instance_name'] else []
+            if result.get('model'):
+                lines.append(f'Saved training run installed (epoch {result["model"]["epoch"]} of {result["model"]["epochs"]}): '
+                             f'Resuming it is offered by the web version\'s Train window.')
             if result['frames']:
                 lines.append(f'Video frames: {result["frames"]} picture(s) saved from {result["videos"]} video(s), '
                              f'1 frame out of every {result["skip_frames"]}.')

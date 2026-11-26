@@ -58,6 +58,47 @@ class OrphanTests(unittest.TestCase):
         self.assertFalse(pg.pid_alive(0))
 
 
+class SpawnTests(unittest.TestCase):
+    """Linux ties a child to the thread that started it: a web server's pool threads come and go, so the launcher must not be one."""
+
+    def start_from_a_short_lived_thread(self):
+        import threading
+        made = []
+
+        def work():
+            made.append(pg.spawn(lambda: subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                                                          **pg.popen_extra())))
+        thread = threading.Thread(target=work)
+        thread.start()
+        thread.join()                                           # the thread that asked is gone now
+        self.addCleanup(lambda: (made[0].kill(), made[0].wait()))
+        return made[0]
+
+    @unittest.skipIf(os.name == "nt", "Windows binds the worker with a job object, not to a thread")
+    def test_a_worker_started_from_a_pool_thread_survives_that_thread(self):
+        child = self.start_from_a_short_lived_thread()
+        time.sleep(1.0)
+        self.assertIsNone(child.poll(), "the child was ended with the thread that started it")
+
+    def test_the_caller_gets_what_the_launch_raised(self):
+        import threading
+        caught = []
+
+        def work():
+            try:
+                pg.spawn(lambda: subprocess.Popen(["/definitely/not/a/program"]))
+            except OSError as exc:
+                caught.append(exc)
+        thread = threading.Thread(target=work)
+        thread.start()
+        thread.join()
+        self.assertEqual(len(caught), 1)
+
+    def test_the_main_thread_starts_the_process_itself(self):
+        child = pg.spawn(lambda: subprocess.Popen([sys.executable, "-c", "pass"]))
+        self.assertEqual(child.wait(10), 0)
+
+
 class LockTests(unittest.TestCase):
     def setUp(self):
         self.base = tempfile.mkdtemp()

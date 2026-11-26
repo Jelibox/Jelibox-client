@@ -156,7 +156,9 @@ export async function openTrain(ed) {
     const cw = h('input', { type: 'checkbox' }); cw.checked = true;
     const flip = h('input', { type: 'checkbox' }); flip.checked = true;
     const row = (label, node, extra) => h('div', { class: 'inline', style: 'margin:5px 0' }, h('span', { class: 'muted', style: 'width:210px;display:inline-block' }, label), node, extra || null);
+    const hoursIn = h('input', { type: 'text', placeholder: 'none', style: 'width:70px' });
     const yoloRows = h('div', {}, row('Image size (square)', sq, h('span', { class: 'muted', style: 'font-size:12px' }, 'multiple of 32')),
+      row('Pause after (hours)', hoursIn, h('span', { class: 'muted', style: 'font-size:12px' }, 'e.g. 11.5 for a 12 h Kaggle session: it pauses after the last epoch that fits, and can be resumed')),
       row('Freeze first layers', freeze, h('span', { class: 'muted', style: 'font-size:12px' }, '0 = train every layer, 10 = keep the backbone')), row('Weight decay', wd));
     const headRows = h('div', {}, row('Image size (height × width)', h('span', {}, hh, ' × ', ww), h('span', { class: 'muted', style: 'font-size:12px' }, 'multiples of 32')),
       h('label', { class: 'check' }, cw, ' Class weights (rare classes count more)'),
@@ -180,6 +182,32 @@ export async function openTrain(ed) {
     let picker = null;
     augPicker(ed, { training: true }).then((p) => { picker = p; augSlot.replaceWith(p.node); }).catch((e) => { augSlot.textContent = e.message; });
 
+    // --- a saved run of this workspace (paused, cut off or failed) is offered first, and chosen by default
+    const rs = info.resume, saved = info.checkpoint;
+    const resumeBox = h('input', { type: 'checkbox', onchange: () => { applyResume(); } });
+    resumeBox.checked = !!rs && !rs.blocked;
+    const resumeBatch = h('input', { type: 'number', value: (rs && rs.batch) || info.defaults.batch, min: 1, max: 128, style: 'width:90px' });
+    const resumeHours = h('input', { type: 'text', placeholder: 'none', style: 'width:70px' });
+    const resumeFields = h('div', {}, row('Batch size', resumeBatch, h('span', { class: 'muted', style: 'font-size:12px' }, 'lower it if the GPU has less memory now')),
+      row('Pause after (hours)', resumeHours, h('span', { class: 'muted', style: 'font-size:12px' }, 'this session\'s time limit')));
+    const resumeCard = !rs && !saved ? null : h('div', { class: 'xcard' }, h('div', { class: 'xhead' }, h('b', {}, rs ? 'RESUME' : 'SAVED RUN')),
+      rs ? h('p', { style: 'margin:0 0 6px' }, rs.text) : h('p', { class: 'muted', style: 'margin:0 0 6px' }, `The last full training ended (${saved.status}); it cannot be continued, but its checkpoint can be downloaded.`),
+      rs && rs.blocked ? h('p', { style: 'color:var(--danger-fg);margin:0 0 6px' }, rs.blocked) : null,
+      rs && !rs.blocked ? h('label', { class: 'check' }, resumeBox, ' Go on with this run (same settings, same pictures)') : null,
+      rs && !rs.blocked ? resumeFields : null,
+      saved ? h('div', { class: 'inline', style: 'margin-top:6px' }, h('a', { class: 'btn small', href: `/api/${base}/train/checkpoint`, download: '', style: 'text-decoration:none' }, '⬇ Download checkpoint'),
+        h('span', { class: 'muted', style: 'font-size:12px' }, `epoch ${saved.epoch} of ${saved.epochs}. To go on in a new session (another server), upload this .zip with Add Workspace, together with the dataset.`)) : null);
+    const resumeOn = () => kind === 'yolo' && !!rs && !rs.blocked && resumeBox.checked;
+    const startBtn = h('button', { class: 'btn primary', onclick: () => start(false) }, 'Start training');
+    function applyResume() {
+      const on = resumeOn();
+      if (resumeCard) resumeCard.style.display = kind === 'yolo' ? '' : 'none';
+      resumeFields.style.display = on ? '' : 'none';
+      dataCard.style.display = modelCard.style.display = numbers.style.display = on ? 'none' : '';
+      augCard.style.display = kind === 'yolo' && !on ? '' : 'none';
+      startBtn.textContent = on ? 'Resume training' : 'Start training';
+    }
+
     function applyKind() {
       const yolo = kind === 'yolo';
       modelTitle.firstChild.textContent = yolo ? 'BASE MODEL' : 'DETECTOR';
@@ -192,14 +220,17 @@ export async function openTrain(ed) {
         ? `A stock name is downloaded the first time. Training starts from these pretrained weights and changes all of them; pick a -seg model for polygons (this workspace is in ${info.task === 'seg' ? 'polygon' : 'box'} mode).`
         : 'A stock name is downloaded the first time. A model you choose must be the detector you will annotate with: the head reads its features.';
       drawData();
+      applyResume();
     }
     updateTaps(); applyKind();
 
     async function start(confirm = false) {
       error.hidden = true;
       const g = split.get();
-      const req = kind === 'yolo'
-        ? { kind, base: baseIn.value.trim(), imgsz: sq.value, epochs: epochs.value, batch: batch.value, lr: lr.value, freeze: freeze.value,
+      const req = resumeOn()
+        ? { kind, resume: true, batch: resumeBatch.value, pause_after_hours: resumeHours.value, polygon: ed.polygon(), confirm }
+        : kind === 'yolo'
+        ? { kind, pause_after_hours: hoursIn.value, base: baseIn.value.trim(), imgsz: sq.value, epochs: epochs.value, batch: batch.value, lr: lr.value, freeze: freeze.value,
           weight_decay: wd.value, valid_pct: g.valid, test_pct: g.test, shuffle: shuffle.checked, background: bg.checked && !!background(),
           'continue': cont.checked && info.has_model, augment: picker ? picker.get() : null, polygon: ed.polygon(), confirm }
         : { kind, detector: detIn.value.trim(), taps: taps.value, height: hh.value, width: ww.value, epochs: epochs.value, batch: batch.value,
@@ -219,8 +250,8 @@ export async function openTrain(ed) {
 
     body.replaceChildren(h('p', { class: 'muted' }, kind === 'yolo' ? 'Trains a whole YOLO model on this workspace\'s labels with Ultralytics. Every layer learns your classes and boxes, and the result is a normal YOLO model.'
       : 'Trains a head on this workspace\'s labels: the box is what the detector finds and its class is what the head learns. The detector itself is never changed.'),
-    ...(headChoice ? [typeBox] : []), dataCard, modelCard, numbers, augCard, error,
-    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: close }, 'Close'), h('button', { class: 'btn primary', onclick: () => start(false) }, 'Start training')));
+    ...(headChoice ? [typeBox] : []), ...(resumeCard ? [resumeCard] : []), dataCard, modelCard, numbers, augCard, error,
+    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: close }, 'Close'), startBtn));
   }
 
   // ================================================================== progress
@@ -232,6 +263,30 @@ export async function openTrain(ed) {
     const table = h('table', { class: 'trainrows' }, head, tbody);
     const log = h('pre', { class: 'status log' });
     const finish = h('button', { class: 'btn primary', onclick: async () => { try { await api('train/finish-early', 'POST', {}); } catch (e) { toast(e.message); } } }, 'Finish early');
+    const pause = h('button', { class: 'btn', title: 'Finish the epoch in progress, save a checkpoint and stop, so the run can go on later (also on another server)',
+      onclick: async () => { try { await api('train/pause', 'POST', {}); } catch (e) { toast(e.message); } } }, 'Pause (continue later)');
+    const save = { handle: null, rows: -1, busy: false };
+    const saveNote = h('span', { class: 'muted', style: 'font-size:12px' });
+    const keep = h('button', { class: 'btn small', onclick: keepCopy }, 'Keep a copy on this computer');
+    const saveRow = h('div', { class: 'inline', style: 'margin:6px 0' },
+      h('a', { class: 'btn small', href: `/api/${base}/train/checkpoint`, download: '', style: 'text-decoration:none' }, '⬇ Download checkpoint'), keep, saveNote);
+    async function writeCopy() {
+      if (!save.handle || save.busy) return;
+      save.busy = true;
+      try {
+        const res = await fetch(`/api/${base}/train/checkpoint`, { credentials: 'same-origin', headers: { 'X-Jelibox': '1' } });
+        if (!res.ok) throw new Error(((await res.json().catch(() => ({}))).error) || res.statusText);
+        await res.body.pipeTo(await save.handle.createWritable());
+        saveNote.textContent = `Saved ${new Date().toLocaleTimeString()} to ${save.handle.name}; it is rewritten after every epoch while this page stays open.`;
+      } catch (err) { saveNote.textContent = 'Could not save the copy: ' + err.message; }
+      save.busy = false;
+    }
+    async function keepCopy() {
+      if (!window.showSaveFilePicker) { toast('This browser cannot keep a file up to date. Use Chrome or Edge, or press Download checkpoint now and then.'); return; }
+      try { save.handle = await window.showSaveFilePicker({ suggestedName: `${run.workspace}-checkpoint.zip`, types: [{ description: 'Jelibox checkpoint', accept: { 'application/zip': ['.zip'] } }] }); }
+      catch (err) { return; }                                // cancelled
+      save.rows = -1; keep.textContent = 'Copy kept on this computer'; await writeCopy();
+    }
     const stop = h('button', { class: 'btn danger', onclick: async () => {
       if (!(await confirmBox('Train model', `Stop the training now?\n\nThe best ${run.kind === 'yolo' ? 'model' : 'head'} so far is kept.`, 'Stop now', true))) return;
       try { await api('train/stop', 'POST', {}); } catch (e) { toast(e.message); }
@@ -243,8 +298,8 @@ export async function openTrain(ed) {
     let columns = null, shown = 0;
     body.replaceChildren(
       h('p', { class: 'muted', style: 'font-size:12px' }, `Workspace ${run.workspace}  ·  started by ${run.user}`),
-      title, status, bar, stats, h('div', { class: 'tablebox' }, table), log,
-      h('div', { class: 'row' }, closeBtn, stop, finish));
+      title, status, bar, stats, h('div', { class: 'tablebox' }, table), log, run.kind === 'yolo' ? saveRow : null,
+      h('div', { class: 'row' }, closeBtn, stop, finish, ...(run.kind === 'yolo' ? [pause] : [])));
 
     function render() {
       const cols = run.kind === 'yolo' ? YOLO_COLUMNS : HEAD_COLUMNS;
@@ -271,6 +326,7 @@ export async function openTrain(ed) {
       log.textContent = run.log.join('\n'); log.scrollTop = log.scrollHeight;
       const live = run.state === 'running';
       finish.disabled = !live || run.finishing || run.stopping; finish.textContent = run.finishing ? 'Finishing ...' : 'Finish early';
+      pause.disabled = !live || run.pausing || run.finishing || run.stopping; pause.textContent = run.pausing ? 'Pausing ...' : 'Pause (continue later)';
       stop.disabled = !live || run.stopping; stop.textContent = run.stopping ? 'Stopping ...' : 'Stop now';
       closeBtn.textContent = run.state === 'ended' ? 'Done' : 'Close';
     }
@@ -292,6 +348,7 @@ export async function openTrain(ed) {
         if (data.run) {
           run = data.run; run.rows_all = allRows;
           addRows(run.rows); render();
+          if (save.handle && (allRows.length !== save.rows || run.state === 'ended')) { save.rows = allRows.length; await writeCopy(); }
           if (run.state === 'ended') return;
         } else { close(); return; }
       } catch (err) { /* a hiccup: try again */ }

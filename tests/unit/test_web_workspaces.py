@@ -209,6 +209,61 @@ class UploadTests(FlowBase):
         self.assertEqual(res.status_code, 400)
         self.assertIn("part 2", res.json()["error"])
 
+    def checkpoint_zip(self):
+        """The zip a browser gets from Download checkpoint (a model folder), made the same way."""
+        import io
+        import zipfile
+        from utils import model_bundle, run_state
+        models = os.path.join(self.tmp, "scratch_models", "old")
+        run = os.path.join(models, "yolo_run")
+        run_state.write(run, status="paused", epoch=3, epochs=8, classes=["cat", "dog"], imgsz=320, batch=8,
+                        split={"val": ["img3.png"], "test": []}, dataset={"pictures": 3, "annotations": 6})
+        os.makedirs(os.path.join(run, "train_run", "weights"), exist_ok=True)
+        for rel in ("resume_point.pt", "train_run/weights/best.pt"):
+            with open(os.path.join(run, *rel.split("/")), "wb") as f:
+                f.write(b"weights")
+        folder = model_bundle.build(models, "old", os.path.join(self.tmp, "carry"))
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for d, _x, files in os.walk(folder):
+                for f in files:
+                    z.write(os.path.join(d, f), os.path.join("old-checkpoint", os.path.relpath(os.path.join(d, f), folder)))
+        return buf.getvalue()
+
+    def test_a_checkpoint_zip_uploaded_with_the_dataset_goes_to_the_models_folder(self):
+        import zipfile, io
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, "w") as z:
+            for i in (1, 2, 3):
+                z.writestr(f"d/img{i}.png", png_bytes((i * 40, 90, 150)))
+                z.writestr(f"d/img{i}.txt", "0 0.5 0.5 0.2 0.2\n")
+            z.writestr("d/classes.txt", "cat\ndog\n")
+        upload_id = self.upload({"dataset.zip": data.getvalue(), "pets-checkpoint.zip": self.checkpoint_zip()})
+        scanned = self.post("/api/scan", {"upload_id": upload_id, "name": "up"}).json()
+        self.assertEqual((scanned["images"], scanned["model"]["epoch"], scanned["model"]["epochs"]), (3, 3, 8))
+        job = self.finish(self.post("/api/import", {"name": "up", "upload_id": upload_id, "classes": ["cat", "dog"]}))
+        self.assertEqual(job["state"], "done", job.get("error"))
+        self.assertEqual(job["result"]["model"]["epoch"], 3)
+        run = os.path.join(self.tmp, "models", "up", "yolo_run")
+        self.assertTrue(os.path.isfile(os.path.join(run, "resume_point.pt")))
+        self.assertEqual(sorted(os.listdir(os.path.join(self.datasets, "up-1"))),
+                         ["img1.png", "img2.png", "img3.png"], "only the pictures are in the dataset")
+
+    def test_a_checkpoint_alone_needs_an_existing_workspace(self):
+        upload_id = self.upload({"pets-checkpoint.zip": self.checkpoint_zip()})
+        res = self.post("/api/scan", {"upload_id": upload_id, "name": "brandnew"}).json()
+        self.assertIn("no pictures", res["error"])
+        source = self.source()
+        job = self.finish(self.post("/api/import", {"name": "up", "folder": source, "classes": ["cat", "dog"]}))
+        self.assertEqual(job["state"], "done", job.get("error"))
+        upload_id = self.upload({"pets-checkpoint.zip": self.checkpoint_zip()})
+        scanned = self.post("/api/scan", {"upload_id": upload_id, "workspace": "up"}).json()
+        self.assertEqual((scanned["error"], scanned["images"], scanned["model"]["epoch"]), (None, 0, 3))
+        job = self.finish(self.post("/api/import", {"workspace": "up", "upload_id": upload_id}))
+        self.assertEqual(job["state"], "done", job.get("error"))
+        self.assertEqual((job["result"]["image_count"], job["result"]["instance_name"]), (0, None))
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, "models", "up", "yolo_run", "resume_point.pt")))
+
     def test_a_broken_zip_is_reported(self):
         upload_id = self.upload({"bad.zip": b"this is not a zip"})
         res = self.post("/api/scan", {"upload_id": upload_id})

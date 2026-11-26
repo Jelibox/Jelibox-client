@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from tests.helpers import isolated_workspace, make_images
 
@@ -13,6 +14,7 @@ from utils import workspace_config as wc                        # noqa: E402
 from utils import workspace_manager as wm                       # noqa: E402
 from utils import dataset_import as di                          # noqa: E402
 from utils import archive_support                               # noqa: E402
+from utils import model_bundle, run_state                       # noqa: E402
 
 SIZE = (200, 100)
 
@@ -128,6 +130,85 @@ class ArchiveTests(Base):
         self.zip_of(self.src, "pictures.zip", {})
         with self.assertRaises(ValueError):
             di.import_dataset(self.src, self.workspace("empty"))
+
+
+class ModelFolderTests(Base):
+    """A folder with the marker of jelibox-model.json is a saved training run: it goes to models/<workspace>, not into the dataset."""
+
+    def a_model_folder(self, into, classes=("cat", "dog"), epoch=4, epochs=10):
+        """Make the checkpoint folder of a run (in a scratch models folder) and put it inside `into`."""
+        scratch = tempfile.mkdtemp()
+        run = os.path.join(scratch, "models", "old", "yolo_run")
+        run_state.write(run, status="paused", epoch=epoch, epochs=epochs, classes=list(classes), imgsz=320, batch=8,
+                        split={"val": ["x.png"], "test": []}, dataset={"pictures": 3, "annotations": 5})
+        for rel in ("resume_point.pt", "train_run/weights/best.pt"):
+            full = os.path.join(run, *rel.split("/"))
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "wb") as f:
+                f.write(b"model")
+        return model_bundle.build(os.path.join(scratch, "models", "old"), "old", into)
+
+    def installed(self, ws):
+        return os.path.join(ctx.root, "models", ws, "yolo_run")
+
+    def test_pictures_and_a_model_folder_in_one_upload_make_the_workspace_and_install_the_run(self):
+        make_images(self.src, count=2, size=SIZE)
+        self.a_model_folder(os.path.join(self.src, "deep"))
+        scan = di.scan_dataset_folder(self.src)
+        self.assertEqual(len(scan["model_folders"]), 1)
+        ws = self.workspace("withmodel")
+        result = di.import_dataset(self.src, ws)
+        self.assertEqual((result["image_count"], result["model"]["epoch"], result["model"]["epochs"]), (2, 4, 10))
+        self.assertEqual(run_state.describe(self.installed(ws))["epoch"], 4)
+        self.assertTrue(os.path.isfile(os.path.join(self.installed(ws), "train_run", "weights", "best.pt")))
+        self.assertEqual(wc.get_classes(ws), ["cat", "dog"], "the saved run knows the classes when nobody typed any")
+        folder = os.path.join(ctx.datasets, result["instance_name"])
+        self.assertEqual(sorted(os.listdir(folder)), ["img1.png", "img2.png"], "the model files are not pictures of the dataset")
+
+    def test_typed_classes_win_over_the_ones_of_the_saved_run(self):
+        make_images(self.src, count=1, size=SIZE)
+        self.a_model_folder(self.src)
+        ws = self.workspace("typed")
+        di.import_dataset(self.src, ws, classes=["dog", "cat"])
+        self.assertEqual(wc.get_classes(ws), ["dog", "cat"])
+
+    def test_a_model_folder_alone_goes_into_a_workspace_that_exists(self):
+        first = tempfile.mkdtemp()
+        make_images(first, count=2, size=SIZE)
+        ws = self.workspace("exists", ["cat", "dog"])
+        di.import_dataset(first, ws)
+        before = sorted(os.listdir(ctx.datasets))
+        self.a_model_folder(self.src)
+        result = di.import_dataset(self.src, ws)
+        self.assertEqual((result["instance_name"], result["image_count"], result["model"]["epoch"]), (None, 0, 4))
+        self.assertEqual(sorted(os.listdir(ctx.datasets)), before, "no dataset folder is made for a model alone")
+        self.assertEqual(run_state.describe(self.installed(ws))["status"], "paused")
+
+    def test_a_model_folder_alone_needs_its_workspace_to_exist(self):
+        self.a_model_folder(self.src)
+        with self.assertRaises(ValueError) as caught:
+            di.import_dataset(self.src, self.workspace("nothere"))
+        self.assertIn("no pictures", str(caught.exception))
+        self.assertFalse(os.path.exists(self.installed("nothere")))
+
+    def test_nothing_is_installed_while_a_training_runs_in_that_workspace(self):
+        make_images(self.src, count=1, size=SIZE)
+        self.a_model_folder(self.src)
+        ws = self.workspace("busy")
+        with mock.patch("utils.process_guard.running_training", return_value={"pid": 1, "workspace": "busy"}):
+            with self.assertRaises(ValueError) as caught:
+                di.import_dataset(self.src, ws)
+        self.assertIn("training is running", str(caught.exception))
+        self.assertFalse(os.path.exists(self.installed(ws)))
+        self.assertFalse([d for d in os.listdir(ctx.datasets) if d.startswith("busy")], "no half import is left")
+
+    def test_a_folder_without_its_checkpoint_is_refused_before_anything_is_copied(self):
+        make_images(self.src, count=1, size=SIZE)
+        folder = self.a_model_folder(self.src)
+        os.remove(os.path.join(folder, "yolo_run", "resume_point.pt"))
+        with self.assertRaises(ValueError):
+            di.import_dataset(self.src, self.workspace("broken"))
+        self.assertFalse([d for d in os.listdir(ctx.datasets) if d.startswith("broken")])
 
 
 class ExistingWorkspaceTests(Base):

@@ -18,7 +18,7 @@ import time
 from collections import deque
 
 from .. import augmentation as aug
-from .. import head_data, process_guard, workspace_counts
+from .. import head_data, model_bundle, process_guard, run_state, workspace_counts
 from .. import workspace_manager as wm
 from ..train_support import (DEFAULT_IMGSZ, DEFAULT_WEIGHTS, DEFAULT_YOLO, HEAD_FILE, MODEL_FILE, PREFIX, RUN_NAME,
                              STOCK_WEIGHTS, STOCK_YOLO, TrainProcess, build_job, build_yolo_job, default_command,
@@ -66,7 +66,8 @@ class Run:
         self.rows, self.log = [], deque(maxlen=LOG_LINES)
         self.best_epoch = 0
         self.result = self.error = self.start_info = None
-        self.stopping = self.finishing = False
+        self.stopping = self.finishing = self.pausing = False
+        self.resumed_from = 0
         self.final = None
         self.weights_used = ""
         self.proc = None
@@ -77,6 +78,7 @@ class Run:
                 "rows": self.rows[rows_from:], "rows_total": len(self.rows), "log": list(self.log)[-80:],
                 "best_epoch": self.best_epoch, "result": self.result, "error": self.error, "final": self.final,
                 "start_info": self.start_info, "stopping": self.stopping, "finishing": self.finishing,
+                "pausing": self.pausing, "resumed_from": self.resumed_from,
                 "seconds": round(time.time() - self.started, 1), "total_epochs": self.total_epochs}
 
 
@@ -103,7 +105,20 @@ class TrainingManager:
         task = "seg" if polygon else "detect"
         model_path = os.path.join(ws.base_dir, "models", ws.name, MODEL_FILE)
         classes = ws.classes.get_classes()
+        run_dir = os.path.join(ws.base_dir, "models", ws.name, "yolo_run")
+        alive = self.is_running() or bool(process_guard.running_training(self.base_dir))
+        resume = run_state.describe(run_dir, alive)
+        if resume and resume["classes"] and resume["classes"] != classes:
+            resume["blocked"] = (f"The classes of this workspace ({', '.join(classes)}) are not the ones of the saved run "
+                                 f"({', '.join(resume['classes'])}, in that order), so it cannot go on.")
+        if resume and "blocked" not in resume:
+            resume["blocked"] = self._dataset_changed(ws, run_state.read(run_dir))
+        state = run_state.read(run_dir)
+        checkpoint = None
+        if state and os.path.isfile(run_state.resume_path(run_dir)):
+            checkpoint = {"epoch": state.get("epoch"), "epochs": state.get("epochs"), "status": state.get("status")}
         return {
+            "resume": resume, "checkpoint": checkpoint,
             "workspace": ws.name, "task": task, "classes": classes, "counts": counts, "min_labelled": MIN_LABELLED,
             "has_model": os.path.isfile(model_path),
             "has_head": os.path.isfile(os.path.join(ws.base_dir, "models", ws.name, HEAD_FILE)),
@@ -113,6 +128,16 @@ class TrainingManager:
             "taps": {w: list(head_data.taps_for(w)[0]) for w in STOCK_WEIGHTS},
             "gpu": self.gpu(), "running": self.is_running(),
         }
+
+    def _dataset_changed(self, ws, state):
+        """The sentence that says why a saved run cannot go on with the dataset as it is now, or None. Compares the number of
+        labelled pictures and annotations (the label files, read through their cache) with what the run started with."""
+        saved = (state or {}).get("dataset")
+        if not saved:
+            return None
+        folders = [wm.instance_path(i) for i in wm.list_workspaces().get(ws.name, [])]
+        pairs, _empty = head_data.scan_labels(folders, ws.labels)
+        return head_data.same_dataset(saved, head_data.fingerprint(pairs, len(ws.classes.get_classes())))
 
     def is_running(self):
         with self.lock:
@@ -131,13 +156,29 @@ class TrainingManager:
         counts = workspace_counts.get_or_empty(ws.name)
         if counts.get("counted") and counts["labelled"] < MIN_LABELLED:
             raise EditError(f"Only {counts['labelled']} images have labels. At least {MIN_LABELLED} are needed.")
+        if kind == "yolo" and req.get("resume"):
+            return self._start_resume(ws, req, user, model_folder, model_path)
+        if kind == "yolo" and not confirmed:
+            waiting = run_state.describe(os.path.join(model_folder, "yolo_run"), self.is_running())
+            if waiting:
+                raise NeedsConfirm("Train custom model", f"{waiting['text']}\n\nStart a new training instead? The saved run is "
+                                   f"deleted: it cannot go on afterwards.")
         epochs, batch, lr = self._common(req)
         folders = [wm.instance_path(i) for i in wm.list_workspaces().get(ws.name, [])]
         if kind == "yolo":
             job, run_dir, init = self._yolo_job(ws, req, folders, model_folder, model_path, epochs, batch, lr, confirmed)
             weights_used = init
+            hours = self._hours(req)
+            job["pause_file"] = run_state.pause_file_for(run_dir)
+            job["workspace"] = ws.name
+            if hours:
+                job["pause_after_hours"] = hours
         else:
             job, run_dir, weights_used = self._head_job(ws, req, folders, model_folder, epochs, batch, lr, confirmed)
+        return self._launch(ws, kind, user, job, run_dir, model_folder, model_path, task, epochs, weights_used)
+
+    def _launch(self, ws, kind, user, job, run_dir, model_folder, model_path, task, epochs, weights_used):
+        """Write the job file and start the process (one training at a time on the server)."""
         with self.lock:
             other = process_guard.running_training(self.base_dir)
             if other or self.is_running():
@@ -145,8 +186,11 @@ class TrainingManager:
                 raise Busy(f"A training is already running (workspace \"{who}\"). Only one fits on the GPU at a time: "
                            f"wait for it, or stop it, then start this one.")
             os.makedirs(run_dir, exist_ok=True)
-            if kind == "yolo":
+            if kind == "yolo" and job.get("resume_from"):
+                pass                                                                  # the run goes on in its own folder
+            elif kind == "yolo":
                 shutil.rmtree(os.path.join(run_dir, RUN_NAME), ignore_errors=True)    # an older run must not pass for this one
+                run_state.forget(run_dir)
             else:
                 for old in ("head_best.pt", "head_last.pt"):
                     try:
@@ -157,8 +201,13 @@ class TrainingManager:
             job_path = os.path.join(run_dir, "job.json")
             with open(job_path, "w", encoding="utf-8") as f:
                 json.dump(job, f, indent=2)
-            run = Run(ws.name, kind, user, epochs, run_dir, model_folder, model_path, task)
+            run = Run(ws.name, kind, user, job.get("epochs", epochs) if kind == "yolo" else epochs, run_dir, model_folder, model_path, task)
             run.weights_used = weights_used
+            if kind == "yolo" and job.get("resume_from"):
+                state = run_state.read(run_dir) or {}
+                run.resumed_from = int(state.get("epoch") or 0)
+                run.rows = run_state.rows_from_csv(os.path.join(run_dir, RUN_NAME), run.resumed_from, run.total_epochs)
+                run.best_epoch = next((r["epoch"] for r in reversed(run.rows) if r["best"]), 0)
             try:
                 run.proc = TrainProcess(self.command(job_path), self.base_dir, os.path.join(run_dir, "train.log"))
             except OSError as exc:
@@ -169,6 +218,49 @@ class TrainingManager:
             self.run = run
         threading.Thread(target=self._monitor, args=(run,), name="train-monitor", daemon=True).start()
         return run.public()
+
+    def _start_resume(self, ws, req, user, model_folder, model_path):
+        """Go on with the saved run of this workspace (paused, cut off or failed): same settings, same validation pictures."""
+        run_dir = os.path.join(model_folder, "yolo_run")
+        info = run_state.describe(run_dir, self.is_running() or bool(process_guard.running_training(self.base_dir)))
+        if not info:
+            raise EditError("There is no saved run of this workspace to go on with.")
+        classes = ws.classes.get_classes()
+        if info["classes"] and info["classes"] != classes:
+            raise EditError(f"The classes of this workspace ({', '.join(classes)}) are not the ones of the saved run "
+                            f"({', '.join(info['classes'])}, in that order), so it cannot go on.")
+        state = run_state.read(run_dir)
+        different = self._dataset_changed(ws, state)
+        if different:
+            raise EditError(different)
+        batch = exporting._int(req.get("batch", info.get("batch") or 16), "Batch size", 1, 128)
+        folders = [wm.instance_path(i) for i in wm.list_workspaces().get(ws.name, [])]
+        job = build_yolo_job(images_folders=folders, labels_folder=ws.labels, classes=classes,
+                             init_weights=run_state.resume_path(run_dir), imgsz=int(state["imgsz"]), epochs=int(state["epochs"]),
+                             batch=batch, lr=0.001, freeze=0, weight_decay=0.0005, val_fraction=0.2, test_fraction=0.0,
+                             shuffle=False, split_seed=None, background=bool(state.get("background")), out_dir=run_dir,
+                             augment=state.get("augment"))
+        job.update(resume_from=run_state.resume_path(run_dir), fixed_split=state.get("split") or {},
+                   pause_file=run_state.pause_file_for(run_dir), workspace=ws.name)
+        hours = self._hours(req)
+        if hours:
+            job["pause_after_hours"] = hours
+        return self._launch(ws, "yolo", user, job, run_dir, model_folder, model_path,
+                            "seg" if req.get("polygon") else "detect", int(state["epochs"]), model_path)
+
+    @staticmethod
+    def _hours(req):
+        """The session time limit of the page, in hours (0 = none)."""
+        raw = req.get("pause_after_hours")
+        if raw in (None, "", 0, "0"):
+            return 0.0
+        try:
+            hours = float(raw)
+        except (TypeError, ValueError):
+            raise EditError("The session limit is a number of hours, e.g. 11.5.")
+        if not 0.05 <= hours <= 500:
+            raise EditError("The session limit must be between 0.05 and 500 hours.")
+        return hours
 
     @staticmethod
     def _common(req):
@@ -255,10 +347,31 @@ class TrainingManager:
             return {"run": self.run.public(rows_from) if self.run else None, "running": self.is_running()}
 
     def _remove_flag(self, run_dir):
+        for flag in (stop_file_for(run_dir), run_state.pause_file_for(run_dir)):
+            try:
+                os.remove(flag)
+            except OSError:
+                pass
+
+    def pause(self, user=None):
+        """Pause after the epoch in progress, keeping everything needed to go on later (also on another computer)."""
+        with self.lock:
+            run = self.run
+            if not (run and run.state == "running" and run.kind == "yolo") or run.pausing or run.finishing or run.stopping:
+                raise EditError("There is no full training to pause.")
+            with open(run_state.pause_file_for(run.run_dir), "w", encoding="utf-8") as f:
+                f.write("pause\n")
+            run.pausing = True
+            run.status = ("Pausing: the epoch in progress is finished and saved, then the run stops so it can go on later. "
+                          "Finish early or Stop now end it for good instead.")
+            return run.public()
+
+    def checkpoint_bundle(self, ws, scratch):
+        """The folder to carry to another session (see model_bundle), made inside `scratch`."""
         try:
-            os.remove(stop_file_for(run_dir))
-        except OSError:
-            pass
+            return model_bundle.build(os.path.join(ws.base_dir, "models", ws.name), ws.name, scratch)
+        except ValueError as exc:
+            raise EditError(str(exc))
 
     def finish_early(self, user=None):
         with self.lock:
@@ -278,6 +391,8 @@ class TrainingManager:
             if not (run and run.state == "running"):
                 raise EditError("There is no training to stop.")
             run.stopping = True
+            if run.kind == "yolo":
+                run_state.mark(run.run_dir, "stopped", "Stop now")          # on purpose: it is not offered for Resume
             run.proc.stop()
             return run.public()
 
@@ -346,11 +461,14 @@ class TrainingManager:
             if run.kind == "yolo":
                 run.status = (f"{ev['train_images']} images to train, {ev['val_images']} to validate  -  {device}  -  batch "
                               f"{ev['batch']}  -  {ev['imgsz'][0]}×{ev['imgsz'][1]}  -  {ev.get('model', '')}  -  every layer"
-                              + (f" except the first {ev['freeze']}" if ev.get("freeze") else ""))
+                              + (f" except the first {ev['freeze']}" if ev.get("freeze") else "")
+                              + (f"\nGoing on from epoch {ev['resumed_from']}." if ev.get("resumed_from") else ""))
             else:
                 run.status = (f"{ev['train_images']} images to train, {ev['val_images']} to validate  -  {device}  -  batch "
                               f"{ev['batch']}  -  {ev['imgsz'][0]}×{ev['imgsz'][1]}  -  head {ev['head_params_m']} M parameters")
             run.log.append(f"classes: {', '.join(ev['classes'])}   boxes: {ev['counts']}")
+        elif kind == "checkpoint":
+            run.log.append(f"checkpoint saved after epoch {ev.get('epoch')}")
         elif kind == "epoch":
             run.rows.append(ev)
             if ev.get("best"):
@@ -407,7 +525,8 @@ class TrainingManager:
     def _ended_yolo(self, run):
         shutil.rmtree(os.path.join(run.run_dir, "dataset"), ignore_errors=True)       # the scratch copy of the images
         installed = None
-        if run.error is None and (run.result is not None or run.stopping):
+        paused = bool((run.result or {}).get("paused"))
+        if run.error is None and not paused and (run.result is not None or run.stopping):
             best = (run.result or {}).get("weights") or yolo_best_path(run.run_dir)
             installed = install_yolo(best if os.path.isfile(best) else yolo_best_path(run.run_dir), run.model_path)
         if installed:
@@ -419,8 +538,17 @@ class TrainingManager:
         if r and r.get("test_map50") is not None:
             use = (f"Test ({r.get('test_images')} pictures never used in training): mAP50 {r['test_map50']:.3f}, "
                    f"mAP50-95 {r.get('test_map5095') or 0:.3f}.\n" + use)
+        state = run_state.read(run.run_dir) or {}
+        if r and r.get("paused"):
+            return {"kind": "warn", "title": "Paused - it can go on later", "installed": "",
+                    "text": f"Paused after epoch {r['epochs_run']} of {state.get('epochs', run.total_epochs)} ({state.get('reason') or 'on request'}). "
+                            f"The checkpoint is saved on the server: press Train and Resume to go on, or download it to carry to "
+                            f"another session. The best model so far is installed when the run ends."}
         if run.error is not None:
-            return {"kind": "error", "title": "Training failed", "text": run.error, "installed": ""}
+            go_on = ""
+            if state.get("status") == "failed" and run_state.describe(run.run_dir):
+                go_on = f"\n\nIt can go on from epoch {state.get('epoch')}: press Train and Resume."
+            return {"kind": "error", "title": "Training failed", "text": run.error + go_on, "installed": ""}
         if installed and r and run.finishing and not run.stopping:
             return {"kind": "ok", "title": "Finished early", "installed": shown,
                     "text": f"Stopped during epoch {r['epochs_run']}, then evaluated. Best epoch {r['best_epoch']}; last epoch: mAP50 "
@@ -433,6 +561,9 @@ class TrainingManager:
             return {"kind": "warn", "title": "Stopped - the best model so far was kept", "installed": shown, "text": use}
         if run.stopping:
             return {"kind": "warn", "title": "Stopped", "installed": "", "text": "Stopped before the first epoch finished, so nothing was saved."}
+        go_on = ""
+        if run_state.describe(run.run_dir):
+            go_on = f"\n\nIt can go on from epoch {state.get('epoch')}: press Train and Resume."
         return {"kind": "error", "title": "Training ended unexpectedly", "installed": "",
                 "text": "The log has the details (also in yolo_run/train.log). Common causes: PyTorch or Ultralytics missing, "
-                        "or not enough memory."}
+                        "or not enough memory." + go_on}

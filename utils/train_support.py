@@ -169,8 +169,8 @@ class TrainProcess:
         env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
         self.log_path = log_path
         with open(log_path, "wb") as out:
-            self.proc = subprocess.Popen(cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, env=env,
-                                         creationflags=flags, **process_guard.popen_extra())
+            self.proc = process_guard.spawn(lambda: subprocess.Popen(
+                cmd, cwd=cwd, stdout=out, stderr=subprocess.STDOUT, env=env, creationflags=flags, **process_guard.popen_extra()))
         process_guard.bind_to_parent(self.proc)         # the worker ends with Jelibox, however Jelibox ends
         self._reader = open(log_path, "rb")
         self._partial = b""

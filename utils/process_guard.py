@@ -11,6 +11,8 @@ closed, after going back to the workspace list, and after Jelibox was closed or 
 """
 import json
 import os
+import queue
+import threading
 import time
 
 _jobs = []                       # the job handles must stay open: closing one is what kills the worker
@@ -29,6 +31,39 @@ def _pdeathsig():
 def popen_extra():
     """Extra Popen arguments that tie the child to its parent where the platform wants them at launch time."""
     return {} if os.name == "nt" else {"preexec_fn": _pdeathsig}
+
+
+_launcher = {"queue": None}
+
+
+def spawn(make):
+    """Run `make()` (it starts the process and returns the Popen) and return what it returns.
+
+    On Linux PR_SET_PDEATHSIG fires when the THREAD that started the child ends, not the program. A web server starts the
+    training from a worker thread of its thread pool, and those threads come and go (an idle one is retired after a few
+    seconds), which would end a training that has hours to go. So off the main thread the process is started by one thread
+    that lives as long as the program does; the main thread (the desktop window) starts it itself."""
+    if os.name == "nt" or threading.current_thread() is threading.main_thread():
+        return make()
+    if _launcher["queue"] is None:
+        jobs = queue.Queue()
+
+        def serve():
+            while True:
+                work, box, done = jobs.get()
+                try:
+                    box.append(work())
+                except BaseException as exc:                    # handed back to the caller, which raises it
+                    box.append(exc)
+                done.set()
+        threading.Thread(target=serve, name="process-launcher", daemon=True).start()
+        _launcher["queue"] = jobs
+    box, done = [], threading.Event()
+    _launcher["queue"].put((make, box, done))
+    done.wait()
+    if isinstance(box[0], BaseException):
+        raise box[0]
+    return box[0]
 
 
 def bind_to_parent(proc):

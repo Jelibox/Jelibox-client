@@ -10,6 +10,7 @@ import types
 import unittest
 from unittest import mock
 
+from utils import run_state
 from utils import yolo_train_job as yj
 
 CLASSES = ["cat", "dog"]
@@ -39,6 +40,8 @@ class FakeYOLO:
     batches = 3
     on_batch = None                  # hook(epoch, batch, trainer) for a test that wants to act mid-epoch
     made = []
+    start_epoch = 0                  # a resumed run starts here (the epochs the checkpoint already holds)
+    resume_total = 3                 # ... of this many (Ultralytics reads it from the checkpoint)
 
     def __init__(self, weights):
         self.weights, self.callbacks, self.kwargs, self.final_eval_ran = weights, {}, None, False
@@ -59,15 +62,18 @@ class FakeYOLO:
 
     def train(self, **kw):
         self.kwargs = kw
-        save_dir = os.path.join(kw["project"], kw["name"])
+        resume = bool(kw.get("resume"))
+        save_dir = kw["save_dir"] if resume else os.path.join(kw["project"], kw["name"])
+        total = FakeYOLO.resume_total if resume else kw["epochs"]
         os.makedirs(os.path.join(save_dir, "weights"), exist_ok=True)
         with open(os.path.join(save_dir, "weights", "best.pt"), "wb") as f:
             f.write(b"best")
-        trainer = FakeTrainer(kw["epochs"], save_dir)
+        trainer = FakeTrainer(total, save_dir)
+        trainer.last = os.path.join(save_dir, "weights", "last.pt")
         self.trainer = trainer
         self._run("on_train_start", trainer)
         best = -1.0
-        for e in range(kw["epochs"]):
+        for e in range(FakeYOLO.start_epoch if resume else 0, total):
             fitness = self.fitnesses[e % len(self.fitnesses)]
             best = max(best, fitness)
             trainer.begin_epoch(e, fitness, best)
@@ -78,7 +84,10 @@ class FakeYOLO:
                 if trainer.stop:
                     break                                   # Ultralytics checks `stop` between batches
             self._run("on_train_epoch_end", trainer)          # the training part of the epoch is over ...
-            self._run("on_fit_epoch_end", trainer)           # ... validation has run, even for an interrupted epoch
+            with open(trainer.last, "wb") as f:               # ... validation has run and last.pt is written ...
+                f.write(b"last-%d" % e)
+            self._run("on_model_save", trainer)
+            self._run("on_fit_epoch_end", trainer)           # ... then the epoch's row, even for an interrupted epoch
             if trainer.stop:
                 break
         # the real final evaluation logs the best model's metrics with one more on_fit_epoch_end (epoch + 1): not an epoch
@@ -102,6 +111,7 @@ class Base(unittest.TestCase):
                 f.write(f"{i % 2} 0.5 0.5 0.4 0.4\n")
         FakeYOLO.made.clear()
         FakeYOLO.fitnesses = [0.2, 0.5, 0.4]
+        FakeYOLO.start_epoch, FakeYOLO.resume_total = 0, 3
         FakeYOLO.on_batch = None
         self.addCleanup(setattr, FakeYOLO, "on_batch", None)
 
@@ -355,7 +365,8 @@ class TrainTests(Base):
     def test_one_event_per_epoch_with_the_losses_and_the_metrics(self):
         summary, events = self.run_job(self.job())
         kinds = [e["event"] for e in events if e["event"] != "prepare"]
-        self.assertEqual(kinds, ["status", "status", "status", "start", "epoch", "epoch", "epoch", "done"])
+        self.assertEqual(kinds, ["status", "status", "status", "start", "checkpoint", "epoch", "checkpoint", "epoch", "checkpoint",
+                                 "epoch", "done"])
         start = next(e for e in events if e["event"] == "start")
         self.assertEqual((start["kind"], start["train_images"], start["val_images"], start["epochs"]), ("yolo", 10, 2, 3))
         self.assertEqual((start["device"], start["batch"], start["imgsz"], start["model"]), ("cpu", 8, [640, 640], "yolo11s.pt"))
@@ -427,6 +438,149 @@ class TrainTests(Base):
             self.assertEqual(yj.pick_device(), "cpu")
         with mock.patch.dict(sys.modules, {"torch": None}):               # not installed
             self.assertEqual(yj.pick_device(), "cpu")
+
+
+class RunStateTests(Base):
+    """What is written for a run that may go on later (run_state.json + resume_point.pt) and the three ways a run ends."""
+
+    def state(self):
+        return run_state.read(self.out)
+
+    def test_a_finished_run_says_finished_and_keeps_what_a_resume_needs(self):
+        summary, events = self.run_job(self.job())
+        st = self.state()
+        self.assertEqual((st["status"], st["epoch"], st["epochs"], st["classes"]), ("finished", 3, 3, CLASSES))
+        self.assertEqual(st["split"]["val"], ["img_11.jpg", "img_12.jpg"])
+        self.assertEqual(st["split"]["test"], [])
+        self.assertEqual(st["dataset"], {"pictures": 12, "annotations": 12})
+        self.assertTrue(os.path.isfile(run_state.resume_path(self.out)))
+        self.assertEqual(sum(e["event"] == "checkpoint" for e in events), 3)
+        self.assertFalse(summary["paused"])
+        self.assertIsNone(run_state.describe(self.out), "a finished run is not offered for Resume")
+
+    def test_finish_early_is_marked_stopped_on_purpose(self):
+        os.makedirs(self.out, exist_ok=True)
+        FakeYOLO.on_batch = lambda e, b, trainer: open(self.job()["stop_file"], "w").close() if e == 1 else None
+        summary, _ = self.run_job(self.job())
+        self.assertEqual((self.state()["status"], self.state()["reason"]), ("stopped", "Finish early"))
+        self.assertIsNone(run_state.describe(self.out))
+
+    def test_the_pause_file_pauses_after_the_epoch_without_the_final_evaluation(self):
+        os.makedirs(self.out, exist_ok=True)
+        flag = run_state.pause_file_for(self.out)
+        FakeYOLO.on_batch = lambda e, b, trainer: open(flag, "w").close() if (e, b) == (0, 1) else None
+        FakeYOLO.val_calls.clear()
+        summary, events = self.run_job(self.job(pause_file=flag, test_fraction=0.17))
+        st = self.state()
+        self.assertEqual((st["status"], st["epoch"], summary["paused"]), ("paused", 1, True))
+        self.assertEqual([e["epoch"] for e in events if e["event"] == "epoch"], [1])
+        self.assertEqual(FakeYOLO.val_calls, [], "a paused run is not evaluated on the test pictures yet")
+        offer = run_state.describe(self.out)
+        self.assertEqual((offer["status"], offer["epoch"], offer["epochs"]), ("paused", 1, 3))
+        with open(run_state.resume_path(self.out), "rb") as f:
+            self.assertEqual(f.read(), b"last-0")
+
+    def test_the_session_time_limit_pauses_too(self):
+        summary, _ = self.run_job(self.job(pause_after_hours=1e-9))
+        self.assertEqual((self.state()["status"], self.state()["reason"], self.state()["epoch"]),
+                         ("paused", "the session time ran out", 1))
+
+    def test_the_last_epoch_is_never_paused(self):
+        os.makedirs(self.out, exist_ok=True)
+        flag = run_state.pause_file_for(self.out)
+        FakeYOLO.on_batch = lambda e, b, trainer: open(flag, "w").close() if e == 2 else None
+        self.run_job(self.job(pause_file=flag))
+        self.assertEqual(self.state()["status"], "finished")
+
+    def test_an_error_marks_the_run_failed_but_continuable(self):
+        def boom(e, b, trainer):
+            if e == 2:
+                raise RuntimeError("CUDA out of memory")
+        FakeYOLO.on_batch = boom
+        with self.assertRaises(RuntimeError):
+            self.run_job(self.job())
+        self.assertEqual((self.state()["status"], self.state()["reason"]), ("failed", "CUDA out of memory"))
+        offer = run_state.describe(self.out)
+        self.assertEqual((offer["status"], offer["epoch"]), ("failed", 2))
+
+    def test_a_cut_off_run_still_says_running_and_is_offered_as_interrupted(self):
+        run_state.write(self.out, status="running", epoch=2, epochs=5, classes=CLASSES)
+        with open(run_state.resume_path(self.out), "wb") as f:
+            f.write(b"x")
+        self.assertEqual(run_state.describe(self.out)["status"], "interrupted")
+        self.assertIsNone(run_state.describe(self.out, alive=True), "not while a process is alive")
+
+    def test_a_new_training_forgets_the_old_run(self):
+        run_state.write(self.out, status="paused", epoch=2, epochs=5)
+        with open(run_state.resume_path(self.out), "wb") as f:
+            f.write(b"old")
+        self.run_job(self.job())
+        self.assertEqual(self.state()["status"], "finished")
+        with open(run_state.resume_path(self.out), "rb") as f:
+            self.assertEqual(f.read(), b"last-2")
+
+    def paused(self):
+        os.makedirs(self.out, exist_ok=True)
+        flag = run_state.pause_file_for(self.out)
+        FakeYOLO.on_batch = lambda e, b, trainer: open(flag, "w").close() if (e, b) == (0, 0) else None
+        self.run_job(self.job(pause_file=flag, split_seed=5, shuffle=True))
+        os.remove(flag)
+        FakeYOLO.on_batch = None
+        FakeYOLO.made.clear()
+        return self.state()
+
+    def resume_job(self, **kw):
+        st = self.state()
+        return self.job(resume_from=run_state.resume_path(self.out), fixed_split=st["split"], epochs=st["epochs"], **kw)
+
+    def test_resuming_goes_on_with_ultralytics_resume_and_the_same_validation_pictures(self):
+        before = self.paused()
+        FakeYOLO.start_epoch = 1
+        summary, events = self.run_job(self.resume_job(shuffle=False))
+        made = FakeYOLO.made[0]
+        self.assertEqual(made.weights, run_state.resume_path(self.out))
+        self.assertTrue(made.kwargs["resume"])
+        self.assertNotIn("epochs", made.kwargs)
+        self.assertEqual(made.kwargs["save_dir"], os.path.join(self.out, "train_run"))
+        self.assertEqual([e["epoch"] for e in events if e["event"] == "epoch"], [2, 3])
+        self.assertEqual([e for e in events if e["event"] == "start"][0]["resumed_from"], 1)
+        st = self.state()
+        self.assertEqual((st["status"], st["epoch"], st["resumed"]), ("finished", 3, 1))
+        self.assertEqual(sorted(st["split"]["val"]), sorted(before["split"]["val"]), "the same validation pictures")
+
+    def test_pictures_that_were_validation_stay_validation_even_when_the_order_would_change(self):
+        before = self.paused()
+        FakeYOLO.start_epoch = 1
+        self.run_job(self.resume_job(shuffle=True, split_seed=999))              # a different seed would mix them again
+        self.assertEqual(sorted(self.state()["split"]["val"]), sorted(before["split"]["val"]))
+
+    def test_a_changed_dataset_cannot_be_resumed(self):
+        self.paused()
+        with open(os.path.join(self.labels, "img_03.txt"), "a") as f:
+            f.write("1 0.2 0.2 0.1 0.1\n")                                       # one annotation more
+        with self.assertRaises(ValueError) as caught:
+            self.run_job(self.resume_job())
+        self.assertIn("not the one this run was trained with", str(caught.exception))
+        self.assertIn("now 13 annotations on 12", str(caught.exception))
+        self.assertEqual(self.state()["status"], "paused", "the saved run is left as it was")
+
+    def test_a_missing_checkpoint_is_reported(self):
+        self.paused()
+        os.remove(run_state.resume_path(self.out))
+        with self.assertRaises(ValueError):
+            self.run_job(self.resume_job())
+
+    def test_the_callbacks_can_be_pickled_for_the_gpu_workers_with_the_checkpoint_one_too(self):
+        try:
+            import cloudpickle
+        except ImportError:
+            self.skipTest("cloudpickle is not installed")
+        with mock.patch.object(yj, "_end_with_workers"):
+            self.run_job(self.job(device="0,1"))
+        callbacks = FakeYOLO.made[0].callbacks
+        self.assertTrue(callbacks["on_model_save"])
+        for fn in callbacks["on_model_save"]:
+            cloudpickle.loads(cloudpickle.dumps(fn))
 
 
 class GpuTests(Base):

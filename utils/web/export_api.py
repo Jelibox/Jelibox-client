@@ -7,9 +7,11 @@ Export and training routes of the web API.
   /api/downloads/<token>             a finished export as a file (a folder is zipped first)
   /api/ws/<dataset>/train            GET what the setup shows, POST start
   /api/ws/<dataset>/train/recount    count the pictures again (a job)
-  /api/train                         the training that runs now, or the last one; .../finish-early .../stop .../dismiss
+  /api/ws/<dataset>/train/checkpoint GET the checkpoint of the full training as a .zip (a model folder, see model_bundle.py)
+  /api/train                         the training that runs now, or the last one; .../pause .../finish-early .../stop .../dismiss
 """
 from starlette.concurrency import run_in_threadpool
+from starlette.background import BackgroundTask
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
@@ -109,6 +111,14 @@ def routes(guard, jobs, base_dir, downloads, trainer):
         data = await body_of(request)
         return await call(request, lambda ws, user: trainer.start(ws, data, user["name"], bool(data.get("confirm"))))
 
+    async def checkpoint(request):
+        def work(ws, user):
+            folder = trainer.checkpoint_bundle(ws, downloads.scratch())
+            token = downloads.add(folder, user["name"])
+            path, name = downloads.prepare(token, user["name"])
+            return FileResponse(path, filename=name, background=BackgroundTask(downloads.discard, token))
+        return await call(request, work)
+
     async def recount(request):
         def work(ws, user):
             job = jobs.start("count", "Counting the pictures", user["name"],
@@ -148,8 +158,10 @@ def routes(guard, jobs, base_dir, downloads, trainer):
         Route(base + "/augment/sample", sample, methods=["GET", "PUT"]),
         Route(base + "/train", train, methods=["GET", "POST"]),
         Route(base + "/train/recount", recount, methods=["POST"]),
+        Route(base + "/train/checkpoint", checkpoint),
         Route("/api/downloads/{token}", download),
         Route("/api/train", train_state),
+        Route("/api/train/pause", control("pause"), methods=["POST"]),
         Route("/api/train/finish-early", control("finish_early"), methods=["POST"]),
         Route("/api/train/stop", control("stop"), methods=["POST"]),
         Route("/api/train/dismiss", control("dismiss"), methods=["POST"]),
